@@ -14,6 +14,23 @@
         <div id="text-editor" hidden>
           <textarea placeholder="点击输入文字…（Ctrl+Enter 确认，Esc 取消）"></textarea>
         </div>
+        <aside id="ai-panel" hidden>
+          <div class="ai-header">
+            <div class="ai-mode-tabs">
+              <button type="button" data-mode="chat" class="ai-mode-tab active" title="对话、评价建议、把想法画成流程图">交流</button>
+              <button type="button" data-mode="edit" class="ai-mode-tab" title="让 AI 直接增删改画布元素">编辑</button>
+            </div>
+            <div class="ai-header-actions">
+              <button type="button" id="ai-settings-btn" class="ai-icon-btn" title="模型设置">⚙</button>
+              <button type="button" id="ai-close-btn" class="ai-icon-btn" title="关闭 AI 助手">✕</button>
+            </div>
+          </div>
+          <div id="ai-messages"></div>
+          <div class="ai-input-bar">
+            <textarea id="ai-input" rows="1" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
+            <button type="button" id="ai-send-btn" class="ai-send-btn">发送</button>
+          </div>
+        </aside>
         <div id="statusbar"></div>
       </div>
     </div>

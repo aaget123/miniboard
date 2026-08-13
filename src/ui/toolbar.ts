@@ -47,6 +47,8 @@ export type ToolbarHandlers = {
   onClear: () => void;
   onInsertImage: () => void;
   onStrokeChange: (color: string) => void;
+  /** 填充通道：色板点击时应用独立填充颜色 */
+  onFillColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
   onFillChange: (enabled: boolean) => void;
 };
@@ -73,6 +75,12 @@ export class Toolbar {
   private colorInput!: HTMLInputElement;
   private widthInput!: HTMLInputElement;
   private fillBtn!: HTMLButtonElement;
+  // 描边/填充双通道：色板点击作用于当前激活通道
+  private activeChannel: "stroke" | "fill" = "stroke";
+  private strokeChannelBtn!: HTMLButtonElement;
+  private fillChannelBtn!: HTMLButtonElement;
+  private strokeChannelColor = "#4f8cff";
+  private fillChannelColor = "#4f8cff";
 
   constructor(container: HTMLElement, handlers: ToolbarHandlers) {
     const toolGroup = document.createElement("div");
@@ -125,6 +133,18 @@ export class Toolbar {
     label.textContent = "颜色";
     panel.appendChild(label);
 
+    // 描边/填充通道切换：色板与取色器作用于激活通道
+    const channelGroup = document.createElement("div");
+    channelGroup.className = "channel-group";
+    this.strokeChannelBtn = this.makeChannelBtn("描边", () =>
+      this.setChannel("stroke"),
+    );
+    this.fillChannelBtn = this.makeChannelBtn("填充", () =>
+      this.setChannel("fill"),
+    );
+    channelGroup.append(this.strokeChannelBtn, this.fillChannelBtn);
+    panel.appendChild(channelGroup);
+
     const swatches = document.createElement("div");
     swatches.className = "swatches";
     for (const c of SWATCHES) {
@@ -132,7 +152,13 @@ export class Toolbar {
       s.className = "swatch";
       s.style.background = c;
       s.title = c;
-      s.addEventListener("click", () => handlers.onStrokeChange(c));
+      s.addEventListener("click", () => {
+        if (this.activeChannel === "fill") {
+          handlers.onFillColorChange(c);
+        } else {
+          handlers.onStrokeChange(c);
+        }
+      });
       swatches.appendChild(s);
       this.swatches.set(c, s);
     }
@@ -142,9 +168,13 @@ export class Toolbar {
     this.colorInput.type = "color";
     this.colorInput.value = "#4f8cff";
     this.colorInput.title = "自定义颜色";
-    this.colorInput.addEventListener("input", () =>
-      handlers.onStrokeChange(this.colorInput.value),
-    );
+    this.colorInput.addEventListener("input", () => {
+      if (this.activeChannel === "fill") {
+        handlers.onFillColorChange(this.colorInput.value);
+      } else {
+        handlers.onStrokeChange(this.colorInput.value);
+      }
+    });
     panel.appendChild(this.colorInput);
 
     const sep = document.createElement("div");
@@ -193,10 +223,49 @@ export class Toolbar {
   }
 
   setStroke(color: string) {
+    this.strokeChannelColor = color;
+    this.strokeChannelBtn.querySelector<HTMLElement>(".channel-chip")!.style.background = color;
+    if (this.activeChannel === "stroke") {
+      this.setActiveColor(color);
+    }
+  }
+
+  /** 更新填充通道颜色（仅激活填充通道时同步色板高亮） */
+  setFillColor(color: string) {
+    this.fillChannelColor = color;
+    this.fillChannelBtn.querySelector<HTMLElement>(".channel-chip")!.style.background = color;
+    if (this.activeChannel === "fill") {
+      this.setActiveColor(color);
+    }
+  }
+
+  private setChannel(channel: "stroke" | "fill") {
+    this.activeChannel = channel;
+    this.strokeChannelBtn.classList.toggle("active", channel === "stroke");
+    this.fillChannelBtn.classList.toggle("active", channel === "fill");
+    // 切换后色板高亮与取色器跟随当前通道颜色
+    this.setActiveColor(
+      channel === "stroke" ? this.strokeChannelColor : this.fillChannelColor,
+    );
+  }
+
+  private setActiveColor(color: string) {
     for (const [c, el] of this.swatches) {
       el.classList.toggle("active", c.toLowerCase() === color.toLowerCase());
     }
     this.colorInput.value = color;
+  }
+
+  private makeChannelBtn(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = "channel-btn";
+    btn.title = `${label}颜色：色板点击作用于${label}色`;
+    const chip = document.createElement("span");
+    chip.className = "channel-chip";
+    chip.style.background = "#4f8cff";
+    btn.append(chip, document.createTextNode(label));
+    btn.addEventListener("click", onClick);
+    return btn;
   }
 
   setWidth(width: number) {

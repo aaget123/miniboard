@@ -170,6 +170,8 @@ export type BoardStyle = {
   stroke: string;
   strokeWidth: number;
   fillEnabled: boolean;
+  /** 填充颜色（独立于描边色；填充 = 该色 15% 半透明） */
+  fillColor: string;
 };
 
 export type BoardOptions = {
@@ -254,6 +256,8 @@ export class Board {
   private movedAny = false;
   // 内部剪贴板（复制/剪切/粘贴）
   private clipboard: ElementData[] = [];
+  // 元素稳定 id 分配器（AI 编辑模式按 id 引用元素）
+  private nextElId = 1;
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
@@ -474,7 +478,7 @@ export class Board {
     this.startY = py;
     const style = this.opts.getStyle();
     const fill = style.fillEnabled
-      ? hexToRgba(style.stroke, 0.15)
+      ? hexToRgba(style.fillColor || style.stroke, 0.15)
       : undefined; // 注意：leafer 2.x 中 "none" 会被渲染为黑色实心，必须用 undefined
     switch (this.tool) {
       case "pen":
@@ -739,7 +743,8 @@ export class Board {
               y: worldY,
               text,
               fontSize: TEXT_FONT_SIZE,
-              fill: this.opts.getStyle().stroke,
+              // 文字主色 = fill，跟随填充通道颜色
+              fill: this.opts.getStyle().fillColor || this.opts.getStyle().stroke,
             }),
           );
         }
@@ -862,6 +867,60 @@ export class Board {
     this.movedAny = false;
   }
 
+  // ================= 样式应用 =================
+
+  /**
+   * 将当前样式（描边色/粗细/填充开关/填充色）应用到选中元素。
+   * 有可编辑的选中元素时返回 true，否则返回 false（不产生历史记录）。
+   * 规则：
+   * - 锁定元素与图片（内部填充为图像数据）跳过
+   * - Text：描边与填充通道均作用于 fill（文字颜色），填充开关不影响
+   * - Line/Path：无填充概念，填充通道与填充开关不影响
+   * - 填充色独立于描边色：填充通道点击自动开启填充
+   */
+  applyStyleToSelection(partial: Partial<BoardStyle>): boolean {
+    const list = this.selectedList.filter((el) => !el.locked);
+    if (!list.length) {
+      return false;
+    }
+    const style = this.opts.getStyle();
+    for (const el of list) {
+      if (el instanceof Image) {
+        continue; // 图片内部填充为图像数据，不可改样式
+      }
+      if (partial.stroke !== undefined) {
+        if (el instanceof Text) {
+          el.fill = partial.stroke; // Text 主色 = fill，保持"点颜色改文字色"直觉
+        } else {
+          el.stroke = partial.stroke; // 描边独立变色，不影响填充
+        }
+      }
+      if (partial.fillColor !== undefined) {
+        if (el instanceof Text) {
+          el.fill = partial.fillColor;
+        } else if (!(el instanceof Line) && !(el instanceof Path)) {
+          // 设置填充色并自动开启填充（与描边色互相独立）
+          el.fill = hexToRgba(partial.fillColor, 0.15);
+        }
+      }
+      if (partial.strokeWidth !== undefined) {
+        el.strokeWidth = partial.strokeWidth;
+      }
+      if (partial.fillEnabled !== undefined) {
+        if (el instanceof Text || el instanceof Line || el instanceof Path) {
+          continue; // 文字/线条无填充概念
+        }
+        el.fill = partial.fillEnabled
+          ? hexToRgba(String(style.fillColor || el.stroke || style.stroke), 0.15)
+          : undefined;
+      }
+    }
+    // 防抖合并：连续调色/调粗细合并为一步撤销
+    this.scheduleHistory();
+    this.opts.onMutated();
+    return true;
+  }
+
   // ================= 右键菜单 =================
 
   /** 当前选中的元素（editor.list 运行时即 UI 实例，类型声明为 IUI 需转换） */
@@ -891,6 +950,27 @@ export class Board {
   }
 
   /** 复制选中元素到内部剪贴板，返回是否有内容可复制 */
+  /** 取元素的稳定 id：首次访问时分配并缓存到实例上（复制/导入/粘贴后保持稳定） */
+  private aiIdOf(el: UI): string {
+    const cached = (el as unknown as { __aiId?: string }).__aiId;
+    if (cached) {
+      return cached;
+    }
+    let id: string;
+    do {
+      id = `el-${this.nextElId++}`;
+    } while (this.idInUse(id));
+    (el as unknown as { __aiId?: string }).__aiId = id;
+    return id;
+  }
+
+  /** 判断 id 是否已被画布中其他元素占用（防止恢复/导入后重复分配冲突） */
+  private idInUse(id: string): boolean {
+    return (this.app.tree.children as UI[]).some(
+      (el) => (el as unknown as { __aiId?: string }).__aiId === id,
+    );
+  }
+
   copy(): boolean {
     this.clipboard = this.selectedList
       .map((el) => this.elementToData(el))
@@ -912,8 +992,10 @@ export class Board {
     }
     const pasted: UI[] = [];
     for (const d of this.clipboard) {
+      // id 不随粘贴复制：粘贴出的元素应分配全新 id（避免与原件冲突）
       const el = this.dataToElement({
         ...d,
+        id: undefined,
         x: (d.x ?? 0) + 12,
         y: (d.y ?? 0) + 12,
       });
@@ -1136,6 +1218,88 @@ export class Board {
     this.commitHistory();
   }
 
+  // ================= AI 编辑操作 =================
+
+  /** 按 id 查找元素实例（AI 工具使用） */
+  findElement(id: string): UI | null {
+    for (const el of this.app.tree.children as UI[]) {
+      if ((el as unknown as { __aiId?: string }).__aiId === id) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  /** 新增元素（AI 编辑模式），返回分配后的稳定 id；数据非法返回 null */
+  addElement(data: ElementData): string | null {
+    const el = this.dataToElement({ ...data, id: undefined });
+    if (!el) {
+      return null;
+    }
+    this.app.tree.add(el);
+    return this.aiIdOf(el);
+  }
+
+  /**
+   * 按 id 修改元素属性（AI 编辑模式）。锁定元素拒绝修改。
+   * 支持 x/y/width/height/rotation/stroke/strokeWidth/fill/text/fontSize/points/path。
+   */
+  updateElement(id: string, patch: Partial<ElementData>): boolean {
+    const el = this.findElement(id);
+    if (!el || el.locked) {
+      return false;
+    }
+    const t = el as unknown as Record<string, unknown>;
+    if (patch.x !== undefined) t.x = patch.x;
+    if (patch.y !== undefined) t.y = patch.y;
+    if (patch.width !== undefined) t.width = patch.width;
+    if (patch.height !== undefined) t.height = patch.height;
+    if (patch.rotation !== undefined) t.rotation = patch.rotation;
+    if (patch.stroke !== undefined) t.stroke = patch.stroke;
+    if (patch.strokeWidth !== undefined) t.strokeWidth = patch.strokeWidth;
+    if (patch.fill !== undefined) {
+      // leafer 2.x 中 "none" 渲染为黑色实心，必须转 undefined
+      t.fill = patch.fill === "none" ? undefined : patch.fill;
+    }
+    if (patch.locked !== undefined) t.locked = patch.locked;
+    if (patch.text !== undefined && el instanceof Text) {
+      t.text = patch.text;
+    }
+    if (patch.fontSize !== undefined && el instanceof Text) {
+      t.fontSize = patch.fontSize;
+    }
+    if (patch.points !== undefined && el instanceof Line) {
+      t.points = patch.points;
+    }
+    if (patch.path !== undefined && el instanceof Path) {
+      t.path = patch.path;
+    }
+    return true;
+  }
+
+  /** 按 id 删除元素（AI 编辑模式）。锁定元素拒绝删除。 */
+  deleteElementById(id: string): boolean {
+    const el = this.findElement(id);
+    if (!el || el.locked) {
+      return false;
+    }
+    el.remove();
+    this.editor.cancel();
+    return true;
+  }
+
+  /** 按 id 列表选中元素（AI 编辑模式高亮反馈），返回是否命中 */
+  selectByIds(ids: string[]): boolean {
+    const els = ids
+      .map((id) => this.findElement(id))
+      .filter((e): e is UI => e !== null);
+    if (!els.length) {
+      return false;
+    }
+    this.editor.target = els.length === 1 ? els[0] : els;
+    return true;
+  }
+
   clearAll() {
     this.app.tree.clear();
     this.editor.cancel();
@@ -1217,6 +1381,7 @@ export class Board {
       return null;
     }
     const base = {
+      id: this.aiIdOf(el),
       x: el.x ?? 0,
       y: el.y ?? 0,
       rotation: el.rotation || undefined,
@@ -1299,6 +1464,15 @@ export class Board {
   }
 
   private dataToElement(d: ElementData): UI | null {
+    const el = this.dataToElementInner(d);
+    if (el && d.id) {
+      // 恢复/导入时把文件里的 id 写回实例缓存，保证 id 稳定
+      (el as unknown as { __aiId?: string }).__aiId = d.id;
+    }
+    return el;
+  }
+
+  private dataToElementInner(d: ElementData): UI | null {
     const common = {
       x: d.x,
       y: d.y,

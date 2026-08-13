@@ -49,7 +49,12 @@ async function main() {
 
   const contextMenu = new ContextMenu(document.body);
 
-  const style = { stroke: "#4f8cff", strokeWidth: 2, fillEnabled: false };
+  const style = {
+    stroke: "#4f8cff",
+    strokeWidth: 2,
+    fillEnabled: false,
+    fillColor: "#4f8cff",
+  };
 
   const board = new Board(canvasEl, {
     getStyle: () => ({ ...style }),
@@ -155,12 +160,24 @@ async function main() {
     onStrokeChange: (color) => {
       style.stroke = color;
       toolbar.setStroke(color);
+      // 有选中元素时同步应用新描边色（不再联动填充）
+      board.applyStyleToSelection({ stroke: color });
+    },
+    onFillColorChange: (color) => {
+      style.fillColor = color;
+      toolbar.setFillColor(color);
+      // 有选中元素时应用独立填充色（自动开启填充）
+      board.applyStyleToSelection({ fillColor: color });
     },
     onWidthChange: (width) => {
       style.strokeWidth = width;
+      // 有选中元素时同步应用新粗细
+      board.applyStyleToSelection({ strokeWidth: width });
     },
     onFillChange: (enabled) => {
       style.fillEnabled = enabled;
+      // 有选中元素时同步开/关填充
+      board.applyStyleToSelection({ fillEnabled: enabled });
     },
   });
 

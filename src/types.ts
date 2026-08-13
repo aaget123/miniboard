@@ -14,6 +14,8 @@ export type ToolType =
 
 export type ElementData = {
   type: "rect" | "ellipse" | "line" | "arrow" | "path" | "text" | "image";
+  /** 稳定标识（AI 编辑模式按 id 引用元素），序列化时自动分配 */
+  id?: string;
   x: number;
   y: number;
   width: number;
