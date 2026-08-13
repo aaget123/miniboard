@@ -1,0 +1,15 @@
+# Node.js
+node_modules/
+dist/
+
+# 构建日志
+tauri-build.log
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
