@@ -6,6 +6,10 @@ import {
   EditorScaleEvent,
   EditorRotateEvent,
 } from "@leafer-in/editor";
+// 注册导出插件（app.export 需要），须在创建 App 前导入
+import "@leafer-in/export";
+// 注册箭头插件（Line 的 endArrow 属性需要）
+import "@leafer-in/arrow";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { ElementData, ToolType } from "../types";
 import { History } from "./history";
@@ -13,6 +17,11 @@ import { TextOverlay } from "./textedit";
 
 export const BACKGROUND = "#1e1f22";
 export const TEXT_FONT_SIZE = 18;
+
+// 画布缩放：倍率范围与单步系数（滚轮/按钮共用）
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 8;
+const ZOOM_STEP = 1.25;
 
 type AppWithEditor = App & { editor: Editor };
 
@@ -87,36 +96,43 @@ export class Board {
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
+    // leafer-ui 2.x：editor 作为 App 配置项传入，App 会自动创建 tree/sky 层并挂载编辑器
     this.app = new App({
       view: container,
       fill: BACKGROUND,
-      wheel: { zoomMode: "mouse", zoomSpeed: 1.15 },
+      // 注意：leafer 2.2.9 的 InteractionBase 中 move/zoom/wheel 均为空实现，
+      // 滚轮缩放由下方原生 wheel 监听自行实现（操作 tree.zoomLayer）
       move: { holdMiddleKey: true, holdSpaceKey: true },
+      editor: {
+        selector: false,
+        hover: false,
+        keyEvent: false,
+        stroke: "#4f8cff",
+        strokeWidth: 1.5,
+        pointSize: 7,
+        pointRadius: 1,
+        lockRatio: true,
+      },
     });
-    const EditorCtor = Editor as unknown as new (
-      userConfig?: Record<string, unknown>,
-    ) => Editor;
-    this.editor = new EditorCtor({
-      selector: false,
-      hover: false,
-      keyEvent: false,
-      stroke: "#4f8cff",
-      strokeWidth: 1.5,
-      pointSize: 7,
-      pointRadius: 1,
-      lockRatio: true,
-    });
-    this.app.sky.add((this.app as AppWithEditor).editor = this.editor);
+    this.editor = (this.app as AppWithEditor).editor;
     this.textOverlay = new TextOverlay(container);
     this.bindEvents();
+    // 自研滚轮缩放：以鼠标位置为不动点
+    (this.app.canvas.view as HTMLElement).addEventListener(
+      "wheel",
+      this.onWheel,
+      { passive: false },
+    );
   }
 
   private bindEvents() {
-    const tree = this.app.tree;
-    tree.on(PointerEvent.DOWN, (e: IPointerEvent) => this.onDown(e));
-    tree.on(PointerEvent.MOVE, (e: IPointerEvent) => this.onMove(e));
-    tree.on(PointerEvent.UP, () => this.onUp());
-    tree.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
+    // 监听 app 层：leafer 2.x 的 pointer 事件仅沿命中路径传播，
+    // 空白处命中路径不含 tree 层，监听 tree 会导致空白处绘制/点击全部失效
+    const app = this.app;
+    app.on(PointerEvent.DOWN, (e: IPointerEvent) => this.onDown(e));
+    app.on(PointerEvent.MOVE, (e: IPointerEvent) => this.onMove(e));
+    app.on(PointerEvent.UP, () => this.onUp());
+    app.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
 
     this.editor.on(EditorMoveEvent.MOVE, () => this.scheduleHistory());
     this.editor.on(EditorScaleEvent.SCALE, () => this.scheduleHistory());
@@ -133,6 +149,68 @@ export class Board {
     this.textOverlay.close();
   }
 
+  // ================= 缩放 =================
+
+  /** 当前缩放倍率（tree.zoomLayer 承载画布缩放/平移变换） */
+  get scale(): number {
+    return this.app.tree.zoomLayer?.scaleX ?? 1;
+  }
+
+  /**
+   * 以视口坐标 (fx, fy) 为不动点，将画布缩放到 newScale（限制在 MIN~MAX）。
+   * 不动点处的内容缩放前后保持在原视口位置：
+   * 世界坐标 w = (fx - layer.x) / s，缩放后 layer.x' = fx - w * s'
+   */
+  private zoomTo(newScale: number, fx: number, fy: number) {
+    const layer = this.app.tree.zoomLayer;
+    if (!layer) return;
+    const s = layer.scaleX ?? 1;
+    const target = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
+    if (Math.abs(s - target) < 0.001) return;
+    const lx = layer.x ?? 0;
+    const ly = layer.y ?? 0;
+    layer.x = fx - ((fx - lx) * target) / s;
+    layer.y = fy - ((fy - ly) * target) / s;
+    layer.scaleX = target;
+    layer.scaleY = target;
+  }
+
+  zoomIn() {
+    const c = this.viewCenter();
+    this.zoomTo(this.scale * ZOOM_STEP, c.x, c.y);
+  }
+
+  zoomOut() {
+    const c = this.viewCenter();
+    this.zoomTo(this.scale / ZOOM_STEP, c.x, c.y);
+  }
+
+  zoomReset() {
+    const c = this.viewCenter();
+    this.zoomTo(1, c.x, c.y);
+  }
+
+  /** 视口中心（app 局部坐标） */
+  private viewCenter(): { x: number; y: number } {
+    const view = this.app.canvas.view as HTMLElement;
+    const w = this.app.width ?? view.clientWidth;
+    const h = this.app.height ?? view.clientHeight;
+    return { x: w / 2, y: h / 2 };
+  }
+
+  private onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const view = this.app.canvas.view as HTMLElement;
+    const rect = view.getBoundingClientRect();
+    // 向上滚放大、向下滚缩小
+    const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
+    this.zoomTo(
+      this.scale * factor,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
+  };
+
   get currentTool() {
     return this.tool;
   }
@@ -143,10 +221,13 @@ export class Board {
     if (this.textOverlay.isOpen) {
       return;
     }
-    const px = e.x ?? 0;
-    const py = e.y ?? 0;
+    // app 事件坐标为 app 局部坐标，转换为 tree 局部坐标（含缩放/平移）
+    const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
+    const px = p.x;
+    const py = p.y;
     if (this.tool === "select") {
-      const hit = this.hitTest({ x: px, y: py });
+      // 用 app 坐标做命中检测（el.hit 内部按世界矩阵转换，缩放/平移下也准确）
+      const hit = this.hitTest({ x: e.x ?? 0, y: e.y ?? 0 });
       this.editor.target = hit ?? undefined;
       return;
     }
@@ -160,7 +241,7 @@ export class Board {
     const style = this.opts.getStyle();
     const fill = style.fillEnabled
       ? hexToRgba(style.stroke, 0.15)
-      : "none";
+      : undefined; // 注意：leafer 2.x 中 "none" 会被渲染为黑色实心，必须用 undefined
     switch (this.tool) {
       case "pen":
         this.penPoints = [[px, py]];
@@ -168,7 +249,7 @@ export class Board {
           path: `M ${px} ${py}`,
           stroke: style.stroke,
           strokeWidth: style.strokeWidth,
-          fill: "none",
+          fill: undefined,
           strokeCap: "round",
           strokeJoin: "round",
         });
@@ -226,8 +307,9 @@ export class Board {
     if (!this.drawing || !this.draft) {
       return;
     }
-    const px = e.x ?? 0;
-    const py = e.y ?? 0;
+    const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
+    const px = p.x;
+    const py = p.y;
     switch (this.tool) {
       case "pen": {
         this.penPoints.push([px, py]);
@@ -349,33 +431,17 @@ export class Board {
   // ================= 选择命中 =================
 
   private hitTest(world: { x: number; y: number }): UI | null {
+    // 逐元素像素级命中：线段/箭头/画笔按实际描边命中；
+    // 空心图形内部透明区域不命中，可穿透选中下层元素。
+    // hitRadius=5 扩大命中容差（细线也容易点中）
     const children = this.app.tree.children as UI[];
     for (let i = children.length - 1; i >= 0; i--) {
       const el = children[i];
-      const w = el.width ?? 0;
-      const h = el.height ?? 0;
-      const p = this.toLocal(el, world);
-      if (p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h) {
+      if (el.hit(world, 5)) {
         return el;
       }
     }
     return null;
-  }
-
-  private toLocal(el: UI, world: { x: number; y: number }) {
-    const w = el.width ?? 0;
-    const h = el.height ?? 0;
-    const cx = (el.x ?? 0) + w / 2;
-    const cy = (el.y ?? 0) + h / 2;
-    const dx = world.x - cx;
-    const dy = world.y - cy;
-    const r = ((el.rotation || 0) * Math.PI) / 180;
-    const cos = Math.cos(r);
-    const sin = Math.sin(r);
-    return {
-      x: dx * cos + dy * sin + w / 2,
-      y: -dx * sin + dy * cos + h / 2,
-    };
   }
 
   // ================= 历史 =================
@@ -487,7 +553,10 @@ export class Board {
     if (el instanceof Line) {
       return {
         ...base,
-        type: (el.endArrow ? "arrow" : "line") as "arrow" | "line",
+        // leafer 2.x 的 endArrow 默认值是字符串 "none"（truthy），需排除
+        type: (el.endArrow && el.endArrow !== "none"
+          ? "arrow"
+          : "line") as "arrow" | "line",
         width: el.width ?? 0,
         height: el.height ?? 0,
         points: el.points as { x: number; y: number }[] | undefined,
@@ -563,7 +632,7 @@ export class Board {
         return new Path({
           ...common,
           path: d.path,
-          fill: "none",
+          fill: undefined,
           strokeCap: "round",
           strokeJoin: "round",
         });

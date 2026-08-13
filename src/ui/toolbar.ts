@@ -34,6 +34,9 @@ export type ToolbarHandlers = {
   onUndo: () => void;
   onRedo: () => void;
   onBeautify: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomReset: () => void;
   onOpen: () => void;
   onSave: () => void;
   onExport: () => void;
@@ -83,9 +86,17 @@ export class Toolbar {
 
     const beautifyBtn = makeButton(
       "✨ 整理",
-      "一键美化：对齐、间距、配色、容器包裹",
+      "把画笔手绘的弯弯扭扭拉直",
       () => handlers.onBeautify(),
       "tool-btn beautify",
+    );
+
+    const zoomGroup = document.createElement("div");
+    zoomGroup.className = "tool-group";
+    zoomGroup.append(
+      makeButton("−", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
+      makeButton("100%", "重置为 100% (Ctrl+0)", () => handlers.onZoomReset()),
+      makeButton("＋", "放大 (Ctrl+＋)", () => handlers.onZoomIn()),
     );
 
     const fileGroup = document.createElement("div");
@@ -97,7 +108,7 @@ export class Toolbar {
       makeButton("🗑", "清空画布", () => handlers.onClear()),
     );
 
-    container.append(toolGroup, editGroup, beautifyBtn, fileGroup);
+    container.append(toolGroup, editGroup, beautifyBtn, zoomGroup, fileGroup);
 
     // ---- 样式面板 ----
     const panel = document.createElement("div");

@@ -37,7 +37,7 @@ function isEditableTarget(target: EventTarget | null) {
 }
 
 async function main() {
-  const canvasEl = document.getElementById("board") as HTMLCanvasElement;
+  const canvasEl = document.getElementById("board") as HTMLElement;
   const toolbarEl = document.getElementById("toolbar") as HTMLDivElement;
   const statusEl = document.getElementById("statusbar") as HTMLDivElement;
 
@@ -65,7 +65,7 @@ async function main() {
       const before = board.serialize();
       const { elements, stats } = beautifyScene(before);
       if (!stats.length) {
-        toast("✨ 画布已经很整齐了");
+        toast("✨ 没有需要拉直的画笔笔迹");
         return;
       }
       board.loadElements(elements);
@@ -75,6 +75,9 @@ async function main() {
         `✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`,
       );
     },
+    onZoomIn: () => board.zoomIn(),
+    onZoomOut: () => board.zoomOut(),
+    onZoomReset: () => board.zoomReset(),
     onOpen: () => {
       storage
         .openFromFile()
@@ -169,6 +172,21 @@ async function main() {
     }
     if (e.key === "Escape") {
       board.editor.cancel();
+      return;
+    }
+    if (mod && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      board.zoomIn();
+      return;
+    }
+    if (mod && e.key === "-") {
+      e.preventDefault();
+      board.zoomOut();
+      return;
+    }
+    if (mod && e.key === "0") {
+      e.preventDefault();
+      board.zoomReset();
       return;
     }
     const tool = TOOL_KEYS[e.key.toLowerCase()];

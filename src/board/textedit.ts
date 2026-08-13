@@ -7,9 +7,11 @@ export class TextOverlay {
   private ta: HTMLTextAreaElement;
   private onSubmit: ((text: string) => void) | null = null;
   private onCancel: (() => void) | null = null;
+  private openAt = 0;
 
   constructor(container: HTMLElement) {
-    this.el = container.querySelector("#text-editor") as HTMLDivElement;
+    this.el = (container.querySelector("#text-editor") ??
+      document.getElementById("text-editor")) as HTMLDivElement;
     this.ta = this.el.querySelector("textarea") as HTMLTextAreaElement;
 
     this.ta.addEventListener("keydown", (e) => {
@@ -23,6 +25,14 @@ export class TextOverlay {
     });
 
     this.ta.addEventListener("blur", () => {
+      // 打开后短暂窗口内的失焦通常是画布 pointerup 抢焦点导致，
+      // 直接拉回焦点，避免输入框弹出后瞬间被关闭（表现为“输入框出不来”）
+      if (Date.now() - this.openAt < 500) {
+        if (!this.el.hidden) {
+          this.ta.focus();
+        }
+        return;
+      }
       this.commit();
     });
   }
@@ -44,6 +54,7 @@ export class TextOverlay {
     this.ta.value = opts.initialText;
     this.el.hidden = false;
     this.el.style.display = "block";
+    this.openAt = Date.now();
     this.ta.focus();
     this.ta.select();
   }
@@ -57,9 +68,10 @@ export class TextOverlay {
       return;
     }
     const text = this.ta.value.trim();
+    const onSubmit = this.onSubmit;
     this.close();
     if (text) {
-      this.onSubmit?.(text);
+      onSubmit?.(text);
     }
   }
 

@@ -5,6 +5,10 @@ dist/
 # 构建日志
 tauri-build.log
 
+# 本地打包产物（开发阶段不提交 exe）
+release/
+src-tauri/target/
+
 # 编辑器
 .vscode/
 .idea/
