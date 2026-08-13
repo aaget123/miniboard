@@ -1,7 +1,11 @@
 // 画布文件格式（保存/打开/自动保存共用）
 export type ToolType =
   | "select"
+  | "hand"
+  | "marquee"
+  | "lasso"
   | "pen"
+  | "eraser"
   | "line"
   | "arrow"
   | "rect"
@@ -9,7 +13,7 @@ export type ToolType =
   | "text";
 
 export type ElementData = {
-  type: "rect" | "ellipse" | "line" | "arrow" | "path" | "text";
+  type: "rect" | "ellipse" | "line" | "arrow" | "path" | "text" | "image";
   x: number;
   y: number;
   width: number;
@@ -22,6 +26,8 @@ export type ElementData = {
   path?: string; // path: SVG 路径字符串（相对坐标）
   text?: string;
   fontSize?: number;
+  url?: string; // image: dataURL 或路径
+  locked?: boolean; // 锁定后不可拖动/缩放/删除
 };
 
 export type SceneFile = {

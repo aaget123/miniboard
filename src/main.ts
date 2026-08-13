@@ -2,10 +2,16 @@ import { Board } from "./board/canvas";
 import { beautifyScene } from "./board/beautify";
 import { Storage } from "./storage";
 import { Toolbar } from "./ui/toolbar";
+import { ContextMenu } from "./ui/contextmenu";
+import type { ContextMenuAction } from "./ui/contextmenu";
 
 const TOOL_KEYS: Record<string, import("./types").ToolType> = {
   v: "select",
+  h: "hand",
+  m: "marquee",
+  q: "lasso",
   p: "pen",
+  e: "eraser",
   l: "line",
   a: "arrow",
   r: "rect",
@@ -41,6 +47,8 @@ async function main() {
   const toolbarEl = document.getElementById("toolbar") as HTMLDivElement;
   const statusEl = document.getElementById("statusbar") as HTMLDivElement;
 
+  const contextMenu = new ContextMenu(document.body);
+
   const style = { stroke: "#4f8cff", strokeWidth: 2, fillEnabled: false };
 
   const board = new Board(canvasEl, {
@@ -49,6 +57,14 @@ async function main() {
       storage.scheduleAutosave();
       toolbar.setUndoRedo(board.canUndo, board.canRedo);
       updateStatus();
+    },
+    onContextMenu: (x, y) => {
+      const list = board.editor.list;
+      contextMenu.open(x, y, {
+        hasSelection: list.length > 0,
+        anyLocked: list.some((el) => el.locked),
+        canPaste: board.canPaste,
+      });
     },
   });
 
@@ -61,6 +77,24 @@ async function main() {
     },
     onUndo: () => board.undo(),
     onRedo: () => board.redo(),
+    onInsertImage: () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) {
+          return;
+        }
+        board
+          .insertImage(file)
+          .then((ok) => {
+            toast(ok ? "🖻 已插入图片" : "图片加载失败，请换一张试试");
+          })
+          .catch(() => toast("图片加载失败，请换一张试试"));
+      };
+      input.click();
+    },
     onBeautify: () => {
       const before = board.serialize();
       const { elements, stats } = beautifyScene(before);
@@ -135,6 +169,19 @@ async function main() {
     statusEl.textContent = `${board.elementCount} 个元素 · ${zoom}%`;
   }
 
+  const MENU_ACTIONS: Record<ContextMenuAction, () => void> = {
+    copy: () => board.copy(),
+    paste: () => board.paste(),
+    cut: () => board.cut(),
+    delete: () => board.deleteSelected(),
+    selectAll: () => board.selectAll(),
+    toFront: () => board.toFront(),
+    toBack: () => board.toBack(),
+    lock: () => board.lock(),
+    unlock: () => board.unlock(),
+  };
+  contextMenu.onAction((action) => MENU_ACTIONS[action]());
+
   // 快捷键
   window.addEventListener("keydown", (e) => {
     if (isEditableTarget(e.target)) {
@@ -163,6 +210,26 @@ async function main() {
     if (mod && e.key.toLowerCase() === "y") {
       e.preventDefault();
       board.redo();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "c") {
+      e.preventDefault();
+      board.copy();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "x") {
+      e.preventDefault();
+      board.cut();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "v") {
+      e.preventDefault();
+      board.paste();
+      return;
+    }
+    if (mod && e.key.toLowerCase() === "a") {
+      e.preventDefault();
+      board.selectAll();
       return;
     }
     if (e.key === "Delete" || e.key === "Backspace") {

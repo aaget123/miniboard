@@ -21,7 +21,11 @@ export const SWATCHES = [
 
 const TOOLS: { tool: ToolType; icon: string; title: string }[] = [
   { tool: "select", icon: "↖", title: "选择 (V)" },
+  { tool: "hand", icon: "✋", title: "画布移动 (H)" },
+  { tool: "marquee", icon: "⛶", title: "框选 (M)" },
+  { tool: "lasso", icon: "∿", title: "套索选中 (Q)" },
   { tool: "pen", icon: "✏", title: "画笔 (P)" },
+  { tool: "eraser", icon: "⌫", title: "橡皮擦 (E)" },
   { tool: "line", icon: "╱", title: "直线 (L)" },
   { tool: "arrow", icon: "→", title: "箭头 (A)" },
   { tool: "rect", icon: "▭", title: "矩形 (R)" },
@@ -41,6 +45,7 @@ export type ToolbarHandlers = {
   onSave: () => void;
   onExport: () => void;
   onClear: () => void;
+  onInsertImage: () => void;
   onStrokeChange: (color: string) => void;
   onWidthChange: (width: number) => void;
   onFillChange: (enabled: boolean) => void;
@@ -104,6 +109,7 @@ export class Toolbar {
     fileGroup.append(
       makeButton("📂", "打开文件 (Ctrl+O)", () => handlers.onOpen()),
       makeButton("💾", "保存文件 (Ctrl+S)", () => handlers.onSave()),
+      makeButton("🖻", "插入图片", () => handlers.onInsertImage()),
       makeButton("🖼", "导出 PNG 图片", () => handlers.onExport()),
       makeButton("🗑", "清空画布", () => handlers.onClear()),
     );

@@ -1,0 +1,185 @@
+// 右键上下文菜单：复制/粘贴/剪切/删除/全选/置顶/置底/锁定/解锁
+
+export type ContextMenuAction =
+  | "copy"
+  | "paste"
+  | "cut"
+  | "delete"
+  | "selectAll"
+  | "toFront"
+  | "toBack"
+  | "lock"
+  | "unlock";
+
+export type ContextMenuState = {
+  hasSelection: boolean;
+  anyLocked: boolean;
+  canPaste: boolean;
+};
+
+type MenuItem = {
+  action?: ContextMenuAction;
+  label?: string;
+  shortcut?: string;
+  divider?: boolean;
+  enabled: (s: ContextMenuState) => boolean;
+};
+
+const ITEMS: MenuItem[] = [
+  {
+    action: "copy",
+    label: "复制",
+    shortcut: "Ctrl+C",
+    enabled: (s) => s.hasSelection,
+  },
+  {
+    action: "paste",
+    label: "粘贴",
+    shortcut: "Ctrl+V",
+    enabled: (s) => s.canPaste,
+  },
+  {
+    action: "cut",
+    label: "剪切",
+    shortcut: "Ctrl+X",
+    enabled: (s) => s.hasSelection,
+  },
+  {
+    action: "delete",
+    label: "删除",
+    shortcut: "Del",
+    enabled: (s) => s.hasSelection,
+  },
+  { divider: true, enabled: () => true },
+  {
+    action: "selectAll",
+    label: "全选",
+    shortcut: "Ctrl+A",
+    enabled: () => true,
+  },
+  { divider: true, enabled: () => true },
+  {
+    action: "toFront",
+    label: "置顶",
+    shortcut: "",
+    enabled: (s) => s.hasSelection,
+  },
+  {
+    action: "toBack",
+    label: "置底",
+    shortcut: "",
+    enabled: (s) => s.hasSelection,
+  },
+  { divider: true, enabled: () => true },
+  {
+    action: "lock",
+    label: "锁定",
+    shortcut: "",
+    enabled: (s) => s.hasSelection && !s.anyLocked,
+  },
+  {
+    action: "unlock",
+    label: "解锁",
+    shortcut: "",
+    enabled: (s) => s.hasSelection && s.anyLocked,
+  },
+];
+
+export class ContextMenu {
+  private el: HTMLDivElement;
+  private actionEls = new Map<ContextMenuAction, HTMLDivElement>();
+  private onActionFn: (action: ContextMenuAction) => void = () => {};
+
+  constructor(container: HTMLElement) {
+    this.el = document.createElement("div");
+    this.el.id = "context-menu";
+    this.el.style.display = "none";
+    container.appendChild(this.el);
+
+    for (const item of ITEMS) {
+      if (item.divider) {
+        const d = document.createElement("div");
+        d.className = "ctx-divider";
+        this.el.appendChild(d);
+        continue;
+      }
+      const row = document.createElement("div");
+      row.className = "ctx-item";
+      row.dataset.action = item.action;
+      const label = document.createElement("span");
+      label.className = "ctx-label";
+      label.textContent = item.label ?? "";
+      row.appendChild(label);
+      if (item.shortcut) {
+        const sc = document.createElement("span");
+        sc.className = "ctx-shortcut";
+        sc.textContent = item.shortcut;
+        row.appendChild(sc);
+      }
+      this.el.appendChild(row);
+      this.actionEls.set(item.action!, row);
+    }
+
+    this.el.addEventListener("click", (e) => {
+      const row = (e.target as HTMLElement).closest(
+        ".ctx-item",
+      ) as HTMLElement | null;
+      if (!row) {
+        return;
+      }
+      const action = row.dataset.action as ContextMenuAction;
+      if (!row.classList.contains("disabled")) {
+        this.onActionFn(action);
+      }
+      this.close();
+    });
+
+    // 点击菜单外部 / 其它右键 / 失焦 / ESC 时关闭
+    document.addEventListener(
+      "mousedown",
+      (e) => {
+        if (!this.el.contains(e.target as Node)) {
+          this.close();
+        }
+      },
+      true,
+    );
+    document.addEventListener("contextmenu", () => this.close(), true);
+    window.addEventListener("blur", () => this.close());
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        this.close();
+      }
+    });
+  }
+
+  onAction(fn: (action: ContextMenuAction) => void) {
+    this.onActionFn = fn;
+  }
+
+  open(clientX: number, clientY: number, state: ContextMenuState) {
+    // 锁定/解锁互斥：全部未锁显示"锁定"，否则显示"解锁"
+    const showLock = !state.anyLocked;
+    for (const [action, row] of this.actionEls) {
+      if (action === "unlock" || action === "lock") {
+        row.style.display = (action === "lock") === showLock ? "" : "none";
+      }
+      const item = ITEMS.find((i) => i.action === action);
+      const enabled = item ? item.enabled(state) : true;
+      row.classList.toggle("disabled", !enabled);
+    }
+    this.el.style.display = "block";
+    // 贴边修正：菜单不超出视口
+    const rect = this.el.getBoundingClientRect();
+    this.el.style.left = `${Math.min(clientX, window.innerWidth - rect.width - 8)}px`;
+    this.el.style.top = `${Math.min(clientY, window.innerHeight - rect.height - 8)}px`;
+  }
+
+  get isOpen() {
+    return this.el.style.display !== "none";
+  }
+
+  close() {
+    this.el.style.display = "none";
+  }
+}

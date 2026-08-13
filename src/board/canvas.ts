@@ -1,4 +1,4 @@
-import { App, Rect, Ellipse, Line, Path, Text, PointerEvent } from "leafer-ui";
+import { App, Rect, Ellipse, Line, Path, Text, Image, PointerEvent } from "leafer-ui";
 import type { UI } from "leafer-ui";
 import { Editor } from "@leafer-in/editor";
 import {
@@ -23,6 +23,147 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
 const ZOOM_STEP = 1.25;
 
+// 框选/套索草稿的描边颜色（画在 sky 层，不随缩放变化）
+const MARQUEE_STROKE = "#4f8cff";
+
+// ================= 几何工具 =================
+
+/** 两个轴对齐矩形是否相交 */
+function rectsIntersect(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/** 点到线段的最短距离 */
+function distToSegment(
+  p: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-9) {
+    return Math.hypot(p.x - a.x, p.y - a.y);
+  }
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** 射线法判断点是否在多边形内（含边界） */
+function pointInPolygon(
+  p: { x: number; y: number },
+  poly: { x: number; y: number }[],
+): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x;
+    const yi = poly[i].y;
+    const xj = poly[j].x;
+    const yj = poly[j].y;
+    if (
+      yi > p.y !== yj > p.y &&
+      p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** 点是否在线段上（含端点，容差 0.5） */
+function pointOnSegment(
+  p: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): boolean {
+  const cross = (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
+  if (Math.abs(cross) > 0.5) {
+    return false;
+  }
+  return (
+    Math.min(a.x, b.x) - 0.5 <= p.x &&
+    p.x <= Math.max(a.x, b.x) + 0.5 &&
+    Math.min(a.y, b.y) - 0.5 <= p.y &&
+    p.y <= Math.max(a.y, b.y) + 0.5
+  );
+}
+
+/** 两条线段是否相交（含共线/端点接触） */
+function segmentsIntersect(
+  a1: { x: number; y: number },
+  a2: { x: number; y: number },
+  b1: { x: number; y: number },
+  b2: { x: number; y: number },
+): boolean {
+  const d =
+    (a2.x - a1.x) * (b2.y - b1.y) - (a2.y - a1.y) * (b2.x - b1.x);
+  if (Math.abs(d) < 1e-9) {
+    // 平行或共线：任一端点落在另一线段上即相交
+    return (
+      pointOnSegment(a1, b1, b2) ||
+      pointOnSegment(a2, b1, b2) ||
+      pointOnSegment(b1, a1, a2) ||
+      pointOnSegment(b2, a1, a2)
+    );
+  }
+  const t =
+    ((b1.x - a1.x) * (b2.y - b1.y) - (b1.y - a1.y) * (b2.x - b1.x)) / d;
+  const u =
+    ((b1.x - a1.x) * (a2.y - a1.y) - (b1.y - a1.y) * (a2.x - a1.x)) / d;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+/** 套索多边形与轴对齐矩形是否相交（顶点包含 + 边相交，覆盖包含/部分相交/包含于三种情形） */
+function polygonHitsBox(
+  poly: { x: number; y: number }[],
+  box: { x: number; y: number; width: number; height: number },
+): boolean {
+  const corners = [
+    { x: box.x, y: box.y },
+    { x: box.x + box.width, y: box.y },
+    { x: box.x + box.width, y: box.y + box.height },
+    { x: box.x, y: box.y + box.height },
+  ];
+  // 矩形角点在套索内（套索完全包住矩形）
+  for (const c of corners) {
+    if (pointInPolygon(c, poly)) {
+      return true;
+    }
+  }
+  // 套索顶点在矩形内（矩形完全包住套索）
+  for (const p of poly) {
+    if (
+      p.x >= box.x &&
+      p.x <= box.x + box.width &&
+      p.y >= box.y &&
+      p.y <= box.y + box.height
+    ) {
+      return true;
+    }
+  }
+  // 任一边与矩形任一边相交（部分相交）
+  for (let i = 0; i < poly.length; i++) {
+    const p1 = poly[i];
+    const p2 = poly[(i + 1) % poly.length];
+    for (let j = 0; j < 4; j++) {
+      if (
+        segmentsIntersect(p1, p2, corners[j], corners[(j + 1) % 4])
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 type AppWithEditor = App & { editor: Editor };
 
 export type BoardStyle = {
@@ -34,6 +175,8 @@ export type BoardStyle = {
 export type BoardOptions = {
   getStyle: () => BoardStyle;
   onMutated: () => void;
+  /** 右键菜单：传入浏览器视口坐标，由外部弹菜单 */
+  onContextMenu?: (clientX: number, clientY: number) => void;
 };
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -93,6 +236,24 @@ export class Board {
   private historyTimer = 0;
   private lastTapTime = 0;
   private lastTapTarget: unknown = null;
+  // 手型平移：记录按下时的指针/图层位置，拖拽时做差值移动 zoomLayer
+  private panning = false;
+  private panStart = { x: 0, y: 0 };
+  private panLayerStart = { x: 0, y: 0 };
+  // 框选/套索：selecting 进行中，selectPoints 存套索路径点（app 坐标）
+  private selecting = false;
+  private selectPoints: { x: number; y: number }[] = [];
+  // 橡皮擦：按下/拖动擦除经过的元素（锁定元素不可擦除）
+  private erasing = false;
+  private eraserDeleted = false;
+  private lastErase = { x: 0, y: 0 };
+  // 选中框内拖动：点击点在选中元素包围盒内（而非元素本体）时手动移动整个选择
+  private selectDragging = false;
+  private dragStart = { x: 0, y: 0 };
+  private dragEls: { el: UI; x: number; y: number }[] = [];
+  private movedAny = false;
+  // 内部剪贴板（复制/剪切/粘贴）
+  private clipboard: ElementData[] = [];
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
@@ -123,6 +284,11 @@ export class Board {
       this.onWheel,
       { passive: false },
     );
+    // 右键菜单：原生 contextmenu 事件（leafer 事件系统不覆盖 DOM 右键）
+    (this.app.canvas.view as HTMLElement).addEventListener(
+      "contextmenu",
+      this.onContextMenu,
+    );
   }
 
   private bindEvents() {
@@ -147,6 +313,21 @@ export class Board {
       this.editor.cancel();
     }
     this.textOverlay.close();
+    // 切换工具时终止未完成的拖拽/框选/擦除，并同步光标
+    this.panning = false;
+    this.erasing = false;
+    this.selectDragging = false;
+    this.dragEls = [];
+    if (this.selecting) {
+      this.selecting = false;
+      this.draft?.remove();
+      this.draft = null;
+    }
+    const view = this.app.canvas.view as HTMLElement;
+    view.classList.toggle("hand-tool", tool === "hand");
+    view.classList.toggle("eraser-tool", tool === "eraser");
+    view.classList.remove("panning");
+    view.classList.remove("move-cursor");
   }
 
   // ================= 缩放 =================
@@ -185,9 +366,16 @@ export class Board {
     this.zoomTo(this.scale / ZOOM_STEP, c.x, c.y);
   }
 
+  /** 重置为 100%：缩放归 1 并清除画布平移（回到初始视图） */
   zoomReset() {
-    const c = this.viewCenter();
-    this.zoomTo(1, c.x, c.y);
+    const layer = this.app.tree.zoomLayer;
+    if (!layer) {
+      return;
+    }
+    layer.x = 0;
+    layer.y = 0;
+    layer.scaleX = 1;
+    layer.scaleY = 1;
   }
 
   /** 视口中心（app 局部坐标） */
@@ -221,6 +409,38 @@ export class Board {
     if (this.textOverlay.isOpen) {
       return;
     }
+    // 手型平移：拖动整块画布（zoomLayer），用 app 坐标差值即可
+    if (this.tool === "hand") {
+      const layer = this.app.tree.zoomLayer;
+      if (!layer) {
+        return;
+      }
+      this.editor.cancel();
+      this.panning = true;
+      this.panStart = { x: e.x ?? 0, y: e.y ?? 0 };
+      this.panLayerStart = { x: layer.x ?? 0, y: layer.y ?? 0 };
+      (this.app.canvas.view as HTMLElement).classList.add("panning");
+      return;
+    }
+    // 框选：画一个矩形选框（sky 层，不随缩放变化），松开时选中相交元素
+    if (this.tool === "marquee") {
+      this.beginSelect(e.x ?? 0, e.y ?? 0);
+      return;
+    }
+    // 套索：自由画闭合区域，松开时选中区域内的元素
+    if (this.tool === "lasso") {
+      this.beginLasso(e.x ?? 0, e.y ?? 0);
+      return;
+    }
+    // 橡皮擦：按下即擦除，拖动时持续擦除经过的元素
+    if (this.tool === "eraser") {
+      this.editor.cancel();
+      this.erasing = true;
+      this.eraserDeleted = false;
+      this.lastErase = { x: e.x ?? 0, y: e.y ?? 0 };
+      this.eraseAt(e.x ?? 0, e.y ?? 0);
+      return;
+    }
     // app 事件坐标为 app 局部坐标，转换为 tree 局部坐标（含缩放/平移）
     const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
     const px = p.x;
@@ -228,7 +448,21 @@ export class Board {
     if (this.tool === "select") {
       // 用 app 坐标做命中检测（el.hit 内部按世界矩阵转换，缩放/平移下也准确）
       const hit = this.hitTest({ x: e.x ?? 0, y: e.y ?? 0 });
-      this.editor.target = hit ?? undefined;
+      if (hit) {
+        this.editor.target = hit ?? undefined;
+        return;
+      }
+      // 未命中元素本体：点击点落在编辑框控制点/边框上时交给 editor 缩放/旋转
+      if (this.hitEditBox(e.x ?? 0, e.y ?? 0)) {
+        return;
+      }
+      // 未命中元素本体：点击点落在选中元素包围盒内时，
+      // 手动拖动整个选择（覆盖选中框内空白区域）
+      if (this.editor.list.length && this.pointInSelection(e.x ?? 0, e.y ?? 0)) {
+        this.beginDragSelection(px, py);
+        return;
+      }
+      this.editor.target = undefined;
       return;
     }
     if (this.tool === "text") {
@@ -304,6 +538,64 @@ export class Board {
   }
 
   private onMove(e: IPointerEvent) {
+    // 手型拖拽：按指针位移移动 zoomLayer
+    if (this.panning) {
+      const layer = this.app.tree.zoomLayer;
+      if (layer) {
+        layer.x = this.panLayerStart.x + (e.x ?? 0) - this.panStart.x;
+        layer.y = this.panLayerStart.y + (e.y ?? 0) - this.panStart.y;
+      }
+      return;
+    }
+    // 橡皮擦拖动：隔段擦除，避免事件密集时重复命中
+    if (this.erasing) {
+      const ax = e.x ?? 0;
+      const ay = e.y ?? 0;
+      if (Math.hypot(ax - this.lastErase.x, ay - this.lastErase.y) >= 4) {
+        this.lastErase = { x: ax, y: ay };
+        this.eraseAt(ax, ay);
+      }
+      return;
+    }
+    // 选中框内拖动：整个选择跟随指针位移
+    if (this.selectDragging) {
+      const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
+      const dx = p.x - this.dragStart.x;
+      const dy = p.y - this.dragStart.y;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        this.movedAny = true;
+      }
+      for (const item of this.dragEls) {
+        item.el.x = item.x + dx;
+        item.el.y = item.y + dy;
+      }
+      this.scheduleHistory();
+      return;
+    }
+    // 框选/套索拖拽：更新草稿形状
+    if (this.selecting && this.draft) {
+      const x = e.x ?? 0;
+      const y = e.y ?? 0;
+      if (this.tool === "lasso") {
+        this.selectPoints.push({ x, y });
+        this.draft.path = this.buildLassoPath(this.selectPoints);
+      } else {
+        this.draft.x = Math.min(this.startX, x);
+        this.draft.y = Math.min(this.startY, y);
+        this.draft.width = Math.abs(x - this.startX);
+        this.draft.height = Math.abs(y - this.startY);
+      }
+      return;
+    }
+    // 未按下时：光标悬停在选中框内显示移动指针，提示可整体拖动
+    if (this.tool === "select") {
+      const view = this.app.canvas.view as HTMLElement;
+      const movable =
+        this.editor.list.length > 0 &&
+        !this.hitEditBox(e.x ?? 0, e.y ?? 0) &&
+        this.pointInSelection(e.x ?? 0, e.y ?? 0);
+      view.classList.toggle("move-cursor", movable);
+    }
     if (!this.drawing || !this.draft) {
       return;
     }
@@ -341,6 +633,34 @@ export class Board {
   }
 
   private onUp() {
+    // 手型拖拽结束
+    if (this.panning) {
+      this.panning = false;
+      (this.app.canvas.view as HTMLElement).classList.remove("panning");
+      return;
+    }
+    // 橡皮擦结束：有删除则入历史（一次按下到松开合成一步）
+    if (this.erasing) {
+      this.erasing = false;
+      if (this.eraserDeleted) {
+        this.commitHistory();
+      }
+      return;
+    }
+    // 选中框内拖动结束：实际移动过才入历史
+    if (this.selectDragging) {
+      this.selectDragging = false;
+      this.dragEls = [];
+      if (this.movedAny) {
+        this.commitHistory();
+      }
+      return;
+    }
+    // 框选/套索结束：结算选中
+    if (this.selecting) {
+      this.finishSelect();
+      return;
+    }
     if (!this.drawing) {
       return;
     }
@@ -437,11 +757,324 @@ export class Board {
     const children = this.app.tree.children as UI[];
     for (let i = children.length - 1; i >= 0; i--) {
       const el = children[i];
+      if (this.isEditorInternal(el)) {
+        continue; // editor 内部元素（多选模拟层）不可交互
+      }
       if (el.hit(world, 5)) {
         return el;
       }
     }
     return null;
+  }
+
+  /**
+   * editor 多选时注入 tree 的模拟元素（SimulateElement，skipJSON=true），
+   * 不可见也不可交互，需从序列化/全选/框选中排除。
+   */
+  private isEditorInternal(el: UI): boolean {
+    return (el as unknown as { skipJSON?: boolean }).skipJSON === true;
+  }
+
+  // ================= 橡皮擦 =================
+
+  /** 擦除指定 app 坐标处的元素（锁定元素受保护不可擦除） */
+  private eraseAt(ax: number, ay: number) {
+    const hit = this.hitTest({ x: ax, y: ay });
+    if (hit && !hit.locked) {
+      hit.remove();
+      this.editor.cancel();
+      this.eraserDeleted = true;
+    }
+  }
+
+  // ================= 选中框内拖动 =================
+
+  /** app 坐标点是否落在任一选中元素的包围盒内 */
+  private pointInSelection(ax: number, ay: number): boolean {
+    for (const el of this.selectedList) {
+      const b = el.worldBoxBounds;
+      if (
+        b &&
+        ax >= b.x &&
+        ax <= b.x + b.width &&
+        ay >= b.y &&
+        ay <= b.y + b.height
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * app 坐标点是否落在编辑框的可交互区域（缩放手柄/旋转手柄/边框线）上。
+   * 命中时交给 editor 处理缩放/旋转，避免被"框内拖动"逻辑抢先。
+   */
+  private hitEditBox(ax: number, ay: number): boolean {
+    const eb = this.editor.editBox as unknown as
+      | {
+          rect?: { getLayoutPoints?: (type?: string, relative?: string) => { x: number; y: number }[] };
+          resizePoints?: UI[];
+          rotatePoints?: UI[];
+          resizeLines?: UI[];
+        }
+      | undefined;
+    if (!eb) {
+      return false;
+    }
+    // 缩放手柄 / 旋转手柄 / 边线手柄：世界包围盒 + 容差
+    const points = [
+      ...(eb.resizePoints ?? []),
+      ...(eb.rotatePoints ?? []),
+      ...(eb.resizeLines ?? []),
+    ];
+    for (const p of points) {
+      const b = p.worldBoxBounds;
+      if (
+        b &&
+        ax >= b.x - 4 &&
+        ax <= b.x + b.width + 4 &&
+        ay >= b.y - 4 &&
+        ay <= b.y + b.height + 4
+      ) {
+        return true;
+      }
+    }
+    // 编辑框边框线（旋转后取四角世界坐标，点到线段距离容差 6px）
+    const pts = eb.rect?.getLayoutPoints?.("box", "world");
+    if (pts && pts.length >= 4) {
+      for (let i = 0; i < 4; i++) {
+        if (distToSegment({ x: ax, y: ay }, pts[i], pts[(i + 1) % 4]) <= 6) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** 开始手动拖动整个选择（tree 局部坐标，锁定元素不参与） */
+  private beginDragSelection(tx: number, ty: number) {
+    this.selectDragging = true;
+    this.dragStart = { x: tx, y: ty };
+    this.dragEls = this.selectedList
+      .filter((el) => !el.locked)
+      .map((el) => ({ el, x: el.x ?? 0, y: el.y ?? 0 }));
+    this.movedAny = false;
+  }
+
+  // ================= 右键菜单 =================
+
+  /** 当前选中的元素（editor.list 运行时即 UI 实例，类型声明为 IUI 需转换） */
+  private get selectedList(): UI[] {
+    return this.editor.list as unknown as UI[];
+  }
+
+  /** 右键：命中元素则选中（含锁定元素，以便解锁），然后交给外部弹菜单 */
+  private onContextMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    const view = this.app.canvas.view as HTMLElement;
+    const rect = view.getBoundingClientRect();
+    const hit = this.hitTest({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+    if (hit && !this.editor.hasItem(hit)) {
+      this.editor.target = hit;
+    }
+    this.opts.onContextMenu?.(e.clientX, e.clientY);
+  };
+
+  // ================= 剪贴板 / 编辑操作 =================
+
+  get canPaste() {
+    return this.clipboard.length > 0;
+  }
+
+  /** 复制选中元素到内部剪贴板，返回是否有内容可复制 */
+  copy(): boolean {
+    this.clipboard = this.selectedList
+      .map((el) => this.elementToData(el))
+      .filter((d): d is ElementData => d !== null);
+    return this.clipboard.length > 0;
+  }
+
+  /** 剪切 = 复制 + 删除 */
+  cut() {
+    if (this.copy()) {
+      this.deleteSelected();
+    }
+  }
+
+  /** 粘贴剪贴板内容：整体偏移 12px 避免与原位置完全重叠，粘贴后选中新元素 */
+  paste() {
+    if (!this.clipboard.length) {
+      return;
+    }
+    const pasted: UI[] = [];
+    for (const d of this.clipboard) {
+      const el = this.dataToElement({
+        ...d,
+        x: (d.x ?? 0) + 12,
+        y: (d.y ?? 0) + 12,
+      });
+      if (el) {
+        this.app.tree.add(el);
+        pasted.push(el);
+      }
+    }
+    if (pasted.length) {
+      this.editor.target = pasted.length === 1 ? pasted[0] : pasted;
+      this.commitHistory();
+    }
+  }
+
+  /** 全选：锁定元素被 editor 自动排除 */
+  selectAll() {
+    const children = (this.app.tree.children as UI[]).filter(
+      (el) => !this.isEditorInternal(el),
+    );
+    if (children.length === 1) {
+      this.editor.target = children[0];
+    } else if (children.length > 1) {
+      this.editor.target = children;
+    }
+  }
+
+  toFront() {
+    this.editor.toTop();
+    this.commitHistory();
+  }
+
+  toBack() {
+    this.editor.toBottom();
+    this.commitHistory();
+  }
+
+  lock() {
+    this.editor.lock();
+    this.commitHistory();
+  }
+
+  unlock() {
+    this.editor.unlock();
+    this.commitHistory();
+  }
+
+  // ================= 框选 / 套索 =================
+
+  /** 框选按下：在 sky 层创建矩形草稿（sky 不随 zoomLayer 缩放，线宽恒定） */
+  private beginSelect(x: number, y: number) {
+    this.selecting = true;
+    this.editor.cancel();
+    this.startX = x;
+    this.startY = y;
+    this.draft = new Rect({
+      x,
+      y,
+      width: 0,
+      height: 0,
+      stroke: MARQUEE_STROKE,
+      strokeWidth: 1,
+      fill: "rgba(79, 140, 255, 0.08)",
+      dashPattern: [4, 4],
+    });
+    this.app.sky.add(this.draft);
+  }
+
+  /** 套索按下：在 sky 层创建路径草稿，跟踪指针轨迹 */
+  private beginLasso(x: number, y: number) {
+    this.selecting = true;
+    this.editor.cancel();
+    this.selectPoints = [{ x, y }];
+    this.draft = new Path({
+      path: `M ${x} ${y}`,
+      stroke: MARQUEE_STROKE,
+      strokeWidth: 1.5,
+      fill: undefined, // leafer 2.x 中 "none" 会渲染为黑色实心，必须用 undefined
+      strokeCap: "round",
+      strokeJoin: "round",
+    });
+    this.app.sky.add(this.draft);
+  }
+
+  private buildLassoPath(points: { x: number; y: number }[]): string {
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 1; i < points.length; i++) {
+      d += ` L ${points[i].x} ${points[i].y}`;
+    }
+    return d;
+  }
+
+  /** 框选/套索松开：移除草稿并按选区命中元素 */
+  private finishSelect() {
+    this.selecting = false;
+    const draft = this.draft;
+    this.draft = null;
+    if (!draft) {
+      return;
+    }
+    draft.remove();
+    const hits =
+      this.tool === "lasso"
+        ? this.selectByPolygon(this.selectPoints)
+        : this.selectByBox({
+            x: draft.x ?? 0,
+            y: draft.y ?? 0,
+            width: draft.width ?? 0,
+            height: draft.height ?? 0,
+          });
+    this.applySelection(hits);
+  }
+
+  /** 矩形框选：命中与选框相交的元素（世界包围盒，与 app 坐标同一体系） */
+  private selectByBox(box: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): UI[] {
+    const hits: UI[] = [];
+    if (box.width < 3 || box.height < 3) {
+      return hits; // 点击而非拖拽：视为取消选择
+    }
+    for (const el of this.app.tree.children as UI[]) {
+      if (this.isEditorInternal(el)) {
+        continue;
+      }
+      const b = el.worldBoxBounds;
+      if (b && rectsIntersect(box, b)) {
+        hits.push(el);
+      }
+    }
+    return hits;
+  }
+
+  /** 套索选中：命中与套索多边形相交的元素（顶点包含 + 边相交） */
+  private selectByPolygon(poly: { x: number; y: number }[]): UI[] {
+    const hits: UI[] = [];
+    if (poly.length < 3) {
+      return hits;
+    }
+    for (const el of this.app.tree.children as UI[]) {
+      if (this.isEditorInternal(el)) {
+        continue;
+      }
+      const b = el.worldBoxBounds;
+      if (b && polygonHitsBox(poly, b)) {
+        hits.push(el);
+      }
+    }
+    return hits;
+  }
+
+  private applySelection(hits: UI[]) {
+    if (hits.length === 1) {
+      this.editor.target = hits[0];
+    } else if (hits.length > 1) {
+      this.editor.target = hits;
+    } else {
+      this.editor.cancel();
+    }
   }
 
   // ================= 历史 =================
@@ -493,10 +1126,12 @@ export class Board {
 
   deleteSelected() {
     const list = (this.editor as unknown as { list: UI[] }).list ?? [];
-    if (!list.length) {
+    // 锁定元素受保护，不可删除
+    const targets = list.filter((el) => !el.locked);
+    if (!targets.length) {
       return;
     }
-    list.forEach((el) => el.remove());
+    targets.forEach((el) => el.remove());
     this.editor.cancel();
     this.commitHistory();
   }
@@ -508,7 +1143,59 @@ export class Board {
   }
 
   get elementCount() {
-    return this.app.tree.children.length;
+    // 排除 editor 内部元素（多选模拟层），避免计数虚增
+    return (this.app.tree.children as UI[]).filter(
+      (el) => !this.isEditorInternal(el),
+    ).length;
+  }
+
+  // ================= 图片插入 =================
+
+  /** 从本地文件插入图片：读取为 dataURL，按视口中心放置并限制最大尺寸 */
+  async insertImage(file: File): Promise<boolean> {
+    const url = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    const size = await this.imageSize(url);
+    if (!size) {
+      return false;
+    }
+    // 大图缩到视口内，小图保持原尺寸
+    const MAX = 600;
+    const ratio = Math.min(1, MAX / Math.max(size.width, size.height));
+    const w = Math.max(1, Math.round(size.width * ratio));
+    const h = Math.max(1, Math.round(size.height * ratio));
+    const c = this.viewCenter();
+    const p = this.app.tree.getInnerPoint({ x: c.x, y: c.y });
+    const img = new Image({
+      url,
+      x: p.x - w / 2,
+      y: p.y - h / 2,
+      width: w,
+      height: h,
+    });
+    this.app.tree.add(img);
+    // 强制重绘：图片为异步加载，避免极端时序下画布不刷新（图片不可见）
+    this.app.tree.forceRender();
+    this.editor.target = img;
+    this.commitHistory();
+    return true;
+  }
+
+  /** 读取图片自然尺寸（HTMLImageElement 预加载，与 leafer Image 无关） */
+  private imageSize(
+    url: string,
+  ): Promise<{ width: number; height: number } | null> {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () =>
+        resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
   }
 
   // ================= 序列化 =================
@@ -525,13 +1212,28 @@ export class Board {
   }
 
   private elementToData(el: UI): ElementData | null {
+    // editor 内部元素（多选模拟层等）不参与序列化
+    if (this.isEditorInternal(el)) {
+      return null;
+    }
     const base = {
       x: el.x ?? 0,
       y: el.y ?? 0,
       rotation: el.rotation || undefined,
       stroke: colorOf(el.stroke),
       strokeWidth: numOf(el.strokeWidth),
+      locked: el.locked || undefined,
     };
+    // 注意：Image 继承自 Rect，必须先于 Rect 判断
+    if (el instanceof Image) {
+      return {
+        ...base,
+        type: "image",
+        width: el.width ?? 0,
+        height: el.height ?? 0,
+        url: (el as unknown as { url?: unknown }).url as string | undefined,
+      };
+    }
     if (el instanceof Rect) {
       return {
         ...base,
@@ -603,6 +1305,7 @@ export class Board {
       rotation: d.rotation,
       stroke: d.stroke,
       strokeWidth: d.strokeWidth,
+      locked: d.locked || undefined,
     };
     const fill = d.fill === "none" ? undefined : d.fill;
     switch (d.type) {
@@ -642,6 +1345,13 @@ export class Board {
           text: d.text,
           fontSize: d.fontSize,
           fill: fill ?? d.stroke,
+        });
+      case "image":
+        return new Image({
+          ...common,
+          url: d.url,
+          width: d.width,
+          height: d.height,
         });
     }
   }

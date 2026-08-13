@@ -172,7 +172,19 @@ input[type="color"] {
   cursor: default;
 }
 
-#board.panning {
+#board .leafer-app-view.hand-tool {
+  cursor: grab;
+}
+
+#board .leafer-app-view.eraser-tool {
+  cursor: crosshair;
+}
+
+#board .leafer-app-view.move-cursor {
+  cursor: move;
+}
+
+#board .leafer-app-view.panning {
   cursor: grabbing;
 }
 
@@ -233,4 +245,56 @@ input[type="color"] {
 
 #toast.show {
   opacity: 1;
+}
+
+/* ---------- 右键菜单 ---------- */
+#context-menu {
+  position: fixed;
+  z-index: 40;
+  display: none;
+  min-width: 170px;
+  padding: 5px;
+  background: var(--bg-2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  user-select: none;
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.ctx-item:hover:not(.disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ctx-item.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.ctx-item .ctx-shortcut {
+  margin-left: auto;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.ctx-item:hover:not(.disabled) .ctx-shortcut {
+  color: inherit;
+}
+
+.ctx-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
 }
