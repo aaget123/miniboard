@@ -99,7 +99,7 @@ async function main() {
       const before = board.serialize();
       const { elements, stats } = beautifyScene(before);
       if (!stats.length) {
-        toast("✨ 没有需要拉直的画笔笔迹");
+        toast("✨ 没有需要整理的画笔笔迹");
         return;
       }
       board.loadElements(elements);

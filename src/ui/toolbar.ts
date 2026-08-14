@@ -94,7 +94,7 @@ export class Toolbar {
 
     const beautifyBtn = makeButton(
       "✨ 整理",
-      "把画笔手绘的弯弯扭扭拉直",
+      "智能整理：识别手绘形状并完善为标准图形（圆/椭圆/矩形/多边形/直线）",
       () => handlers.onBeautify(),
       "tool-btn beautify",
     );
