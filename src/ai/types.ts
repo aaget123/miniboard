@@ -7,6 +7,22 @@ export type AiConfig = {
   baseURL: string;
   apiKey: string;
   model: string;
+  /** 模型是否支持视觉输入（多模态）：开启后交流模式发送画布截图，默认关闭 */
+  multimodal?: boolean;
+};
+
+/** 一个已注册的模型配置条目（多配置管理：设置弹窗中新增/编辑/选择） */
+export type AiProfile = AiConfig & {
+  /** 配置条目唯一 id */
+  id: string;
+  /** 显示名称 */
+  name: string;
+};
+
+/** 模型配置存储：当前激活条目 + 全部条目 */
+export type AiProfileStore = {
+  activeId: string;
+  profiles: AiProfile[];
 };
 
 export type AiRole = "system" | "user" | "assistant" | "tool";
@@ -21,9 +37,15 @@ export type AiToolCall = {
   };
 };
 
+/** 多模态内容片段：文本或图片（视觉模型用，图片为 dataURL） */
+export type AiContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type ChatMessage = {
   role: AiRole;
-  content: string | null;
+  /** 纯文本，或多模态内容数组（视觉模型）；工具调用轮可为 null */
+  content: string | AiContentPart[] | null;
   tool_call_id?: string;
   tool_calls?: AiToolCall[];
 };

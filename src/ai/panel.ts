@@ -1,20 +1,23 @@
 import type { Board } from "../board/canvas";
 import type { ToolRegistry } from "../board/registry";
 import type { Toolbar } from "../ui/toolbar";
-import { loadConfig, saveConfig, isConfigReady } from "./config";
+import { loadConfig, isConfigReady } from "./config";
 import { chatTurn } from "./client";
 import { buildSystemPrompt } from "./prompts";
 import { describeCanvas, executeTool, toOpenAiTools, toolsForMode } from "./tools";
 import type { ElementData } from "../types";
 import type {
-  AiConfig,
+  AiContentPart,
   AiMode,
   AiToolExecution,
   ChatMessage,
 } from "./types";
 
 const MAX_TOOL_ROUNDS = 4;
-const MAX_HISTORY = 40;
+/** 对话历史 token 预算：超限时从头部压缩，保证最近上下文完整 */
+const MAX_HISTORY_TOKENS = 8000;
+/** 单条消息 token 上限：超限截断（主要针对画布 JSON 等大内容） */
+const MAX_MSG_TOKENS = 4000;
 
 /** 工具名 → 面板回执显示名 */
 const TOOL_LABELS: Record<string, string> = {
@@ -34,6 +37,32 @@ function escapeHtml(s: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/**
+ * 粗略 token 估算：中文/全角字符按 1 token，其余按 4 字符/token；
+ * 图片片段按固定 200 token 计（视觉模型图片计价因模型而异，取保守值）。
+ */
+function estimateTokens(content: string | AiContentPart[] | null): number {
+  if (content === null) {
+    return 0;
+  }
+  if (Array.isArray(content)) {
+    return content.reduce(
+      (n, part) => n + (part.type === "text" ? estimateTokens(part.text) : 200),
+      0,
+    );
+  }
+  let zh = 0;
+  let other = 0;
+  for (const ch of content) {
+    if (/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch)) {
+      zh++;
+    } else {
+      other++;
+    }
+  }
+  return zh + Math.ceil(other / 4);
 }
 
 function renderInline(text: string): string {
@@ -93,8 +122,11 @@ export class AiPanel {
   private mode: AiMode = "chat";
   private busy = false;
   private history: ChatMessage[] = [];
+  /** 历史总 token 估算（与 history 同步维护，用于超限压缩） */
+  private historyTokens = 0;
+  /** 压缩提示只展示一次，避免每次发送刷屏 */
+  private compressNotified = false;
   private modeTabs = new Map<AiMode, HTMLButtonElement>();
-  private settingsModal: HTMLElement | null = null;
   /** @ 选区：当前已选区（发送时注入对话上下文），null 表示未 @ */
   private pendingAt: ElementData[] | null = null;
 
@@ -102,6 +134,8 @@ export class AiPanel {
     private board: Board,
     private registry: ToolRegistry,
     private toolbar: Toolbar,
+    /** 打开设置弹窗（☰ 文件与工具 → ⚙，配置缺失时自动唤起） */
+    private onOpenSettings: () => void,
   ) {
     this.panel = document.getElementById("ai-panel") as HTMLElement;
     this.messagesEl = document.getElementById("ai-messages") as HTMLElement;
@@ -146,9 +180,6 @@ export class AiPanel {
     document
       .getElementById("ai-close-btn")!
       .addEventListener("click", () => this.close());
-    document
-      .getElementById("ai-settings-btn")!
-      .addEventListener("click", () => this.openSettings());
     this.sendBtn.addEventListener("click", () => this.send());
     this.atBtn.addEventListener("click", () => this.toggleAt());
     this.inputEl.addEventListener("keydown", (e) => {
@@ -168,6 +199,8 @@ export class AiPanel {
       btn.classList.toggle("active", m === mode);
     }
     this.history = [];
+    this.historyTokens = 0;
+    this.compressNotified = false;
     this.clearAt();
     this.messagesEl.innerHTML = "";
     this.appendSystem(this.modeHint(mode));
@@ -276,8 +309,26 @@ export class AiPanel {
 
   private pushHistory(msg: ChatMessage) {
     this.history.push(msg);
-    if (this.history.length > MAX_HISTORY) {
-      this.history = this.history.slice(-MAX_HISTORY);
+    this.historyTokens += estimateTokens(msg.content);
+    // 单条超长截断（画布 JSON 等），保留开头便于模型读取主体
+    if (typeof msg.content === "string") {
+      const tokens = estimateTokens(msg.content);
+      if (tokens > MAX_MSG_TOKENS) {
+        const keep = Math.floor((msg.content.length * MAX_MSG_TOKENS) / tokens);
+        msg.content = msg.content.slice(0, keep) + "\n…（内容过长已截断）";
+        this.historyTokens -= tokens - estimateTokens(msg.content);
+      }
+    }
+    // 超预算：从头丢弃旧消息（至少保留最近 2 条，保护当前轮上下文）
+    while (this.history.length > 2 && this.historyTokens > MAX_HISTORY_TOKENS) {
+      const dropped = this.history.shift();
+      if (dropped) {
+        this.historyTokens -= estimateTokens(dropped.content);
+      }
+    }
+    if (this.historyTokens > MAX_HISTORY_TOKENS && !this.compressNotified) {
+      this.compressNotified = true;
+      this.appendSystem("对话较长，较早的内容已按长度自动压缩，AI 可能不清楚最早的信息。");
     }
   }
 
@@ -289,7 +340,7 @@ export class AiPanel {
     const cfg = loadConfig();
     if (!isConfigReady(cfg)) {
       this.appendError("请先配置 AI 模型（接口地址 / API Key / 模型名）");
-      this.openSettings();
+      this.onOpenSettings();
       return;
     }
 
@@ -307,6 +358,22 @@ export class AiPanel {
       this.clearAt();
     }
     this.pushHistory({ role: "user", content: text });
+
+    // 多模态：交流模式开启视觉时，随消息附带画布截图（发送时快照；失败静默降级纯文本）
+    if (this.mode === "chat" && cfg.multimodal === true) {
+      try {
+        const shot = await this.board.exportImage();
+        if (shot) {
+          this.history[this.history.length - 1].content = [
+            { type: "text", text },
+            { type: "image_url", image_url: { url: shot } },
+          ];
+          this.historyTokens += 200;
+        }
+      } catch {
+        // 截图失败：降级为纯文本
+      }
+    }
 
     const mode = this.mode;
     const system: ChatMessage = {
@@ -388,89 +455,5 @@ export class AiPanel {
     } finally {
       this.setBusy(false);
     }
-  }
-
-  // ---------- 设置弹窗 ----------
-
-  private openSettings() {
-    if (!this.settingsModal) {
-      this.settingsModal = this.buildSettingsModal();
-      document.body.appendChild(this.settingsModal);
-    }
-    this.settingsModal.hidden = false;
-  }
-
-  private buildSettingsModal(): HTMLElement {
-    const cfg = loadConfig();
-    const mask = document.createElement("div");
-    mask.className = "ai-modal-mask";
-    mask.addEventListener("click", (e) => {
-      if (e.target === mask) {
-        mask.hidden = true;
-      }
-    });
-
-    const modal = document.createElement("div");
-    modal.className = "ai-modal";
-
-    const title = document.createElement("h3");
-    title.textContent = "AI 模型设置（OpenAI 兼容）";
-    modal.appendChild(title);
-
-    const hint = document.createElement("p");
-    hint.className = "ai-modal-hint";
-    hint.textContent = "Key 仅保存在本机浏览器存储中，请自行保管。";
-    modal.appendChild(hint);
-
-    const fields: { key: keyof AiConfig; label: string; placeholder: string; password?: boolean }[] = [
-      { key: "baseURL", label: "接口地址 baseURL", placeholder: "https://api.deepseek.com/v1" },
-      { key: "apiKey", label: "API Key", placeholder: "sk-…", password: true },
-      { key: "model", label: "模型名称", placeholder: "deepseek-chat" },
-    ];
-    const inputs = new Map<keyof AiConfig, HTMLInputElement>();
-    for (const f of fields) {
-      const label = document.createElement("label");
-      label.className = "ai-modal-label";
-      label.textContent = f.label;
-      const input = document.createElement("input");
-      input.type = f.password ? "password" : "text";
-      input.placeholder = f.placeholder;
-      input.value = cfg[f.key] ?? "";
-      inputs.set(f.key, input);
-      modal.appendChild(label);
-      modal.appendChild(input);
-    }
-
-    const actions = document.createElement("div");
-    actions.className = "ai-modal-actions";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "tool-btn";
-    cancelBtn.textContent = "取消";
-    cancelBtn.addEventListener("click", () => {
-      mask.hidden = true;
-    });
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "tool-btn ai-modal-save";
-    saveBtn.textContent = "保存";
-    saveBtn.addEventListener("click", () => {
-      const next: AiConfig = {
-        baseURL: inputs.get("baseURL")?.value.trim() ?? "",
-        apiKey: inputs.get("apiKey")?.value.trim() ?? "",
-        model: inputs.get("model")?.value.trim() ?? "",
-      };
-      if (!isConfigReady(next)) {
-        this.appendError("请完整填写 baseURL、API Key 与模型名称");
-        return;
-      }
-      saveConfig(next);
-      mask.hidden = true;
-      this.appendSystem(`模型设置已保存：${next.model} @ ${next.baseURL}`);
-    });
-    actions.append(cancelBtn, saveBtn);
-    modal.appendChild(actions);
-    mask.appendChild(modal);
-    return mask;
   }
 }

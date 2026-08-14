@@ -22,6 +22,8 @@ export type BoardStyle = {
   fillEnabled: boolean;
   /** 填充颜色（独立于描边色；填充 = 该色 15% 半透明） */
   fillColor: string;
+  /** 文字字号（仅选中文字时生效，不作为新文字默认值） */
+  fontSize?: number;
 };
 
 /**
@@ -115,6 +117,9 @@ export type ElementData = {
   text?: string;
   fontSize?: number;
   url?: string; // image: dataURL 或路径
+  /** line/arrow: 端点绑定的元素稳定 id（被绑元素移动时端点自动跟随） */
+  bindStart?: string;
+  bindEnd?: string;
   locked?: boolean; // 锁定后不可拖动/缩放/删除
 };
 

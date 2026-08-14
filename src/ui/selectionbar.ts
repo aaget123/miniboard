@@ -1,13 +1,18 @@
 import { SWATCHES } from "./toolbar";
+import type { SelectionInfo } from "../board/canvas";
 
 export type SelectionBarHandlers = {
   /** 局部整理：识别选中手绘笔迹并完善为标准图形/拉直 */
   onBeautify: () => void;
   /** 手绘风格：选中标准图形转 rough.js 手绘外观 */
   onSketchify: () => void;
+  /** 图片裁剪：选中单张图片时进入裁剪模式 */
+  onCrop: () => void;
   onStrokeChange: (color: string) => void;
   onFillColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
+  /** 字号变化（仅选中文字时） */
+  onFontSizeChange: (size: number) => void;
 };
 
 function makeButton(
@@ -23,11 +28,17 @@ function makeButton(
   return btn;
 }
 
+/** 显隐过渡时长（与 style.css 中 transition 时长一致，隐藏时延迟置 hidden） */
+const FADE_MS = 180;
+
 /**
  * 左侧悬浮工具栏：选中元素时出现（Excalidraw 同款）。
- * 操作组：✨ 整理 / ✎ 手绘；样式组：🎨 样式浮层（描边/填充色板 + 粗细）。
- * 填充开关不在此栏（由顶部常驻工具栏的 ⬛ 填充按钮统一负责，选中元素时同样生效）。
- * 未选中时整体隐藏。
+ * 类型感知差异化显示（对齐 Excalidraw showSelectedShapeActions）：
+ * - ✨ 整理：仅选中含手绘笔迹时显示
+ * - ✎ 手绘：仅选中含可手绘化标准图形时显示
+ * - ✂ 裁剪：仅单选一张图片时显示
+ * - 🎨 样式：选中含可编辑元素（非纯图片）时显示
+ * 非 select 工具 / 文本内联编辑中整体隐藏；全锁定选中同样隐藏。
  */
 export class SelectionBar {
   private bar: HTMLElement;
@@ -41,7 +52,19 @@ export class SelectionBar {
   private swatches = new Map<string, HTMLDivElement>();
   private colorInput!: HTMLInputElement;
   private widthInput!: HTMLInputElement;
+  // 差异化显隐的按钮引用
+  private beautifyBtn!: HTMLButtonElement;
+  private sketchifyBtn!: HTMLButtonElement;
+  private cropBtn!: HTMLButtonElement;
   private styleBtn!: HTMLButtonElement;
+  private sep!: HTMLElement;
+  // 字号行（仅选中文字时显示）
+  private fontRow!: HTMLElement;
+  private fontSizeInput!: HTMLInputElement;
+  private fontSizeLabel!: HTMLSpanElement;
+  // 两段式显隐：先切 hidden 保证 transition 播放，延时后再真正隐藏
+  private hideTimer = 0;
+  private popoverHideTimer = 0;
 
   constructor(
     container: HTMLElement,
@@ -51,21 +74,33 @@ export class SelectionBar {
     this.bar.id = "selection-bar";
     this.bar.hidden = true;
 
-    this.bar.append(
-      makeButton("✨", "整理选中：识别手绘笔迹并完善为标准图形/拉直", () =>
-        handlers.onBeautify(),
-      ),
-      makeButton("✎", "手绘风格：选中图形转手绘外观（rough.js）", () =>
-        handlers.onSketchify(),
-      ),
+    this.beautifyBtn = makeButton(
+      "✨",
+      "整理选中：识别手绘笔迹并完善为标准图形/拉直",
+      () => handlers.onBeautify(),
     );
-    const sep = document.createElement("div");
-    sep.className = "tool-sep";
-    this.bar.appendChild(sep);
+    this.sketchifyBtn = makeButton(
+      "✎",
+      "手绘风格：选中图形转手绘外观（rough.js）",
+      () => handlers.onSketchify(),
+    );
+    this.cropBtn = makeButton(
+      "✂",
+      "裁剪图片：拖动手柄调整区域，松手即应用",
+      () => handlers.onCrop(),
+    );
+    this.sep = document.createElement("div");
+    this.sep.className = "tool-sep";
     this.styleBtn = makeButton("🎨", "样式：描边/填充颜色与粗细", () =>
       this.togglePopover(),
     );
-    this.bar.appendChild(this.styleBtn);
+    this.bar.append(
+      this.beautifyBtn,
+      this.sketchifyBtn,
+      this.cropBtn,
+      this.sep,
+      this.styleBtn,
+    );
     container.appendChild(this.bar);
 
     // ---- 样式浮层（色板 + 取色器 + 粗细）----
@@ -130,9 +165,33 @@ export class SelectionBar {
     );
     row.append(this.colorInput, widthLabel, this.widthInput);
     this.popover.appendChild(row);
+
+    // 字号行：选中单个/多个文字时显示，拖动即改选中文字大小
+    this.fontRow = document.createElement("div");
+    this.fontRow.className = "style-row font-row";
+    this.fontRow.hidden = true;
+    const fontLabel = document.createElement("span");
+    fontLabel.className = "panel-label";
+    fontLabel.textContent = "字号";
+    this.fontSizeInput = document.createElement("input");
+    this.fontSizeInput.type = "range";
+    this.fontSizeInput.min = "10";
+    this.fontSizeInput.max = "72";
+    this.fontSizeInput.step = "1";
+    this.fontSizeInput.value = "18";
+    this.fontSizeInput.addEventListener("input", () => {
+      const v = Number(this.fontSizeInput.value);
+      this.fontSizeLabel.textContent = String(v);
+      handlers.onFontSizeChange(v);
+    });
+    this.fontSizeLabel = document.createElement("span");
+    this.fontSizeLabel.className = "font-size-value";
+    this.fontSizeLabel.textContent = this.fontSizeInput.value;
+    this.fontRow.append(fontLabel, this.fontSizeInput, this.fontSizeLabel);
+    this.popover.appendChild(this.fontRow);
     document.body.appendChild(this.popover);
 
-    // 点击浮层外部关闭
+    // 点击浮层外部关闭（ESC/失焦由 main.ts 互斥管理统一兜底，此处补充失焦）
     document.addEventListener("pointerdown", (e) => {
       if (this.popover.hidden) {
         return;
@@ -144,29 +203,77 @@ export class SelectionBar {
         this.hidePopover();
       }
     });
+    window.addEventListener("blur", () => this.hidePopover());
 
     this.setChannel("stroke");
   }
 
-  /** 选中变化：有选中元素时显示，无选中隐藏（同时收起浮层） */
-  show(hasSelection: boolean) {
-    this.bar.hidden = !hasSelection;
-    if (!hasSelection) {
+  /**
+   * 选中变化：类型感知的差异化显隐（对齐 Excalidraw showSelectedShapeActions）。
+   * toolActive：当前工具为 select 且不在文本内联编辑中（非 select 工具/编辑中整体隐藏）。
+   */
+  show(info: SelectionInfo | null, toolActive: boolean) {
+    const visible =
+      !!info && info.ids.length > 0 && toolActive && !info.allLocked;
+    this.setBarVisible(visible);
+    if (!visible) {
       this.hidePopover();
+      return;
+    }
+    const info2 = info!;
+    // 按钮差异化：✨ 仅手绘笔迹、✎ 仅可手绘图形、✂ 仅单选图片、🎨 有可编辑元素
+    const singleImage =
+      info2.types.length === 1 && info2.types[0] === "image";
+    const hasEditable = info2.types.some((t) => t !== "image");
+    this.beautifyBtn.style.display = info2.hasFreehand ? "" : "none";
+    this.sketchifyBtn.style.display = info2.hasSketchable ? "" : "none";
+    this.cropBtn.style.display = singleImage ? "" : "none";
+    this.styleBtn.style.display = hasEditable ? "" : "none";
+    this.sep.style.display = hasEditable ? "" : "none";
+    this.fontRow.hidden = !info2.hasText;
+    if (info2.hasText && info2.fontSize !== undefined) {
+      this.setFontSize(info2.fontSize);
+    }
+  }
+
+  /** 两段式显隐：先切 hidden 保证 transition 播放，延时后再真正隐藏 */
+  private setBarVisible(visible: boolean) {
+    clearTimeout(this.hideTimer);
+    if (visible) {
+      this.bar.hidden = false;
+      // 双帧延迟：hidden 移除后下一帧再加 visible，确保 transition 从初始态播放
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => this.bar.classList.add("visible")),
+      );
+    } else {
+      this.bar.classList.remove("visible");
+      this.hideTimer = window.setTimeout(() => {
+        this.bar.hidden = true;
+      }, FADE_MS);
     }
   }
 
   private togglePopover() {
-    this.popover.hidden = !this.popover.hidden;
-    if (!this.popover.hidden) {
-      const r = this.bar.getBoundingClientRect();
-      this.popover.style.left = `${r.left + r.width + 8}px`;
-      this.popover.style.top = `${r.top}px`;
+    if (this.popover.classList.contains("visible")) {
+      this.hidePopover();
+      return;
     }
+    this.popover.hidden = false;
+    const r = this.bar.getBoundingClientRect();
+    this.popover.style.left = `${r.left + r.width + 8}px`;
+    this.popover.style.top = `${r.top}px`;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => this.popover.classList.add("visible")),
+    );
   }
 
-  private hidePopover() {
-    this.popover.hidden = true;
+  /** 收起样式浮层（main.ts 互斥管理 closeAllFloating 调用） */
+  hidePopover() {
+    this.popover.classList.remove("visible");
+    clearTimeout(this.popoverHideTimer);
+    this.popoverHideTimer = window.setTimeout(() => {
+      this.popover.hidden = true;
+    }, FADE_MS);
   }
 
   setStroke(color: string) {
@@ -188,6 +295,11 @@ export class SelectionBar {
 
   setWidth(width: number) {
     this.widthInput.value = String(width);
+  }
+
+  setFontSize(size: number) {
+    this.fontSizeInput.value = String(size);
+    this.fontSizeLabel.textContent = String(size);
   }
 
   private setChannel(channel: "stroke" | "fill") {

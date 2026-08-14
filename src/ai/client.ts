@@ -172,3 +172,77 @@ async function toApiError(resp: Response): Promise<Error> {
   }
   return new Error(`请求失败 (HTTP ${resp.status})${detail ? `：${detail}` : ""}`);
 }
+
+// ================= 模型查询与连接测试 =================
+
+/** 拉取服务端模型列表（OpenAI 兼容 GET /models） */
+export async function fetchModels(cfg: AiConfig): Promise<string[]> {
+  // baseURL 可能已含 /chat/completions，统一替换为 /models
+  const url = chatURL(cfg.baseURL).replace(/\/chat\/completions$/, "/models");
+  const resp = await httpFetch(url, {
+    method: "GET",
+    headers: headers(cfg),
+  });
+  if (!resp.ok) {
+    throw await toApiError(resp);
+  }
+  const json = (await resp.json()) as { data?: { id?: string }[] };
+  return (json.data ?? [])
+    .map((m) => m.id)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
+export type ConnectionTestResult = {
+  ok: boolean;
+  /** 服务端模型列表（/models 成功时返回） */
+  models: string[];
+  /** 展示用消息 */
+  message: string;
+};
+
+/**
+ * 测试连接：优先 GET /models（一次验证 Key 并取模型列表），
+ * 服务不支持 /models 时降级为最小 chat 请求（max_tokens=1，不产生可见输出）。
+ */
+export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResult> {
+  try {
+    const models = await fetchModels(cfg);
+    return {
+      ok: true,
+      models,
+      message: models.length
+        ? `连接成功，可用模型 ${models.length} 个`
+        : "连接成功（服务未返回模型列表）",
+    };
+  } catch (modelsErr) {
+    const modelsMsg =
+      modelsErr instanceof Error ? modelsErr.message : String(modelsErr);
+    try {
+      const resp = await httpFetch(chatURL(cfg.baseURL), {
+        method: "POST",
+        headers: headers(cfg),
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      });
+      if (!resp.ok) {
+        throw await toApiError(resp);
+      }
+      return {
+        ok: true,
+        models: [],
+        message: "连接成功（该服务未提供 /models 接口，已通过最小请求验证）",
+      };
+    } catch (chatErr) {
+      const chatMsg = chatErr instanceof Error ? chatErr.message : String(chatErr);
+      return {
+        ok: false,
+        models: [],
+        message: `连接失败：/models 不可用（${modelsMsg}）；最小请求：${chatMsg}`,
+      };
+    }
+  }
+}

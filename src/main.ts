@@ -4,12 +4,14 @@ import { Storage } from "./storage";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
 import { ToolsFloat } from "./ui/toolsfloat";
+import { SettingsDialog, applyTheme, loadTheme } from "./ui/settings";
 import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
 import { AiPanel } from "./ai/panel";
 import { PointerEvent } from "leafer-ui";
 import type { IPointerEvent } from "@leafer-ui/interface";
+import type { SelectionInfo } from "./board/canvas";
 
 function toast(message: string) {
   let el = document.getElementById("toast") as HTMLDivElement | null;
@@ -61,8 +63,14 @@ async function main() {
       statusBar.setUndoRedo(board.canUndo, board.canRedo);
       updateStatus();
     },
-    onSelectionChange: (ids) => {
-      selectionBar.show(ids.length > 0);
+    onSelectionChange: (info) => {
+      lastSelectionInfo = info;
+      refreshSelectionBar(info);
+    },
+    // 文本内联编辑开合：编辑中隐藏左侧选中栏（避免遮挡输入框）
+    onTextEditChange: (editing) => {
+      textEditing = editing;
+      refreshSelectionBar(lastSelectionInfo);
     },
     onContextMenu: (x, y) => {
       const list = board.editor.list;
@@ -74,7 +82,19 @@ async function main() {
     },
   });
 
+  // 左侧选中栏显隐判定：非 select 工具/文本编辑中整体隐藏（工具切换时同步刷新）
+  let lastSelectionInfo: SelectionInfo | null = null;
+  let textEditing = false;
+  const refreshSelectionBar = (info: SelectionInfo | null) => {
+    selectionBar.show(info, board.currentTool === "select" && !textEditing);
+  };
+
   const storage = new Storage(board);
+
+  // 设置弹窗（☰ 文件与工具 → ⚙）：主题切换 + AI 多模型配置
+  const settingsDialog = new SettingsDialog(board);
+  // 按已保存主题初始化画布背景（默认深色）
+  applyTheme(loadTheme(), board);
 
   let aiPanel!: AiPanel;
 
@@ -91,6 +111,8 @@ async function main() {
     onTool: (tool) => {
       board.setTool(tool);
       toolbar.setTool(tool);
+      // 切换工具后按新工具状态刷新左侧选中栏（非 select 工具隐藏）
+      refreshSelectionBar(lastSelectionInfo);
     },
     onFillChange: applyFillChange,
   });
@@ -131,6 +153,16 @@ async function main() {
       style.strokeWidth = width;
       // 有选中元素时同步应用新粗细
       board.applyStyleToSelection({ strokeWidth: width });
+    },
+    onFontSizeChange: (size) => {
+      // 仅对选中文字即时生效（新文字字号固定默认值，不进默认样式）
+      board.applyStyleToSelection({ fontSize: size });
+    },
+    onCrop: () => {
+      const ok = board.startCrop();
+      if (!ok) {
+        toast("请单选一张未旋转的图片进行裁剪");
+      }
     },
   });
 
@@ -197,6 +229,7 @@ async function main() {
         toast("已清空画布");
       }
     },
+    onSettings: () => settingsDialog.open(),
   });
 
   // ---- 右下角状态栏：信息 + 撤销/重做/缩放 ----
@@ -226,8 +259,8 @@ async function main() {
     toolbar.refresh();
   });
 
-  // AI 助手面板（交流 + 编辑双模式）
-  aiPanel = new AiPanel(board, registry, toolbar);
+  // AI 助手面板（交流 + 编辑双模式）；配置缺失时唤起设置弹窗
+  aiPanel = new AiPanel(board, registry, toolbar, () => settingsDialog.open());
 
   function updateStatus() {
     const zoom = Math.round((board.app.tree.zoomLayer?.scaleX ?? 1) * 100);
@@ -253,6 +286,13 @@ async function main() {
     unlock: () => board.unlock(),
   };
   contextMenu.onAction((action) => MENU_ACTIONS[action]());
+
+  // 悬浮内容互斥管理：关闭所有浮层（右键菜单/样式浮层/右侧面板）
+  const closeAllFloating = () => {
+    contextMenu.close();
+    selectionBar.hidePopover();
+    toolsFloat.collapse();
+  };
 
   // 快捷键
   window.addEventListener("keydown", (e) => {
@@ -310,7 +350,11 @@ async function main() {
       return;
     }
     if (e.key === "Escape") {
+      // 逐层退出：点编辑 → 图片裁剪 → 编辑框取消 → 悬浮浮层全部收起
+      closeAllFloating();
       board.editor.cancel();
+      board.exitPointEdit();
+      board.cancelCrop();
       return;
     }
     if (mod && (e.key === "=" || e.key === "+")) {
@@ -358,6 +402,10 @@ async function main() {
     const open = !aiEl.hidden;
     toolsFloat.setAIActive(open);
     statusEl.classList.toggle("ai-open", open);
+    // AI 面板打开时收起其他悬浮内容（互斥，避免遮挡重叠）
+    if (open) {
+      closeAllFloating();
+    }
   }).observe(aiEl, { attributes: true, attributeFilter: ["hidden"] });
 
   const restored = await storage.restoreAutosave();
