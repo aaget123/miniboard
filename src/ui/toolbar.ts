@@ -1,4 +1,4 @@
-import type { ToolType } from "../types";
+import type { ToolRegistry } from "../board/registry";
 
 export const SWATCHES = [
   "#e03131",
@@ -19,22 +19,10 @@ export const SWATCHES = [
   "#000000",
 ];
 
-const TOOLS: { tool: ToolType; icon: string; title: string }[] = [
-  { tool: "select", icon: "↖", title: "选择 (V)" },
-  { tool: "hand", icon: "✋", title: "画布移动 (H)" },
-  { tool: "marquee", icon: "⛶", title: "框选 (M)" },
-  { tool: "lasso", icon: "∿", title: "套索选中 (Q)" },
-  { tool: "pen", icon: "✏", title: "画笔 (P)" },
-  { tool: "eraser", icon: "⌫", title: "橡皮擦 (E)" },
-  { tool: "line", icon: "╱", title: "直线 (L)" },
-  { tool: "arrow", icon: "→", title: "箭头 (A)" },
-  { tool: "rect", icon: "▭", title: "矩形 (R)" },
-  { tool: "ellipse", icon: "◯", title: "椭圆 (O)" },
-  { tool: "text", icon: "T", title: "文本 (T)" },
-];
+
 
 export type ToolbarHandlers = {
-  onTool: (tool: ToolType) => void;
+  onTool: (tool: string) => void;
   onUndo: () => void;
   onRedo: () => void;
   onBeautify: () => void;
@@ -46,6 +34,8 @@ export type ToolbarHandlers = {
   onExport: () => void;
   onClear: () => void;
   onInsertImage: () => void;
+  /** 打开/关闭 AI 助手面板 */
+  onToggleAI: () => void;
   onStrokeChange: (color: string) => void;
   /** 填充通道：色板点击时应用独立填充颜色 */
   onFillColorChange: (color: string) => void;
@@ -68,7 +58,11 @@ function makeButton(
 }
 
 export class Toolbar {
-  private toolButtons = new Map<ToolType, HTMLButtonElement>();
+  private toolButtons = new Map<string, HTMLButtonElement>();
+  private toolGroup: HTMLDivElement;
+  /** 当前激活工具（refresh 重渲染时保留） */
+  private activeToolId = "select";
+  private handlers: ToolbarHandlers;
   private undoBtn!: HTMLButtonElement;
   private redoBtn!: HTMLButtonElement;
   private swatches = new Map<string, HTMLDivElement>();
@@ -82,14 +76,15 @@ export class Toolbar {
   private strokeChannelColor = "#4f8cff";
   private fillChannelColor = "#4f8cff";
 
-  constructor(container: HTMLElement, handlers: ToolbarHandlers) {
-    const toolGroup = document.createElement("div");
-    toolGroup.className = "tool-group";
-    for (const t of TOOLS) {
-      const btn = makeButton(t.icon, t.title, () => handlers.onTool(t.tool));
-      toolGroup.appendChild(btn);
-      this.toolButtons.set(t.tool, btn);
-    }
+  constructor(
+    container: HTMLElement,
+    private registry: ToolRegistry,
+    handlers: ToolbarHandlers,
+  ) {
+    this.handlers = handlers;
+    this.toolGroup = document.createElement("div");
+    this.toolGroup.className = "tool-group";
+    this.renderTools();
 
     const editGroup = document.createElement("div");
     editGroup.className = "tool-group";
@@ -120,9 +115,10 @@ export class Toolbar {
       makeButton("🖻", "插入图片", () => handlers.onInsertImage()),
       makeButton("🖼", "导出 PNG 图片", () => handlers.onExport()),
       makeButton("🗑", "清空画布", () => handlers.onClear()),
+      makeButton("🤖", "AI 助手", () => handlers.onToggleAI()),
     );
 
-    container.append(toolGroup, editGroup, beautifyBtn, zoomGroup, fileGroup);
+    container.append(this.toolGroup, editGroup, beautifyBtn, zoomGroup, fileGroup);
 
     // ---- 样式面板 ----
     const panel = document.createElement("div");
@@ -211,7 +207,29 @@ export class Toolbar {
     this.setStroke("#4f8cff");
   }
 
-  setTool(tool: ToolType) {
+  /** 按注册表渲染工具按钮（内置 + 自定义），保留当前激活态 */
+  private renderTools() {
+    this.toolGroup.innerHTML = "";
+    this.toolButtons.clear();
+    for (const t of this.registry.list()) {
+      const btn = makeButton(t.icon, t.title, () => this.handlers.onTool(t.id));
+      btn.classList.toggle("active", t.id === this.activeToolId);
+      this.toolGroup.appendChild(btn);
+      this.toolButtons.set(t.id, btn);
+    }
+  }
+
+  /** 注册表变化（AI 添加/修改/删除工具）后重渲染工具区；激活工具被删则回退选择工具 */
+  refresh() {
+    if (!this.registry.getTool(this.activeToolId)) {
+      this.activeToolId = "select";
+      this.handlers.onTool("select");
+    }
+    this.renderTools();
+  }
+
+  setTool(tool: string) {
+    this.activeToolId = tool;
     for (const [t, btn] of this.toolButtons) {
       btn.classList.toggle("active", t === tool);
     }

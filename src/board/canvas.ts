@@ -11,9 +11,10 @@ import "@leafer-in/export";
 // 注册箭头插件（Line 的 endArrow 属性需要）
 import "@leafer-in/arrow";
 import type { IPointerEvent } from "@leafer-ui/interface";
-import type { ElementData, ToolType } from "../types";
+import type { BoardStyle, ElementData } from "../types";
 import { History } from "./history";
 import { TextOverlay } from "./textedit";
+import type { ToolRegistry } from "./registry";
 
 export const BACKGROUND = "#1e1f22";
 export const TEXT_FONT_SIZE = 18;
@@ -166,17 +167,11 @@ function polygonHitsBox(
 
 type AppWithEditor = App & { editor: Editor };
 
-export type BoardStyle = {
-  stroke: string;
-  strokeWidth: number;
-  fillEnabled: boolean;
-  /** 填充颜色（独立于描边色；填充 = 该色 15% 半透明） */
-  fillColor: string;
-};
-
 export type BoardOptions = {
   getStyle: () => BoardStyle;
   onMutated: () => void;
+  /** 统一功能注册表：绘制工具分发/自定义工具生成器均从注册表取 */
+  registry: ToolRegistry;
   /** 右键菜单：传入浏览器视口坐标，由外部弹菜单 */
   onContextMenu?: (clientX: number, clientY: number) => void;
 };
@@ -227,9 +222,11 @@ export class Board {
   readonly app: App;
   readonly editor: Editor;
   private opts: BoardOptions;
-  private tool: ToolType = "select";
+  private tool: string = "select";
   private drawing = false;
   private draft: UI | null = null;
+  /** 拖拽统一管线：最近一次生成器输出的元素数据（用于实时刷新草稿与微小判定） */
+  private draftData: ElementData | null = null;
   private startX = 0;
   private startY = 0;
   private penPoints: number[][] = [];
@@ -311,7 +308,7 @@ export class Board {
 
   // ================= 工具 =================
 
-  setTool(tool: ToolType) {
+  setTool(tool: string) {
     this.tool = tool;
     if (tool !== "select") {
       this.editor.cancel();
@@ -473,72 +470,80 @@ export class Board {
       this.openTextEditor(px, py, null);
       return;
     }
+    const kind = this.opts.registry.getKind(this.tool);
+    // 画笔：自由笔迹（保留专有实现）
+    if (kind === "freehand") {
+      this.drawing = true;
+      this.penPoints = [[px, py]];
+      const style = this.opts.getStyle();
+      this.draft = new Path({
+        path: `M ${px} ${py}`,
+        stroke: style.stroke,
+        strokeWidth: style.strokeWidth,
+        fill: undefined,
+        strokeCap: "round",
+        strokeJoin: "round",
+      });
+      if (this.draft) {
+        this.app.tree.add(this.draft);
+      }
+      return;
+    }
+    // 统一拖拽管线：内置 rect/ellipse/line/arrow 与 AI 生成工具同一条路径
+    if (kind !== "drag") {
+      return;
+    }
     this.drawing = true;
     this.startX = px;
     this.startY = py;
-    const style = this.opts.getStyle();
-    const fill = style.fillEnabled
-      ? hexToRgba(style.fillColor || style.stroke, 0.15)
-      : undefined; // 注意：leafer 2.x 中 "none" 会被渲染为黑色实心，必须用 undefined
-    switch (this.tool) {
-      case "pen":
-        this.penPoints = [[px, py]];
-        this.draft = new Path({
-          path: `M ${px} ${py}`,
-          stroke: style.stroke,
-          strokeWidth: style.strokeWidth,
-          fill: undefined,
-          strokeCap: "round",
-          strokeJoin: "round",
-        });
-        break;
-      case "line":
-        this.draft = new Line({
-          points: [
-            { x: px, y: py },
-            { x: px, y: py },
-          ],
-          stroke: style.stroke,
-          strokeWidth: style.strokeWidth,
-        });
-        break;
-      case "arrow":
-        this.draft = new Line({
-          points: [
-            { x: px, y: py },
-            { x: px, y: py },
-          ],
-          stroke: style.stroke,
-          strokeWidth: style.strokeWidth,
-          endArrow: "triangle",
-        });
-        break;
-      case "rect":
-        this.draft = new Rect({
-          x: px,
-          y: py,
-          width: 0,
-          height: 0,
-          stroke: style.stroke,
-          strokeWidth: style.strokeWidth,
-          fill,
-        });
-        break;
-      case "ellipse":
-        this.draft = new Ellipse({
-          x: px,
-          y: py,
-          width: 0,
-          height: 0,
-          stroke: style.stroke,
-          strokeWidth: style.strokeWidth,
-          fill,
-        });
-        break;
+    this.draftData = this.runGenerator(px, py, px, py);
+    if (!this.draftData) {
+      this.drawing = false;
+      return;
     }
+    this.draft = this.dataToElement(this.draftData);
     if (this.draft) {
       this.app.tree.add(this.draft);
     }
+  }
+
+  /** 调用当前工具的生成器（统一拖拽管线），异常时安全返回 null */
+  private runGenerator(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+  ): ElementData | null {
+    const gen = this.opts.registry.getGenerator(this.tool);
+    if (!gen) {
+      return null;
+    }
+    try {
+      return gen({ x0, y0, x1, y1, style: this.opts.getStyle() });
+    } catch (err) {
+      console.error("[board] 生成器执行失败", err);
+      return null;
+    }
+  }
+
+  /** 把生成器输出的元素数据增量应用到草稿实例（拖拽中实时刷新） */
+  private applyDataToDraft(draft: UI, d: ElementData) {
+    const t = draft as unknown as Record<string, unknown>;
+    if (d.x !== undefined) t.x = d.x;
+    if (d.y !== undefined) t.y = d.y;
+    if (d.width !== undefined) t.width = d.width;
+    if (d.height !== undefined) t.height = d.height;
+    if (d.rotation !== undefined) t.rotation = d.rotation;
+    if (d.stroke !== undefined) t.stroke = d.stroke;
+    if (d.strokeWidth !== undefined) t.strokeWidth = d.strokeWidth;
+    if ("fill" in d) {
+      // leafer 2.x 中 "none" 渲染为黑色实心，必须转 undefined
+      t.fill = d.fill === "none" ? undefined : d.fill;
+    }
+    if (d.points !== undefined && draft instanceof Line) t.points = d.points;
+    if (d.path !== undefined && draft instanceof Path) t.path = d.path;
+    if (d.text !== undefined && draft instanceof Text) t.text = d.text;
+    if (d.fontSize !== undefined && draft instanceof Text) t.fontSize = d.fontSize;
   }
 
   private onMove(e: IPointerEvent) {
@@ -606,32 +611,20 @@ export class Board {
     const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
     const px = p.x;
     const py = p.y;
-    switch (this.tool) {
-      case "pen": {
-        this.penPoints.push([px, py]);
-        const path = buildPenPath(this.penPoints);
-        if (path) {
-          (this.draft as Path).path = path as string;
-        }
-        break;
+    const kind = this.opts.registry.getKind(this.tool);
+    if (kind === "freehand") {
+      this.penPoints.push([px, py]);
+      const path = buildPenPath(this.penPoints);
+      if (path) {
+        (this.draft as Path).path = path as string;
       }
-      case "line":
-      case "arrow": {
-        (this.draft as Line).points = [
-          { x: this.startX, y: this.startY },
-          { x: px, y: py },
-        ];
-        break;
-      }
-      case "rect":
-      case "ellipse": {
-        const x = Math.min(this.startX, px);
-        const y = Math.min(this.startY, py);
-        this.draft.x = x;
-        this.draft.y = y;
-        this.draft.width = Math.abs(px - this.startX);
-        this.draft.height = Math.abs(py - this.startY);
-        break;
+      return;
+    }
+    if (kind === "drag") {
+      const data = this.runGenerator(this.startX, this.startY, px, py);
+      if (data) {
+        this.draftData = data;
+        this.applyDataToDraft(this.draft, data);
       }
     }
   }
@@ -670,36 +663,34 @@ export class Board {
     }
     this.drawing = false;
     if (this.draft) {
-      if (this.isTiny(this.draft)) {
+      if (this.isTinyDraft()) {
         this.draft.remove();
       }
       this.draft = null;
+      this.draftData = null;
       this.commitHistory();
     }
   }
 
-  private isTiny(el: UI): boolean {
-    switch (this.tool) {
-      case "pen":
-        return this.penPoints.length < 2;
-      case "line":
-      case "arrow": {
-        const pts = (el as Line).points as
-          | { x: number; y: number }[]
-          | undefined;
-        const p0 = pts?.[0];
-        const p1 = pts?.[1];
-        if (!p0 || !p1) {
-          return true;
-        }
-        return Math.hypot(p1.x - p0.x, p1.y - p0.y) < 4;
-      }
-      case "rect":
-      case "ellipse":
-        return (el.width ?? 0) < 4 || (el.height ?? 0) < 4;
-      default:
-        return false;
+  /** 草稿是否过于微小（点击而非拖拽）：自由笔迹看点数，拖拽管线看生成数据尺寸 */
+  private isTinyDraft(): boolean {
+    if (this.opts.registry.getKind(this.tool) === "freehand") {
+      return this.penPoints.length < 2;
     }
+    const d = this.draftData;
+    if (!d) {
+      return true;
+    }
+    if (d.type === "line" || d.type === "arrow") {
+      const pts = d.points ?? [];
+      const p0 = pts[0];
+      const p1 = pts[pts.length - 1];
+      if (!p0 || !p1) {
+        return true;
+      }
+      return Math.hypot(p1.x - p0.x, p1.y - p0.y) < 4;
+    }
+    return (d.width ?? 0) < 4 || (d.height ?? 0) < 4;
   }
 
   // ================= 文本编辑 =================
@@ -1218,19 +1209,9 @@ export class Board {
     this.commitHistory();
   }
 
-  // ================= AI 编辑操作 =================
+  // ================= AI 协作 =================
 
-  /** 按 id 查找元素实例（AI 工具使用） */
-  findElement(id: string): UI | null {
-    for (const el of this.app.tree.children as UI[]) {
-      if ((el as unknown as { __aiId?: string }).__aiId === id) {
-        return el;
-      }
-    }
-    return null;
-  }
-
-  /** 新增元素（AI 编辑模式），返回分配后的稳定 id；数据非法返回 null */
+  /** 新增元素（AI 交流模式画流程图等场景），返回分配后的稳定 id；数据非法返回 null */
   addElement(data: ElementData): string | null {
     const el = this.dataToElement({ ...data, id: undefined });
     if (!el) {
@@ -1240,63 +1221,70 @@ export class Board {
     return this.aiIdOf(el);
   }
 
+  /** 当前选中元素的序列化数据（含稳定 id），供 AI 面板 @ 选区使用 */
+  getSelectionData(): ElementData[] {
+    return this.selectedList
+      .map((el) => this.elementToData(el))
+      .filter((d): d is ElementData => d !== null);
+  }
+
+  /** 按稳定 id 查找画布元素（AI 优化用） */
+  private findByAiId(id: string): UI | null {
+    const list = (this.app.tree.children ?? []) as UI[];
+    return (
+      list.find(
+        (el) => (el as unknown as { __aiId?: string }).__aiId === id,
+      ) ?? null
+    );
+  }
+
   /**
-   * 按 id 修改元素属性（AI 编辑模式）。锁定元素拒绝修改。
-   * 支持 x/y/width/height/rotation/stroke/strokeWidth/fill/text/fontSize/points/path。
+   * AI 优化：按稳定 id 更新元素属性（颜色/尺寸/位置/旋转/文字等），返回是否成功。
+   * 锁定元素不可修改；fill 为 "none" 时转 undefined（leafer 中 "none" 渲染为黑色实心）。
+   * 由调用方（AI 面板）负责合并历史快照。
    */
   updateElement(id: string, patch: Partial<ElementData>): boolean {
-    const el = this.findElement(id);
+    const el = this.findByAiId(id);
     if (!el || el.locked) {
       return false;
     }
-    const t = el as unknown as Record<string, unknown>;
-    if (patch.x !== undefined) t.x = patch.x;
-    if (patch.y !== undefined) t.y = patch.y;
-    if (patch.width !== undefined) t.width = patch.width;
-    if (patch.height !== undefined) t.height = patch.height;
-    if (patch.rotation !== undefined) t.rotation = patch.rotation;
-    if (patch.stroke !== undefined) t.stroke = patch.stroke;
-    if (patch.strokeWidth !== undefined) t.strokeWidth = patch.strokeWidth;
-    if (patch.fill !== undefined) {
-      // leafer 2.x 中 "none" 渲染为黑色实心，必须转 undefined
-      t.fill = patch.fill === "none" ? undefined : patch.fill;
+    if (patch.stroke !== undefined) {
+      el.stroke = patch.stroke || undefined;
     }
-    if (patch.locked !== undefined) t.locked = patch.locked;
+    if (patch.strokeWidth !== undefined) {
+      el.strokeWidth = patch.strokeWidth;
+    }
+    if (patch.fill !== undefined) {
+      el.fill = patch.fill === "none" ? undefined : patch.fill;
+    }
+    if (patch.rotation !== undefined) {
+      el.rotation = patch.rotation;
+    }
+    if (patch.x !== undefined) {
+      el.x = patch.x;
+    }
+    if (patch.y !== undefined) {
+      el.y = patch.y;
+    }
+    if (patch.width !== undefined) {
+      el.width = patch.width;
+    }
+    if (patch.height !== undefined) {
+      el.height = patch.height;
+    }
     if (patch.text !== undefined && el instanceof Text) {
-      t.text = patch.text;
+      el.text = patch.text;
     }
     if (patch.fontSize !== undefined && el instanceof Text) {
-      t.fontSize = patch.fontSize;
+      el.fontSize = patch.fontSize;
     }
     if (patch.points !== undefined && el instanceof Line) {
-      t.points = patch.points;
+      el.points = patch.points as { x: number; y: number }[];
     }
     if (patch.path !== undefined && el instanceof Path) {
-      t.path = patch.path;
+      el.path = patch.path;
     }
-    return true;
-  }
-
-  /** 按 id 删除元素（AI 编辑模式）。锁定元素拒绝删除。 */
-  deleteElementById(id: string): boolean {
-    const el = this.findElement(id);
-    if (!el || el.locked) {
-      return false;
-    }
-    el.remove();
-    this.editor.cancel();
-    return true;
-  }
-
-  /** 按 id 列表选中元素（AI 编辑模式高亮反馈），返回是否命中 */
-  selectByIds(ids: string[]): boolean {
-    const els = ids
-      .map((id) => this.findElement(id))
-      .filter((e): e is UI => e !== null);
-    if (!els.length) {
-      return false;
-    }
-    this.editor.target = els.length === 1 ? els[0] : els;
+    this.opts.onMutated();
     return true;
   }
 

@@ -4,8 +4,13 @@
 
 ## 功能
 
-- **绘图工具**：选择、画布移动、框选、套索、画笔、橡皮擦、直线、箭头、矩形、椭圆、文本
-  - 快捷键：`V` 选择 / `H` 画布移动 / `M` 框选 / `Q` 套索 / `P` 画笔 / `E` 橡皮擦 / `L` 直线 / `A` 箭头 / `R` 矩形 / `O` 椭圆 / `T` 文本
+- **绘图工具**：选择、画布移动、框选、套索、画笔、橡皮擦、直线、箭头、矩形、椭圆、文本（工具栏由统一功能注册表驱动，AI 可运行时添加自定义工具）
+  - 快捷键：`V` 选择 / `H` 画布移动 / `M` 框选 / `Q` 套索 / `P` 画笔 / `E` 橡皮擦 / `L` 直线 / `A` 箭头 / `R` 矩形 / `O` 椭圆 / `T` 文本 / `K` AI 助手开关
+- **AI 助手**（🤖 按钮或 `K` 键，OpenAI 兼容接口，支持流式输出）：
+  - **交流模式**：通过 `get_canvas` 感知画布内容（结构化 JSON，含图形形状描述），对话 / 评价 / 给建议；把想法用 `draw_flowchart` 画成流程图写入画布；不擅自改动画布，除非明确要求
+  - **编辑模式**：按统一功能规则运行时添加 / 修改 / 删除绘制工具（AI 生成代码函数，立即生效并持久化 localStorage）
+  - **@ 选区**：选中图形后点面板 @ 按钮，AI 将重点分析这些元素；明确要求时用 `update_elements` 直接优化（改颜色 / 尺寸 / 位置 / 文字等），整轮改动合并为一步撤销，且只改 @ 选区内元素
+  - **设置**：面板齿轮按钮配置接口地址 / API Key / 模型名（localStorage 保存）
 - **选择**：像素级命中（线段/箭头/画笔按实际描边命中）；细线带 5px 命中容差；空心图形透明区域可穿透选中下层元素
   - **框选**：拖出矩形选框，选中与其相交的所有元素
   - **套索**：自由圈选闭合区域，选中区域内的元素
@@ -33,7 +38,7 @@
 | 桌面壳 | Tauri 2（Rust） |
 | 前端构建 | Vite 6 + TypeScript |
 | 画布渲染 | leafer-ui 2.2.9 + @leafer-in/editor / arrow / export / text-editor |
-| AI 助手（开发中） | OpenAI 兼容接口：浏览器直接 fetch，桌面端经 @tauri-apps/plugin-http 转发 |
+| AI 助手 | OpenAI 兼容接口（SSE 流式）：浏览器直接 fetch，桌面端经 @tauri-apps/plugin-http 转发 |
 
 ## 开发调试
 
@@ -68,16 +73,23 @@ npm run tauri build
 
 ```
 src/
-├── ai/               # AI 助手（开发中）：模型对话 / 画布编辑工具调用
+├── ai/               # AI 助手：双模式对话 / 工具调用 / 设置 / @ 选区
+│   ├── panel.ts      # AI 面板（交流/编辑双模式、@ 选区、设置弹窗）
+│   ├── client.ts     # OpenAI 兼容客户端（SSE 流式 + 工具调用循环）
+│   ├── config.ts     # AI 配置（localStorage）
+│   ├── prompts.ts    # 双模式系统提示词
+│   ├── tools.ts      # 画布感知 / 形状识别 / 工具执行器
+│   └── types.ts
 ├── main.ts            # 入口：工具栏/状态栏/快捷键/右键菜单接线
 ├── storage.ts         # 存储层：自动保存/打开/另存/导出 PNG
-├── types.ts           # 元素数据结构与工具类型
+├── types.ts           # 元素数据结构、工具类型与统一功能规则
 ├── ui/
-│   ├── toolbar.ts     # 工具栏（工具/描边填充双通道/缩放/文件按钮）
+│   ├── toolbar.ts     # 工具栏（注册表驱动渲染 + 缩放/文件/AI 按钮）
 │   ├── contextmenu.ts # 右键菜单（复制/粘贴/锁定等操作）
 │   └── style.css
 └── board/
     ├── canvas.ts      # 画布核心：绘制/缩放/选择/橡皮擦/图片/剪贴板/样式应用/序列化
+    ├── registry.ts    # 统一功能注册表：内置 + 自定义工具（AI 增删改，localStorage 持久化）
     ├── beautify.ts    # 整理：画笔路径拉直
     ├── history.ts     # 撤销重做
     └── textedit.ts    # 文本输入浮层
@@ -88,4 +100,4 @@ src/
 - leafer-ui 2.2.9 的 `InteractionBase` 中 move / zoom / wheel 均为空实现，滚轮缩放由 `canvas.ts` 自行实现（直接操作 `tree.zoomLayer`），因此不要依赖 `wheel.zoomMode` 或 `app.zoom()` 配置。
 - 元素使用 `fill: undefined` 表示无填充；`fill: "none"` 在该版本会被渲染为黑色实心。
 - `@leafer-in/editor` 多选时会向 tree 注入 `SimulateElement`（`skipJSON = true` 的模拟层），业务侧遍历元素时需用该标记过滤（序列化 / 全选 / 框选 / 计数）。
-- AI 助手（`src/ai/`）尚未接线：桌面端网络请求依赖 `@tauri-apps/plugin-http`，构建 exe 前需安装该依赖并完成入口接线。
+- AI 助手依赖 `@tauri-apps/plugin-http` 实现桌面端网络请求（浏览器端直接 fetch）；开发阶段在浏览器中调试即可。

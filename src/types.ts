@@ -12,6 +12,68 @@ export type ToolType =
   | "ellipse"
   | "text";
 
+// ================= 统一功能规则 =================
+// 功能区（绘制工具）统一注册：内置工具与 AI 生成工具共用同一结构。
+
+/** 当前绘制样式（描边色/粗细/填充开关） */
+export type BoardStyle = {
+  stroke: string;
+  strokeWidth: number;
+  fillEnabled: boolean;
+  /** 填充颜色（独立于描边色；填充 = 该色 15% 半透明） */
+  fillColor: string;
+};
+
+/**
+ * 绘制工具生成器上下文：拖拽起点 (x0,y0)、当前点 (x1,y1)、当前样式。
+ * 生成器根据上下文输出元素数据，拖拽过程中被反复调用。
+ */
+export type GeneratorContext = {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  style: BoardStyle;
+};
+
+/**
+ * 工具行为类别：
+ * - drag：拖拽生成元素，走统一管线（内置 rect/ellipse/line/arrow 与 AI 工具同）；
+ * - freehand：自由笔迹（pen，保留 canvas 专有实现）；
+ * - interaction：特殊交互（select/hand/marquee/lasso/eraser/text，保留 canvas 专有实现）。
+ */
+export type ToolKind = "drag" | "freehand" | "interaction";
+
+/** 统一功能定义：内置工具与 AI 生成工具共用 */
+export type ToolDef = {
+  id: string;
+  name: string;
+  icon: string;
+  title: string;
+  shortcut?: string;
+  kind: ToolKind;
+  source: "builtin" | "custom";
+};
+
+/** AI 生成工具：行为固定为 drag，generator 为代码函数体源码 */
+export type CustomToolDef = ToolDef & {
+  kind: "drag";
+  source: "custom";
+  /** 函数体源码：(ctx: GeneratorContext) => ElementData */
+  generator: string;
+  description?: string;
+  createdAt: number;
+};
+
+/** 新增/修改自定义工具的入参（AI add_tool / update_tool 用） */
+export type CustomToolInput = {
+  name: string;
+  icon: string;
+  shortcut?: string;
+  generator: string;
+  description?: string;
+};
+
 export type ElementData = {
   type: "rect" | "ellipse" | "line" | "arrow" | "path" | "text" | "image";
   /** 稳定标识（AI 编辑模式按 id 引用元素），序列化时自动分配 */

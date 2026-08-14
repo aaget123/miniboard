@@ -1,23 +1,11 @@
 import { Board } from "./board/canvas";
 import { beautifyScene } from "./board/beautify";
+import { ToolRegistry } from "./board/registry";
 import { Storage } from "./storage";
 import { Toolbar } from "./ui/toolbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
-
-const TOOL_KEYS: Record<string, import("./types").ToolType> = {
-  v: "select",
-  h: "hand",
-  m: "marquee",
-  q: "lasso",
-  p: "pen",
-  e: "eraser",
-  l: "line",
-  a: "arrow",
-  r: "rect",
-  o: "ellipse",
-  t: "text",
-};
+import { AiPanel } from "./ai/panel";
 
 function toast(message: string) {
   let el = document.getElementById("toast") as HTMLDivElement | null;
@@ -49,6 +37,9 @@ async function main() {
 
   const contextMenu = new ContextMenu(document.body);
 
+  // 统一功能注册表：内置 + AI 自定义工具（工具栏渲染、快捷键、绘制分发均以此为准）
+  const registry = new ToolRegistry();
+
   const style = {
     stroke: "#4f8cff",
     strokeWidth: 2,
@@ -58,6 +49,7 @@ async function main() {
 
   const board = new Board(canvasEl, {
     getStyle: () => ({ ...style }),
+    registry,
     onMutated: () => {
       storage.scheduleAutosave();
       toolbar.setUndoRedo(board.canUndo, board.canRedo);
@@ -75,11 +67,14 @@ async function main() {
 
   const storage = new Storage(board);
 
-  const toolbar = new Toolbar(toolbarEl, {
+  let aiPanel!: AiPanel;
+
+  const toolbar = new Toolbar(toolbarEl, registry, {
     onTool: (tool) => {
       board.setTool(tool);
       toolbar.setTool(tool);
     },
+    onToggleAI: () => aiPanel.toggle(),
     onUndo: () => board.undo(),
     onRedo: () => board.redo(),
     onInsertImage: () => {
@@ -181,6 +176,27 @@ async function main() {
     },
   });
 
+  // 注册表变化：重建快捷键映射 + 刷新工具栏
+  const TOOL_KEYS: Record<string, string> = {};
+  const rebuildKeys = () => {
+    for (const k of Object.keys(TOOL_KEYS)) {
+      delete TOOL_KEYS[k];
+    }
+    for (const t of registry.list()) {
+      if (t.shortcut) {
+        TOOL_KEYS[t.shortcut] = t.id;
+      }
+    }
+  };
+  rebuildKeys();
+  registry.setOnChange(() => {
+    rebuildKeys();
+    toolbar.refresh();
+  });
+
+  // AI 助手面板（交流 + 编辑双模式）
+  aiPanel = new AiPanel(board, registry, toolbar);
+
   function updateStatus() {
     const zoom = Math.round((board.app.tree.zoomLayer?.scaleX ?? 1) * 100);
     statusEl.textContent = `${board.elementCount} 个元素 · ${zoom}%`;
@@ -273,10 +289,17 @@ async function main() {
       board.zoomReset();
       return;
     }
+    // AI 面板开关（k 为保留快捷键，优先级最高）
+    if (!mod && !e.altKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      aiPanel.toggle();
+      return;
+    }
     const tool = TOOL_KEYS[e.key.toLowerCase()];
     if (tool && !mod && !e.altKey) {
       board.setTool(tool);
       toolbar.setTool(tool);
+      return;
     }
   });
 
@@ -291,7 +314,9 @@ async function main() {
   }, 400);
 
   const restored = await storage.restoreAutosave();
-  toolbar.setUndoRedo(false, false);
+  // 压入会话基线快照：保证本会话首个操作（含 AI 画的流程图）可直接撤销
+  board.pushSnapshot(board.serialize());
+  toolbar.setUndoRedo(board.canUndo, board.canRedo);
   updateStatus();
   toast(restored ? "已恢复上次的画布" : "欢迎使用 Miniboard");
 }
