@@ -394,7 +394,25 @@ function perfectClosedShape(
   const hasCorners = vertices.length >= 3 && vertices.length <= 5;
 
   // 1) 矩形（允许旋转）
-  if (hasCorners && rectResidual(rpts, w, h) / Math.max(w, h) < RECT_RESIDUAL_RATIO) {
+  // 角点位置校验：简化后的顶点必须贴近主轴坐标系 bbox 四角。
+  // 小尺寸圆/椭圆简化后恰好剩 4 个"伪角点"落在边上（内接正方形，距角约 0.29w），
+  // 内角虽为直角但位置不符，此校验可将其排除，避免误判为矩形。
+  let maxCornerDev = 0;
+  for (const v of vertices) {
+    const dx = v[0] - cx;
+    const dy = v[1] - cy;
+    const rx = dx * cosA + dy * sinA;
+    const ry = -dx * sinA + dy * cosA;
+    maxCornerDev = Math.max(
+      maxCornerDev,
+      Math.abs(Math.abs(rx) - w / 2) + Math.abs(Math.abs(ry) - h / 2),
+    );
+  }
+  if (
+    hasCorners &&
+    maxCornerDev < Math.max(w, h) * 0.15 &&
+    rectResidual(rpts, w, h) / Math.max(w, h) < RECT_RESIDUAL_RATIO
+  ) {
     return {
       el: {
         type: "rect",
@@ -673,4 +691,62 @@ export function beautifyScene(
   const stats: BeautifyStats = [];
   straightenPenPaths(els, stats, ids ? new Set(ids) : undefined);
   return { elements: els, stats };
+}
+
+/**
+ * 手绘笔迹的形状描述（供 AI 感知）：识别为圆/椭圆/矩形/多边形/直线时返回中文描述，
+ * 无法识别返回 null（调用方回退为采样点数描述）。只读判定，不修改元素。
+ * 判定阈值与整理引擎一致，保证 AI 描述与“整理”后结果一致。
+ */
+export function describeFreehandShape(e: ElementData): string | null {
+  const raw = e.penPoints ?? [];
+  if (raw.length < 3) {
+    return null;
+  }
+  const ox = e.x ?? 0;
+  const oy = e.y ?? 0;
+  const cpts = raw.map((p) => [p[0] + ox, p[1] + oy]);
+  const first = cpts[0];
+  const last = cpts[cpts.length - 1];
+  let diag = 0;
+  if (cpts.length >= 2) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of cpts) {
+      minX = Math.min(minX, p[0]);
+      maxX = Math.max(maxX, p[0]);
+      minY = Math.min(minY, p[1]);
+      maxY = Math.max(maxY, p[1]);
+    }
+    diag = Math.hypot(maxX - minX, maxY - minY);
+  }
+  const closeDist = Math.max(CLOSE_DIST, diag * 0.09);
+  const closed =
+    cpts.length > 4 &&
+    Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
+  if (closed && cpts.length >= MIN_PTS) {
+    const fitted = perfectClosedShape(e, cpts);
+    if (fitted) {
+      const t = fitted.el.type;
+      if (t === "ellipse") {
+        return fitted.el.width === fitted.el.height ? "手绘的圆形" : "手绘的椭圆";
+      }
+      if (t === "rect") {
+        return "手绘的矩形";
+      }
+      if (t === "path") {
+        const edges = (fitted.el.path?.match(/L/g) ?? []).length + 1;
+        return `手绘的${polyLabel(edges)}`;
+      }
+    }
+  } else {
+    // 开放笔迹：简化后仅剩两点 → 近似直线
+    const kept = simplify(cpts, TOLERANCE);
+    if (kept.length === 2) {
+      return "近似直线的手绘笔迹";
+    }
+  }
+  return null;
 }

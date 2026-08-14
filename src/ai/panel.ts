@@ -14,10 +14,12 @@ import type {
 } from "./types";
 
 const MAX_TOOL_ROUNDS = 4;
-/** 对话历史 token 预算：超限时从头部压缩，保证最近上下文完整 */
+/** 对话历史 token 预算（含系统提示词）：超限时从头部压缩，保证最近上下文完整 */
 const MAX_HISTORY_TOKENS = 8000;
 /** 单条消息 token 上限：超限截断（主要针对画布 JSON 等大内容） */
 const MAX_MSG_TOKENS = 4000;
+/** 图片片段的固定 token 估算（1280px JPEG 视觉 token 的保守值，因模型而异） */
+const IMAGE_TOKENS = 1200;
 
 /** 工具名 → 面板回执显示名 */
 const TOOL_LABELS: Record<string, string> = {
@@ -41,7 +43,7 @@ function escapeHtml(s: string): string {
 
 /**
  * 粗略 token 估算：中文/全角字符按 1 token，其余按 4 字符/token；
- * 图片片段按固定 200 token 计（视觉模型图片计价因模型而异，取保守值）。
+ * 图片片段按固定 IMAGE_TOKENS 计（视觉模型图片计价因模型而异，取保守值）。
  */
 function estimateTokens(content: string | AiContentPart[] | null): number {
   if (content === null) {
@@ -49,7 +51,7 @@ function estimateTokens(content: string | AiContentPart[] | null): number {
   }
   if (Array.isArray(content)) {
     return content.reduce(
-      (n, part) => n + (part.type === "text" ? estimateTokens(part.text) : 200),
+      (n, part) => n + (part.type === "text" ? estimateTokens(part.text) : IMAGE_TOKENS),
       0,
     );
   }
@@ -63,6 +65,41 @@ function estimateTokens(content: string | AiContentPart[] | null): number {
     }
   }
   return zh + Math.ceil(other / 4);
+}
+
+/**
+ * 超长消息截断：保留开头并尽量保持 JSON 结构完整（数组/对象补闭合括号），
+ * 避免画布数据被拦腰截断成非法 JSON，造成模型理解混乱。
+ */
+function trimLongString(s: string, maxTokens: number): string {
+  const tokens = estimateTokens(s);
+  if (tokens <= maxTokens) {
+    return s;
+  }
+  const keep = Math.floor((s.length * maxTokens) / tokens);
+  const cut = s.slice(0, keep);
+  const isArray = cut.trimStart().startsWith("[") && s.trimEnd().endsWith("]");
+  const isObject = cut.trimStart().startsWith("{") && s.trimEnd().endsWith("}");
+  if (isArray || isObject) {
+    const close = isArray ? "]" : "}";
+    // 从截断点向前回溯最近的完整对象/值闭合点（上限 50 次尝试），补闭合括号
+    const from = Math.max(0, cut.length - 500);
+    let attempts = 0;
+    for (let i = cut.length - 1; i >= from && attempts < 50; i--) {
+      if (cut[i] !== "}") {
+        continue;
+      }
+      attempts++;
+      const cand = cut.slice(0, i + 1) + close;
+      try {
+        JSON.parse(cand);
+        return cand + "\n…（内容过长已截断）";
+      } catch {
+        // 该处不是完整边界，继续向前回溯
+      }
+    }
+  }
+  return cut + "\n…（内容过长已截断）";
 }
 
 function renderInline(text: string): string {
@@ -124,6 +161,8 @@ export class AiPanel {
   private history: ChatMessage[] = [];
   /** 历史总 token 估算（与 history 同步维护，用于超限压缩） */
   private historyTokens = 0;
+  /** 当前系统提示词 token 估算（与 historyTokens 一并计入预算） */
+  private systemTokens = 0;
   /** 压缩提示只展示一次，避免每次发送刷屏 */
   private compressNotified = false;
   private modeTabs = new Map<AiMode, HTMLButtonElement>();
@@ -200,6 +239,7 @@ export class AiPanel {
     }
     this.history = [];
     this.historyTokens = 0;
+    this.systemTokens = 0;
     this.compressNotified = false;
     this.clearAt();
     this.messagesEl.innerHTML = "";
@@ -310,26 +350,84 @@ export class AiPanel {
   private pushHistory(msg: ChatMessage) {
     this.history.push(msg);
     this.historyTokens += estimateTokens(msg.content);
-    // 单条超长截断（画布 JSON 等），保留开头便于模型读取主体
+    // 单条超长截断（画布 JSON 等）：保留开头并尽量保持 JSON 结构完整
     if (typeof msg.content === "string") {
-      const tokens = estimateTokens(msg.content);
-      if (tokens > MAX_MSG_TOKENS) {
-        const keep = Math.floor((msg.content.length * MAX_MSG_TOKENS) / tokens);
-        msg.content = msg.content.slice(0, keep) + "\n…（内容过长已截断）";
-        this.historyTokens -= tokens - estimateTokens(msg.content);
+      const trimmed = trimLongString(msg.content, MAX_MSG_TOKENS);
+      if (trimmed !== msg.content) {
+        this.historyTokens -= estimateTokens(msg.content) - estimateTokens(trimmed);
+        msg.content = trimmed;
       }
     }
-    // 超预算：从头丢弃旧消息（至少保留最近 2 条，保护当前轮上下文）
-    while (this.history.length > 2 && this.historyTokens > MAX_HISTORY_TOKENS) {
-      const dropped = this.history.shift();
-      if (dropped) {
-        this.historyTokens -= estimateTokens(dropped.content);
+    // 超预算：优先从头丢弃完整的历史轮次（user 及其配套的 assistant/tool 消息），
+    // 整轮不拆散，避免破坏 assistant(tool_calls) 与 tool 消息的配对；至少保留最近 1 轮
+    while (this.historyTokens + this.systemTokens > MAX_HISTORY_TOKENS) {
+      if (this.history.filter((m) => m.role === "user").length <= 1) {
+        // 仅剩当前轮：压缩较早的 get_canvas 大结果，无法再压缩才停止
+        if (!this.shrinkCanvasData()) {
+          break;
+        }
+        continue;
+      }
+      if (!this.dropFirstTurn()) {
+        break;
       }
     }
-    if (this.historyTokens > MAX_HISTORY_TOKENS && !this.compressNotified) {
+    if (this.historyTokens + this.systemTokens > MAX_HISTORY_TOKENS && !this.compressNotified) {
       this.compressNotified = true;
       this.appendSystem("对话较长，较早的内容已按长度自动压缩，AI 可能不清楚最早的信息。");
     }
+  }
+
+  /**
+   * 仅剩当前轮仍超预算时：把较早的 get_canvas 工具结果替换为占位说明，释放 token。
+   * 从历史头部开始替换（最旧优先），保留最近一次画布数据供模型继续引用。
+   */
+  private shrinkCanvasData(): boolean {
+    let changed = false;
+    for (let i = 0; i < this.history.length; i++) {
+      const m = this.history[i];
+      if (m.role !== "tool" || typeof m.content !== "string") {
+        continue;
+      }
+      if (!m.content.startsWith("当前画布元素数据")) {
+        continue;
+      }
+      const before = estimateTokens(m.content);
+      m.content = "（画布数据已省略，如需最新内容请重新调用 get_canvas）";
+      this.historyTokens -= before - estimateTokens(m.content);
+      changed = true;
+      if (this.historyTokens + this.systemTokens <= MAX_HISTORY_TOKENS) {
+        break;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * 丢弃最早的一轮对话：从头部到第二条 user 消息之前（含开头的残留工具消息）。
+   * 以"轮"为单位保证 assistant(tool_calls) 与其 tool 消息不拆散。
+   */
+  private dropFirstTurn(): boolean {
+    const firstUser = this.history.findIndex((m) => m.role === "user");
+    if (firstUser < 0) {
+      // 极端残留：全是工具轮次消息（无 user 的非法序列），整体清空
+      this.historyTokens = 0;
+      this.history = [];
+      return true;
+    }
+    // 轮次终点：下一条 user 消息之前；开头的非 user 残留（中断留下）一并丢弃
+    let end = this.history.length;
+    for (let i = firstUser + 1; i < this.history.length; i++) {
+      if (this.history[i].role === "user") {
+        end = i;
+        break;
+      }
+    }
+    const dropped = this.history.splice(0, end);
+    for (const m of dropped) {
+      this.historyTokens -= estimateTokens(m.content);
+    }
+    return dropped.length > 0;
   }
 
   private async send() {
@@ -346,18 +444,19 @@ export class AiPanel {
 
     this.setBusy(true);
     this.inputEl.value = "";
+    // 记录发送前历史长度：失败时回滚本轮写入，避免残留未配对的工具轮次消息
+    const historyLen = this.history.length;
     this.appendUser(text);
-    // @ 选区上下文：注入为一条 user 消息，AI 重点分析这些元素（快照，不随画布变化）
+    // @ 选区上下文与用户文字合并为一条 user 消息（避免连续两条 user 消息语义割裂），
+    // 选区数据为发送时快照，不随画布变化
     const atData = this.pendingAt;
+    let userContent = text;
     if (atData?.length) {
       const ids = atData.map((d) => d.id).filter((v): v is string => !!v);
-      this.pushHistory({
-        role: "user",
-        content: `【@选区】使用者选中了 ${atData.length} 个元素，请重点针对它们评价与优化（可用 get_canvas 传 ids 复查，用 update_elements 修改它们；不要改动其他元素）：\n${describeCanvas(this.board, ids)}`,
-      });
+      userContent = `【@选区】使用者选中了 ${atData.length} 个元素，请重点针对它们评价与优化（可用 get_canvas 传 ids 复查，用 update_elements 修改它们；不要改动其他元素）：\n${describeCanvas(this.board, ids)}\n\n使用者的请求：${text}`;
       this.clearAt();
     }
-    this.pushHistory({ role: "user", content: text });
+    this.pushHistory({ role: "user", content: userContent });
 
     // 多模态：交流模式开启视觉时，随消息附带画布截图（发送时快照；失败静默降级纯文本）
     if (this.mode === "chat" && cfg.multimodal === true) {
@@ -365,10 +464,10 @@ export class AiPanel {
         const shot = await this.board.exportImage();
         if (shot) {
           this.history[this.history.length - 1].content = [
-            { type: "text", text },
+            { type: "text", text: userContent },
             { type: "image_url", image_url: { url: shot } },
           ];
-          this.historyTokens += 200;
+          this.historyTokens += IMAGE_TOKENS;
         }
       } catch {
         // 截图失败：降级为纯文本
@@ -380,6 +479,8 @@ export class AiPanel {
       role: "system",
       content: buildSystemPrompt(mode),
     };
+    // 系统提示词计入 token 预算（压缩时与 historyTokens 一并判断）
+    this.systemTokens = estimateTokens(system.content);
     const openAiTools = toOpenAiTools(toolsForMode(mode));
 
     const bubble = this.appendAi("");
@@ -387,8 +488,19 @@ export class AiPanel {
     let canvasChanged = false;
     // 画布改动合并为一步历史：执行前快照，整轮工具结束后统一提交
     const before = this.board.serialize();
+    // 提交函数在正常结束与失败时共用：失败时已执行的修改同样保留可撤销
+    const commitCanvasChange = () => {
+      if (canvasChanged) {
+        const after = this.board.serialize();
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          this.board.pushSnapshot(before);
+          this.board.pushSnapshot(after);
+        }
+      }
+    };
 
     try {
+      let exhausted = false;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const res = await chatTurn(cfg, [system, ...this.history], openAiTools, {
           onText: (delta) => {
@@ -436,19 +548,42 @@ export class AiPanel {
           });
           this.renderToolReceipt(exec);
         }
-      }
-      // 整轮画布改动合并为一步撤销（同 beautify 语义）
-      if (canvasChanged) {
-        const after = this.board.serialize();
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
-          this.board.pushSnapshot(before);
-          this.board.pushSnapshot(after);
+        // 最后一轮仍请求了工具：标记轮数耗尽，循环结束后让模型收尾
+        if (round === MAX_TOOL_ROUNDS - 1) {
+          exhausted = true;
         }
       }
+      // 轮数耗尽：追加"停止调用"指令，让模型基于已执行的结果总结（不带工具，防止再调用）
+      if (exhausted) {
+        this.pushHistory({
+          role: "user",
+          content:
+            "工具调用轮次已达上限，请基于已执行的结果直接给出总结回答，不要再调用任何工具。",
+        });
+        const res = await chatTurn(cfg, [system, ...this.history], [], {
+          onText: (delta) => {
+            fullText += delta;
+            this.renderBubble(bubble, fullText);
+            this.scrollBottom();
+          },
+        });
+        if (res.text) {
+          this.pushHistory({ role: "assistant", content: res.text });
+        }
+      }
+      commitCanvasChange();
       if (!fullText) {
         this.renderBubble(bubble, "（本轮没有文本回复）");
       }
     } catch (err) {
+      // 回滚本轮写入的历史：中断可能残留未配对的工具轮次消息，避免污染后续对话
+      while (this.history.length > historyLen) {
+        const popped = this.history.pop();
+        if (popped) {
+          this.historyTokens -= estimateTokens(popped.content);
+        }
+      }
+      commitCanvasChange();
       const msg = err instanceof Error ? err.message : String(err);
       this.renderBubble(bubble, fullText ? fullText : "");
       this.appendError(`请求失败：${msg}`);

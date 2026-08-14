@@ -15,12 +15,14 @@ import "@leafer-in/arrow";
 import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { BoardStyle, ElementData } from "../types";
+import type { CoordBox } from "./coords";
 import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
 import { penSizeOf, strokeOutlinePath } from "./stroke";
+import { canvasToLocal, round1 } from "./coords";
 
 export const BACKGROUND = "#1e1f22";
 export const TEXT_FONT_SIZE = 18;
@@ -2038,7 +2040,10 @@ export class Board {
       el.fontSize = patch.fontSize;
     }
     if (patch.points !== undefined && el instanceof Line) {
-      el.points = patch.points as { x: number; y: number }[];
+      // AI 传入画布绝对坐标（describeCanvas 输出基准），换算回元素局部坐标
+      el.points = (patch.points as { x: number; y: number }[]).map((p) =>
+        canvasToLocal(el as unknown as CoordBox, p),
+      );
     }
     if (patch.path !== undefined && el instanceof Path) {
       el.path = patch.path;
@@ -2585,17 +2590,43 @@ export class Board {
   /**
    * 导出画布为限尺寸 JPEG dataURL（AI 多模态感知用）；画布为空返回 null。
    * size 限制输出最长边（px），JPEG + quality 控制体积，避免发给模型时流量/token 过大。
+   * 默认按内容包围盒导出（避免大片空白），失败时降级为整页导出。
    */
   async exportImage(size = 1280): Promise<string | null> {
     if (this.elementCount === 0) {
       return null;
     }
-    const out = await this.app.export("jpg", {
-      size,
-      padding: 12,
-      fill: this.background,
-      quality: 0.85,
-    });
+    try {
+      const out = await this.app.export("jpg", {
+        size,
+        screenshot: this.contentWorldBounds(12),
+        fill: this.background,
+        quality: 0.85,
+      });
+      const url = await this.toDataUrl(out);
+      return url ?? this.exportImageFull(size);
+    } catch {
+      return this.exportImageFull(size);
+    }
+  }
+
+  /** 整页导出（包围盒截图失败时的降级路径） */
+  private async exportImageFull(size: number): Promise<string | null> {
+    try {
+      const out = await this.app.export("jpg", {
+        size,
+        padding: 12,
+        fill: this.background,
+        quality: 0.85,
+      });
+      return this.toDataUrl(out);
+    } catch {
+      return null;
+    }
+  }
+
+  /** leafer 导出结果 → dataURL；失败返回 null */
+  private async toDataUrl(out: unknown): Promise<string | null> {
     if (typeof out === "string") {
       return out;
     }
@@ -2604,7 +2635,7 @@ export class Board {
       return data;
     }
     if (data instanceof Blob) {
-      return await new Promise((resolve, reject) => {
+      return new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result as string);
         reader.onerror = () => reject(reader.error);
@@ -2612,6 +2643,59 @@ export class Board {
       });
     }
     return null;
+  }
+
+  /**
+   * 内容世界坐标包围盒（含 zoomLayer 缩放/平移与元素 rotation 的四角），
+   * 作为 export 的 screenshot 区域（leafer 世界坐标）；画布为空返回 1x1 兜底。
+   */
+  private contentWorldBounds(padding: number) {
+    const els = this.serialize();
+    const layer = this.app.tree.zoomLayer;
+    const sx = layer?.scaleX ?? 1;
+    const sy = layer?.scaleY ?? 1;
+    const ox = layer?.x ?? 0;
+    const oy = layer?.y ?? 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const e of els) {
+      const w = e.width ?? 0;
+      const h = e.height ?? 0;
+      const cx = w / 2;
+      const cy = h / 2;
+      const rad = ((e.rotation ?? 0) * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      for (const [lx, ly] of [
+        [0, 0],
+        [w, 0],
+        [w, h],
+        [0, h],
+      ] as const) {
+        // 元素四角绕中心旋转后叠加 x/y（tree 局部）→ 经 zoomLayer 变换到世界坐标
+        const dx = lx - cx;
+        const dy = ly - cy;
+        const px = e.x + dx * cos - dy * sin + cx;
+        const py = e.y + dx * sin + dy * cos + cy;
+        const wx = px * sx + ox;
+        const wy = py * sy + oy;
+        minX = Math.min(minX, wx);
+        minY = Math.min(minY, wy);
+        maxX = Math.max(maxX, wx);
+        maxY = Math.max(maxY, wy);
+      }
+    }
+    if (!Number.isFinite(minX)) {
+      return { x: 0, y: 0, width: 1, height: 1 };
+    }
+    return {
+      x: round1(minX - padding),
+      y: round1(minY - padding),
+      width: round1(maxX - minX + padding * 2),
+      height: round1(maxY - minY + padding * 2),
+    };
   }
 
   /** 当前画布背景色（主题切换/导出共用） */

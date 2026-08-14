@@ -3,15 +3,34 @@ import { TEXT_FONT_SIZE } from "../board/canvas";
 import type { ToolRegistry } from "../board/registry";
 import type { Toolbar } from "../ui/toolbar";
 import type { CustomToolInput, ElementData } from "../types";
+import { describeFreehandShape } from "../board/beautify";
+import { localToCanvas, round1 } from "../board/coords";
 import type { AiMode, AiTool, AiToolExecution } from "./types";
 
 // ================= 画布感知（非多模态：把画布转成 JSON 给模型看） =================
 
 const MAX_DESCRIBE = 300;
 
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
+/** 元素类型的中文标签（画布摘要用） */
+const TYPE_LABELS: Record<string, string> = {
+  rect: "矩形",
+  ellipse: "椭圆",
+  line: "直线",
+  arrow: "箭头",
+  path: "路径",
+  freehand: "手绘笔迹",
+  text: "文字",
+  image: "图片",
+};
+
+/** rough 手绘元素的原几何类型中文映射 */
+const ROUGH_ORIGINALS: Record<string, string> = {
+  rect: "矩形",
+  ellipse: "椭圆",
+  line: "直线",
+  arrow: "箭头",
+  path: "路径",
+};
 
 /**
  * 解析 SVG path 的命令结构，输出形状描述（代替原始路径字符串，token 开销小）。
@@ -73,17 +92,20 @@ function describePath(path: string, w: number, h: number): string {
 
 /**
  * 把画布序列化为紧凑 JSON 描述，供 LLM 理解内容：
- * - path 只保留路径段数（原始 SVG 路径 token 太大）
+ * - path 只保留路径段数（原始 SVG 路径 token 太大），手绘笔迹给出识别形状
  * - image 不包含 dataURL 本体，只保留尺寸
- * - 元素过多时截断（最多 MAX_DESCRIBE 个）
+ * - line/arrow 的 points 输出画布绝对坐标（写回时系统自动换算回局部坐标）
+ * - 元素过多时截断（最多 MAX_DESCRIBE 个）；显式传 ids（@选区）时不截断
+ * - 返回内容前附带整体摘要（元素统计、内容范围、背景色），帮助模型理解布局
  */
 export function describeCanvas(board: Board, ids?: string[]): string {
-  let all = board.serialize();
-  if (ids?.length) {
-    const set = new Set(ids);
-    all = all.filter((e) => e.id && set.has(e.id));
-  }
-  const els = all.slice(0, MAX_DESCRIBE);
+  const full = board.serialize();
+  const all = ids?.length
+    ? full.filter((e) => e.id && ids.includes(e.id))
+    : full;
+  const limited = ids?.length ? all : all.slice(0, MAX_DESCRIBE);
+  // 按 (y, x) 排序，让模型按空间顺序读取元素而非 z 序
+  const els = [...limited].sort((a, b) => a.y - b.y || a.x - b.x);
   const compact = els.map((el) => {
     const d: Record<string, unknown> = {
       id: el.id,
@@ -102,27 +124,65 @@ export function describeCanvas(board: Board, ids?: string[]): string {
     if (el.type === "path" && el.path) {
       // rough 手绘风格元素：直接用原几何类型描述（C 命令密集，路径段数无意义）
       d.path = el.rough?.original
-        ? `手绘风格的${el.rough.original}（rough seed=${el.rough.seed}）`
+        ? `手绘风格的${ROUGH_ORIGINALS[el.rough.original] ?? el.rough.original}（rough seed=${el.rough.seed}）`
         : describePath(el.path, el.width ?? 0, el.height ?? 0);
     }
     if (el.type === "freehand") {
-      d.path = `手绘笔迹（${(el.penPoints ?? []).length} 个采样点）`;
+      const shape = describeFreehandShape(el);
+      d.path = shape
+        ? `${shape}（${(el.penPoints ?? []).length} 个采样点）`
+        : `手绘笔迹（${(el.penPoints ?? []).length} 个采样点）`;
     }
     if ((el.type === "line" || el.type === "arrow") && el.points) {
-      d.points = el.points.slice(0, 2).map((p) => ({ x: round1(p.x), y: round1(p.y) }));
+      // 输出画布绝对坐标（含 rotation 换算），模型写回时按同一基准自动换算
+      d.points = el.points.map((p) => {
+        const abs = localToCanvas(el, p);
+        return { x: round1(abs.x), y: round1(abs.y) };
+      });
     }
     if (el.type === "image") {
       d.image = `图片 ${round1(el.width ?? 0)}x${round1(el.height ?? 0)}`;
     }
+    if (el.bindStart || el.bindEnd) {
+      d.boundTo = [el.bindStart, el.bindEnd].filter(Boolean).join("、");
+    }
     if (el.locked) d.locked = true;
     return d;
   });
-  if (els.length === 0) {
-    return "（画布是空的）";
+  const over = ids?.length ? 0 : full.length - MAX_DESCRIBE;
+  // 摘要：全画布统计 + 返回集合的内容范围 + 背景色
+  const counts = new Map<string, number>();
+  for (const e of full) {
+    counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
   }
-  const over = all.length - MAX_DESCRIBE;
+  const typeDesc = [...counts.entries()]
+    .map(([t, n]) => `${TYPE_LABELS[t] ?? t} ${n}`)
+    .join("、");
+  let summary = `画布共 ${full.length} 个元素：${typeDesc}。`;
+  if (ids?.length) {
+    summary += `（本次返回其中 ${all.length} 个）`;
+  }
+  if (els.length) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const e of els) {
+      minX = Math.min(minX, e.x);
+      maxX = Math.max(maxX, e.x + (e.width ?? 0));
+      minY = Math.min(minY, e.y);
+      maxY = Math.max(maxY, e.y + (e.height ?? 0));
+    }
+    summary += ` 内容范围 x ${Math.round(minX)}~${Math.round(maxX)}，y ${Math.round(minY)}~${Math.round(maxY)}。`;
+  }
+  summary += ` 背景色 ${board.backgroundColor}`;
+  if (els.length === 0) {
+    return ids?.length
+      ? `${summary}（未找到这些 id 的元素）`
+      : `${summary}（画布是空的）`;
+  }
   return (
-    JSON.stringify(compact) + (over > 0 ? `\n（另有 ${over} 个元素已省略）` : "")
+    summary + "\n" + JSON.stringify(compact) + (over > 0 ? `\n（另有 ${over} 个元素已省略）` : "")
   );
 }
 
@@ -133,7 +193,7 @@ function getCanvasTool(): AiTool {
   return {
     name: "get_canvas",
     description:
-      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区）",
+      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区）。返回内容附带整体摘要：元素数量与类型统计、内容范围、背景色；line/arrow 的 points 为画布绝对坐标",
     parameters: {
       type: "object",
       properties: {
@@ -193,7 +253,7 @@ function chatTools(): AiTool[] {
     {
       name: "update_elements",
       description:
-        "优化/修改画布元素：按 id 更新元素属性（stroke 描边色、fill 填充色、strokeWidth 粗细、x/y/width/height 位置尺寸、rotation 旋转、text 文字内容、fontSize 字号，line/arrow 可改 points 端点，path 可改 path）。只应修改用户 @ 选中或明确指定的元素；整轮改动会合并为一步撤销",
+        "优化/修改画布元素：按 id 更新元素属性（stroke 描边色、fill 填充色、strokeWidth 粗细、x/y/width/height 位置尺寸、rotation 旋转、text 文字内容、fontSize 字号，line/arrow 可改 points 端点，path 可改 path）。points 请传画布绝对坐标（与 get_canvas/@选区数据一致，系统自动换算回元素坐标）；path 使用相对元素左上角 (x,y) 的局部坐标，否则会错位。只应修改用户 @ 选中或明确指定的元素；整轮改动会合并为一步撤销",
       parameters: {
         type: "object",
         properties: {
