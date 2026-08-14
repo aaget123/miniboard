@@ -44,6 +44,12 @@ export type GeneratorContext = {
  */
 export type ToolKind = "drag" | "freehand" | "interaction";
 
+/**
+ * 工具栏分组：shape = 收进“形状”下拉按钮（矩形/椭圆等基础形状），
+ * select = 收进“选择”下拉按钮（框选/套索等选中类工具）。
+ */
+export type ToolGroup = "shape" | "select";
+
 /** 统一功能定义：内置工具与 AI 生成工具共用 */
 export type ToolDef = {
   id: string;
@@ -53,6 +59,8 @@ export type ToolDef = {
   shortcut?: string;
   kind: ToolKind;
   source: "builtin" | "custom";
+  /** 工具栏分组：与同类型的其他工具收纳在同一下拉按钮中 */
+  group?: ToolGroup;
 };
 
 /** AI 生成工具：行为固定为 drag，generator 为代码函数体源码 */
@@ -72,6 +80,8 @@ export type CustomToolInput = {
   shortcut?: string;
   generator: string;
   description?: string;
+  /** 与已有同类型工具归入同一分组（如形状类工具归入 shape 形状下拉） */
+  group?: ToolGroup;
 };
 
 export type ElementData = {

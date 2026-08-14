@@ -1,6 +1,6 @@
 import { App, Rect, Ellipse, Line, Path, Text, Image, PointerEvent } from "leafer-ui";
 import type { UI } from "leafer-ui";
-import { Editor } from "@leafer-in/editor";
+import { Editor, EditorEvent } from "@leafer-in/editor";
 import {
   EditorMoveEvent,
   EditorScaleEvent,
@@ -15,6 +15,8 @@ import "@leafer-in/arrow";
 import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { BoardStyle, ElementData } from "../types";
+import { beautifyScene } from "./beautify";
+import type { BeautifyStats } from "./beautify";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
@@ -178,6 +180,8 @@ export type BoardOptions = {
   registry: ToolRegistry;
   /** 右键菜单：传入浏览器视口坐标，由外部弹菜单 */
   onContextMenu?: (clientX: number, clientY: number) => void;
+  /** 选中变化（含取消选择）：回调当前选中元素的 id 列表 */
+  onSelectionChange?: (ids: string[]) => void;
 };
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -290,6 +294,10 @@ export class Board {
     this.editor.on(EditorMoveEvent.MOVE, () => this.scheduleHistory());
     this.editor.on(EditorScaleEvent.SCALE, () => this.scheduleHistory());
     this.editor.on(EditorRotateEvent.ROTATE, () => this.scheduleHistory());
+    // 选中变化（选中/多选/取消）：左侧浮动工具栏显隐依赖此事件
+    this.editor.on(EditorEvent.AFTER_SELECT, () => {
+      this.opts.onSelectionChange?.(this.selectedList.map((el) => this.aiIdOf(el)).filter((id): id is string => !!id));
+    });
     // 文本内联编辑关闭：空文本即删；内容变化才入历史（对齐 fabric object:modified 时机）
     this.editor.on(InnerEditorEvent.CLOSE, (e) => this.onInnerEditorClose(e));
   }
@@ -875,7 +883,8 @@ export class Board {
    * 规则：
    * - 锁定元素与图片（内部填充为图像数据）跳过
    * - Text：描边与填充通道均作用于 fill（文字颜色），填充开关不影响
-   * - Line/Path：无填充概念，填充通道与填充开关不影响
+   * - Line：无填充概念，填充通道与填充开关不影响
+   * - Path（含 AI 生成的三角形/五角星等闭合形状）：可填充，填充开关/填充色生效
    * - 填充色独立于描边色：填充通道点击自动开启填充
    */
   applyStyleToSelection(partial: Partial<BoardStyle>): boolean {
@@ -900,8 +909,8 @@ export class Board {
       if (partial.fillColor !== undefined) {
         if (el instanceof Text) {
           el.fill = partial.fillColor;
-        } else if (!(el instanceof Line) && !(el instanceof Path)) {
-          // 设置填充色并自动开启填充（与描边色互相独立）
+        } else if (!(el instanceof Line)) {
+          // 设置填充色并自动开启填充（与描边色互相独立；Path 等闭合形状可填充）
           el.fill = hexToRgba(partial.fillColor, 0.15);
         }
       }
@@ -909,8 +918,8 @@ export class Board {
         el.strokeWidth = partial.strokeWidth;
       }
       if (partial.fillEnabled !== undefined) {
-        if (el instanceof Text || el instanceof Line || el instanceof Path) {
-          continue; // 文字/线条无填充概念
+        if (el instanceof Text || el instanceof Line) {
+          continue; // 文字/线条无填充概念；Path 等形状可填充
         }
         el.fill = partial.fillEnabled
           ? hexToRgba(String(style.fillColor || el.stroke || style.stroke), 0.15)
@@ -970,6 +979,44 @@ export class Board {
       this.opts.onMutated();
     }
     return changed > 0;
+  }
+
+  /**
+   * 局部整理：只整理选中元素（手绘笔迹 → 标准图形/拉直），未选中的原样保留。
+   * 元素 id 稳定（freehand → rect/ellipse/line/path 后保持），整理后恢复选中；
+   * z-order 不变（loadElements 按数组顺序重建）；整轮改动合并为一步撤销。
+   * 返回整理统计（空数组 = 没有需要整理的笔迹）。
+   */
+  beautifySelection(): { changed: number; stats: BeautifyStats } {
+    const list = this.selectedList.filter(
+      (el) => !el.locked && !this.isEditorInternal(el),
+    );
+    if (!list.length) {
+      return { changed: 0, stats: [] };
+    }
+    // serialize 会为所有元素分配稳定 id，先序列化再取选中 id
+    const before = this.serialize();
+    const ids = list
+      .map((el) => this.aiIdOf(el))
+      .filter((id): id is string => !!id);
+    const { elements, stats } = beautifyScene(before, ids);
+    if (!stats.length) {
+      return { changed: 0, stats: [] };
+    }
+    this.loadElements(elements);
+    // 整理后按 id 恢复选中（类型可能已变，id 保持稳定），方便连续整理/调整
+    const restored = (this.app.tree.children as UI[]).filter((el) => {
+      const id = (el as unknown as { __aiId?: string }).__aiId;
+      return !!id && ids.includes(id);
+    });
+    if (restored.length === 1) {
+      this.editor.target = restored[0];
+    } else if (restored.length > 1) {
+      this.editor.select(restored);
+    }
+    this.pushSnapshot(before);
+    this.pushSnapshot(elements);
+    return { changed: stats.length, stats };
   }
 
   // ================= 右键菜单 =================

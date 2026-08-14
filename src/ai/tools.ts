@@ -244,6 +244,11 @@ function editTools(): AiTool[] {
             type: "string",
             description: "可选单字母快捷键（不能与现有工具冲突）",
           },
+          group: {
+            type: "string",
+            enum: ["shape"],
+            description: "可选：工具分组。与已有同类型工具归入同一分组：形状类工具（拖拽生成闭合形状，如三角形/五角星/多边形/圆角矩形等）必须传 \"shape\" 归入“形状▾”下拉；其他类型省略",
+          },
           generator: {
             type: "string",
             description: "生成器函数体源码：(ctx) => ElementData，ctx={x0,y0,x1,y1,style}",
@@ -256,7 +261,7 @@ function editTools(): AiTool[] {
     },
     {
       name: "update_tool",
-      description: "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明）；内置工具只读不可修改",
+      description: "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明/分组）；内置工具只读不可修改",
       parameters: {
         type: "object",
         properties: {
@@ -267,6 +272,7 @@ function editTools(): AiTool[] {
               name: { type: "string" },
               icon: { type: "string" },
               shortcut: { type: "string" },
+              group: { type: "string", enum: ["shape"] },
               generator: { type: "string" },
               description: { type: "string" },
             },
@@ -572,6 +578,7 @@ export function executeTool(
         shortcut: t.shortcut ?? null,
         kind: t.kind,
         source: t.source,
+        group: t.group ?? null,
       }));
       return {
         name: tool.name,
@@ -596,7 +603,7 @@ export function executeTool(
         return {
           name: tool.name,
           args,
-          result: `已添加工具「${toolDef.name}」，id=${toolDef.id}，图标「${toolDef.icon}」${toolDef.shortcut ? `，快捷键 ${toolDef.shortcut}` : ""}，已出现在工具栏绘制区并可立即拖拽使用`,
+          result: `已添加工具「${toolDef.name}」，id=${toolDef.id}，图标「${toolDef.icon}」${toolDef.shortcut ? `，快捷键 ${toolDef.shortcut}` : ""}${toolDef.group ? `，已归入「${toolDef.group === "shape" ? "形状" : toolDef.group}▾」下拉` : ""}，已出现在工具栏绘制区并可立即拖拽使用`,
           changed: true,
         };
       } catch (err) {

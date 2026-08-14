@@ -498,14 +498,19 @@ function mergeStats(stats: BeautifyStats, label: string) {
   }
 }
 
-/** 画笔规整：形状识别完善 + 弯弯扭扭笔迹拉直 */
+/** 画笔规整：形状识别完善 + 弯弯扭扭笔迹拉直；ids 指定时只整理命中的元素 */
 function straightenPenPaths(
   els: ElementData[],
   stats: BeautifyStats,
+  ids?: Set<string>,
 ): ElementData[] {
   for (let i = 0; i < els.length; i++) {
     const e = els[i];
     if (e.locked) {
+      continue;
+    }
+    // 局部整理：只处理选中元素，其余原样保留
+    if (ids && (!e.id || !ids.has(e.id))) {
       continue;
     }
     // freehand 元素（新笔迹）：采样点即中心线，直接识别/拉直
@@ -649,7 +654,14 @@ function straightenPenPaths(
   return els;
 }
 
-export function beautifyScene(elements: ElementData[]): {
+/**
+ * 整理画布：全部整理，或传入 ids 只整理指定元素（局部整理，其余元素原样保留）。
+ * 纯数据变换：不改变元素顺序（z-order）与未命中元素的任何字段。
+ */
+export function beautifyScene(
+  elements: ElementData[],
+  ids?: string[],
+): {
   elements: ElementData[];
   stats: BeautifyStats;
 } {
@@ -659,6 +671,6 @@ export function beautifyScene(elements: ElementData[]): {
     rotation: e.rotation,
   }));
   const stats: BeautifyStats = [];
-  straightenPenPaths(els, stats);
+  straightenPenPaths(els, stats, ids ? new Set(ids) : undefined);
   return { elements: els, stats };
 }

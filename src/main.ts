@@ -1,11 +1,15 @@
 import { Board } from "./board/canvas";
-import { beautifyScene } from "./board/beautify";
 import { ToolRegistry } from "./board/registry";
 import { Storage } from "./storage";
 import { Toolbar } from "./ui/toolbar";
+import { SelectionBar } from "./ui/selectionbar";
+import { ToolsFloat } from "./ui/toolsfloat";
+import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
 import { AiPanel } from "./ai/panel";
+import { PointerEvent } from "leafer-ui";
+import type { IPointerEvent } from "@leafer-ui/interface";
 
 function toast(message: string) {
   let el = document.getElementById("toast") as HTMLDivElement | null;
@@ -54,8 +58,11 @@ async function main() {
     registry,
     onMutated: () => {
       storage.scheduleAutosave();
-      toolbar.setUndoRedo(board.canUndo, board.canRedo);
+      statusBar.setUndoRedo(board.canUndo, board.canRedo);
       updateStatus();
+    },
+    onSelectionChange: (ids) => {
+      selectionBar.show(ids.length > 0);
     },
     onContextMenu: (x, y) => {
       const list = board.editor.list;
@@ -71,42 +78,31 @@ async function main() {
 
   let aiPanel!: AiPanel;
 
+  // 填充开关统一处理：顶部与左侧栏共用（同步默认样式、按钮态与选中元素）
+  const applyFillChange = (enabled: boolean) => {
+    style.fillEnabled = enabled;
+    toolbar.setFill(enabled);
+    // 有选中元素时同步开/关填充
+    board.applyStyleToSelection({ fillEnabled: enabled });
+  };
+
+  // ---- 顶部悬浮工具栏：工具组（含形状下拉）+ 填充开关 ----
   const toolbar = new Toolbar(toolbarEl, registry, {
     onTool: (tool) => {
       board.setTool(tool);
       toolbar.setTool(tool);
     },
-    onToggleAI: () => aiPanel.toggle(),
-    onUndo: () => board.undo(),
-    onRedo: () => board.redo(),
-    onInsertImage: () => {
-      const input = document.createElement("input");
-      input.type = "file";
-      input.accept = "image/*";
-      input.onchange = () => {
-        const file = input.files?.[0];
-        if (!file) {
-          return;
-        }
-        board
-          .insertImage(file)
-          .then((ok) => {
-            toast(ok ? "🖻 已插入图片" : "图片加载失败，请换一张试试");
-          })
-          .catch(() => toast("图片加载失败，请换一张试试"));
-      };
-      input.click();
-    },
+    onFillChange: applyFillChange,
+  });
+
+  // ---- 左侧悬浮栏（选中时出现）：整理/手绘/样式 ----
+  const selectionBar = new SelectionBar(document.body, {
     onBeautify: () => {
-      const before = board.serialize();
-      const { elements, stats } = beautifyScene(before);
-      if (!stats.length) {
-        toast("✨ 没有需要整理的画笔笔迹");
+      const { changed, stats } = board.beautifySelection();
+      if (!changed) {
+        toast("✨ 没有需要整理的画笔笔迹（先选中手绘笔迹）");
         return;
       }
-      board.loadElements(elements);
-      board.pushSnapshot(before);
-      board.pushSnapshot(elements);
       toast(
         `✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`,
       );
@@ -119,9 +115,27 @@ async function main() {
           : "✎ 请先选中图形（矩形/椭圆/直线/箭头等）",
       );
     },
-    onZoomIn: () => board.zoomIn(),
-    onZoomOut: () => board.zoomOut(),
-    onZoomReset: () => board.zoomReset(),
+    onStrokeChange: (color) => {
+      style.stroke = color;
+      selectionBar.setStroke(color);
+      // 有选中元素时同步应用新描边色（不再联动填充）
+      board.applyStyleToSelection({ stroke: color });
+    },
+    onFillColorChange: (color) => {
+      style.fillColor = color;
+      selectionBar.setFillColor(color);
+      // 有选中元素时应用独立填充色（自动开启填充）
+      board.applyStyleToSelection({ fillColor: color });
+    },
+    onWidthChange: (width) => {
+      style.strokeWidth = width;
+      // 有选中元素时同步应用新粗细
+      board.applyStyleToSelection({ strokeWidth: width });
+    },
+  });
+
+  // ---- 右侧圆形悬浮栏（常驻可拖拽）：文件/AI/清空 ----
+  const toolsFloat = new ToolsFloat(document.body, {
     onOpen: () => {
       storage
         .openFromFile()
@@ -142,15 +156,36 @@ async function main() {
         })
         .catch((err) => toast(`保存失败：${err}`));
     },
+    onInsertImage: () => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.onchange = () => {
+        const file = input.files?.[0];
+        if (!file) {
+          return;
+        }
+        board
+          .insertImage(file)
+          .then((ok) => {
+            toast(ok ? "🖻 已插入图片" : "图片加载失败，请换一张试试");
+          })
+          .catch(() => toast("图片加载失败，请换一张试试"));
+      };
+      input.click();
+    },
     onExport: () => {
       storage
         .exportPNG()
         .then((ok) => {
           if (ok) {
-            toast("🖼 已导出 PNG");
+            toast("📷 已导出 PNG");
           }
         })
         .catch((err) => toast(`导出失败：${err}`));
+    },
+    onToggleAI: () => {
+      aiPanel.toggle();
     },
     onClear: () => {
       if (board.elementCount === 0) {
@@ -162,28 +197,15 @@ async function main() {
         toast("已清空画布");
       }
     },
-    onStrokeChange: (color) => {
-      style.stroke = color;
-      toolbar.setStroke(color);
-      // 有选中元素时同步应用新描边色（不再联动填充）
-      board.applyStyleToSelection({ stroke: color });
-    },
-    onFillColorChange: (color) => {
-      style.fillColor = color;
-      toolbar.setFillColor(color);
-      // 有选中元素时应用独立填充色（自动开启填充）
-      board.applyStyleToSelection({ fillColor: color });
-    },
-    onWidthChange: (width) => {
-      style.strokeWidth = width;
-      // 有选中元素时同步应用新粗细
-      board.applyStyleToSelection({ strokeWidth: width });
-    },
-    onFillChange: (enabled) => {
-      style.fillEnabled = enabled;
-      // 有选中元素时同步开/关填充
-      board.applyStyleToSelection({ fillEnabled: enabled });
-    },
+  });
+
+  // ---- 右下角状态栏：信息 + 撤销/重做/缩放 ----
+  const statusBar = new StatusBar(statusEl, {
+    onUndo: () => board.undo(),
+    onRedo: () => board.redo(),
+    onZoomIn: () => board.zoomIn(),
+    onZoomOut: () => board.zoomOut(),
+    onZoomReset: () => board.zoomReset(),
   });
 
   // 注册表变化：重建快捷键映射 + 刷新工具栏
@@ -209,8 +231,15 @@ async function main() {
 
   function updateStatus() {
     const zoom = Math.round((board.app.tree.zoomLayer?.scaleX ?? 1) * 100);
-    statusEl.textContent = `${board.elementCount} 个元素 · ${zoom}%`;
+    statusBar.setZoom(zoom);
+    statusBar.setInfo(board.elementCount);
   }
+
+  // 状态栏坐标：光标画布坐标实时跟随（tree 局部坐标，含缩放/平移）
+  board.app.on(PointerEvent.MOVE, (e: IPointerEvent) => {
+    const p = board.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
+    statusBar.setInfo(board.elementCount, { x: p.x, y: p.y });
+  });
 
   const MENU_ACTIONS: Record<ContextMenuAction, () => void> = {
     copy: () => board.copy(),
@@ -323,11 +352,21 @@ async function main() {
     }
   }, 400);
 
+  // AI 面板开合同步：圆形栏按钮激活态 + 状态栏避开右侧面板（面板内部关闭按钮也生效）
+  const aiEl = document.getElementById("ai-panel") as HTMLElement;
+  new MutationObserver(() => {
+    const open = !aiEl.hidden;
+    toolsFloat.setAIActive(open);
+    statusEl.classList.toggle("ai-open", open);
+  }).observe(aiEl, { attributes: true, attributeFilter: ["hidden"] });
+
   const restored = await storage.restoreAutosave();
   // 压入会话基线快照：保证本会话首个操作（含 AI 画的流程图）可直接撤销
   board.pushSnapshot(board.serialize());
-  toolbar.setUndoRedo(board.canUndo, board.canRedo);
+  statusBar.setUndoRedo(board.canUndo, board.canRedo);
   updateStatus();
+  // 顶部填充开关状态与默认样式对齐
+  toolbar.setFill(style.fillEnabled);
   toast(restored ? "已恢复上次的画布" : "欢迎使用 Miniboard");
 }
 

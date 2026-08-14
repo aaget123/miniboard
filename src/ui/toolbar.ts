@@ -1,4 +1,5 @@
 import type { ToolRegistry } from "../board/registry";
+import type { ToolDef, ToolGroup } from "../types";
 
 export const SWATCHES = [
   "#e03131",
@@ -19,29 +20,9 @@ export const SWATCHES = [
   "#000000",
 ];
 
-
-
 export type ToolbarHandlers = {
   onTool: (tool: string) => void;
-  onUndo: () => void;
-  onRedo: () => void;
-  onBeautify: () => void;
-  /** 选中图形应用手绘风格（rough.js） */
-  onSketchify: () => void;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  onZoomReset: () => void;
-  onOpen: () => void;
-  onSave: () => void;
-  onExport: () => void;
-  onClear: () => void;
-  onInsertImage: () => void;
-  /** 打开/关闭 AI 助手面板 */
-  onToggleAI: () => void;
-  onStrokeChange: (color: string) => void;
-  /** 填充通道：色板点击时应用独立填充颜色 */
-  onFillColorChange: (color: string) => void;
-  onWidthChange: (width: number) => void;
+  /** 填充开关（常驻顶部：未选中时设置新绘制图形的默认填充） */
   onFillChange: (enabled: boolean) => void;
 };
 
@@ -59,24 +40,38 @@ function makeButton(
   return btn;
 }
 
+/** 分组元数据：下拉按钮默认图标与标题 */
+const GROUP_META: Record<ToolGroup, { label: string; defaultIcon: string }> = {
+  shape: { label: "形状", defaultIcon: "▭" },
+  select: { label: "选择", defaultIcon: "⛶" },
+};
+
+/** 一个分组下拉的 UI 状态 */
+type GroupUI = {
+  group: ToolGroup;
+  btn: HTMLButtonElement;
+  iconEl: HTMLElement;
+  menu: HTMLDivElement;
+  items: Map<string, HTMLButtonElement>;
+  tools: ToolDef[];
+  inserted: boolean;
+};
+
+/**
+ * 顶部悬浮工具栏：只保留核心绘制工具（同类型工具收进分组下拉）+ 填充开关。
+ * - “形状▾”收纳矩形/椭圆等基础形状与 AI 生成的形状类工具；
+ * - “选择▾”收纳框选/套索等选中类工具；
+ * - 撤销/重做/缩放 → 右下角状态栏；整理/手绘/颜色/粗细 → 选中时左侧悬浮栏；
+ * - 文件/AI/清空 → 右侧圆形悬浮栏。
+ */
 export class Toolbar {
   private toolButtons = new Map<string, HTMLButtonElement>();
   private toolGroup: HTMLDivElement;
   /** 当前激活工具（refresh 重渲染时保留） */
   private activeToolId = "select";
   private handlers: ToolbarHandlers;
-  private undoBtn!: HTMLButtonElement;
-  private redoBtn!: HTMLButtonElement;
-  private swatches = new Map<string, HTMLDivElement>();
-  private colorInput!: HTMLInputElement;
-  private widthInput!: HTMLInputElement;
   private fillBtn!: HTMLButtonElement;
-  // 描边/填充双通道：色板点击作用于当前激活通道
-  private activeChannel: "stroke" | "fill" = "stroke";
-  private strokeChannelBtn!: HTMLButtonElement;
-  private fillChannelBtn!: HTMLButtonElement;
-  private strokeChannelColor = "#4f8cff";
-  private fillChannelColor = "#4f8cff";
+  private groups = new Map<ToolGroup, GroupUI>();
 
   constructor(
     container: HTMLElement,
@@ -86,145 +81,118 @@ export class Toolbar {
     this.handlers = handlers;
     this.toolGroup = document.createElement("div");
     this.toolGroup.className = "tool-group";
+    for (const g of ["shape", "select"] as const) {
+      this.groups.set(g, this.buildGroupUI(g));
+    }
     this.renderTools();
 
-    const editGroup = document.createElement("div");
-    editGroup.className = "tool-group";
-    this.undoBtn = makeButton("↩", "撤销 (Ctrl+Z)", () => handlers.onUndo());
-    this.redoBtn = makeButton("↪", "重做 (Ctrl+Y)", () => handlers.onRedo());
-    editGroup.append(this.undoBtn, this.redoBtn);
-
-    const beautifyBtn = makeButton(
-      "✨ 整理",
-      "智能整理：识别手绘形状并完善为标准图形（圆/椭圆/矩形/多边形/直线）",
-      () => handlers.onBeautify(),
-      "tool-btn beautify",
-    );
-
-    const sketchBtn = makeButton(
-      "✎ 手绘",
-      "手绘风格：选中图形转手绘外观（rough.js，可复现）",
-      () => handlers.onSketchify(),
-      "tool-btn sketch",
-    );
-
-    const zoomGroup = document.createElement("div");
-    zoomGroup.className = "tool-group";
-    zoomGroup.append(
-      makeButton("−", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
-      makeButton("100%", "重置为 100% (Ctrl+0)", () => handlers.onZoomReset()),
-      makeButton("＋", "放大 (Ctrl+＋)", () => handlers.onZoomIn()),
-    );
-
-    const fileGroup = document.createElement("div");
-    fileGroup.className = "tool-group";
-    fileGroup.append(
-      makeButton("📂", "打开文件 (Ctrl+O)", () => handlers.onOpen()),
-      makeButton("💾", "保存文件 (Ctrl+S)", () => handlers.onSave()),
-      makeButton("🖻", "插入图片", () => handlers.onInsertImage()),
-      makeButton("🖼", "导出 PNG 图片", () => handlers.onExport()),
-      makeButton("🗑", "清空画布", () => handlers.onClear()),
-      makeButton("🤖", "AI 助手", () => handlers.onToggleAI()),
-    );
-
-    container.append(this.toolGroup, editGroup, beautifyBtn, sketchBtn, zoomGroup, fileGroup);
-
-    // ---- 样式面板 ----
-    const panel = document.createElement("div");
-    panel.id = "panel";
-
-    const label = document.createElement("span");
-    label.className = "panel-label";
-    label.textContent = "颜色";
-    panel.appendChild(label);
-
-    // 描边/填充通道切换：色板与取色器作用于激活通道
-    const channelGroup = document.createElement("div");
-    channelGroup.className = "channel-group";
-    this.strokeChannelBtn = this.makeChannelBtn("描边", () =>
-      this.setChannel("stroke"),
-    );
-    this.fillChannelBtn = this.makeChannelBtn("填充", () =>
-      this.setChannel("fill"),
-    );
-    channelGroup.append(this.strokeChannelBtn, this.fillChannelBtn);
-    panel.appendChild(channelGroup);
-
-    const swatches = document.createElement("div");
-    swatches.className = "swatches";
-    for (const c of SWATCHES) {
-      const s = document.createElement("div");
-      s.className = "swatch";
-      s.style.background = c;
-      s.title = c;
-      s.addEventListener("click", () => {
-        if (this.activeChannel === "fill") {
-          handlers.onFillColorChange(c);
-        } else {
-          handlers.onStrokeChange(c);
-        }
-      });
-      swatches.appendChild(s);
-      this.swatches.set(c, s);
-    }
-    panel.appendChild(swatches);
-
-    this.colorInput = document.createElement("input");
-    this.colorInput.type = "color";
-    this.colorInput.value = "#4f8cff";
-    this.colorInput.title = "自定义颜色";
-    this.colorInput.addEventListener("input", () => {
-      if (this.activeChannel === "fill") {
-        handlers.onFillColorChange(this.colorInput.value);
-      } else {
-        handlers.onStrokeChange(this.colorInput.value);
-      }
-    });
-    panel.appendChild(this.colorInput);
-
-    const sep = document.createElement("div");
-    sep.className = "tool-sep";
-    panel.appendChild(sep);
-
-    const widthLabel = document.createElement("span");
-    widthLabel.className = "panel-label";
-    widthLabel.textContent = "粗细";
-    panel.appendChild(widthLabel);
-
-    this.widthInput = document.createElement("input");
-    this.widthInput.id = "stroke-width";
-    this.widthInput.type = "range";
-    this.widthInput.min = "1";
-    this.widthInput.max = "12";
-    this.widthInput.step = "1";
-    this.widthInput.value = "2";
-    this.widthInput.addEventListener("input", () =>
-      handlers.onWidthChange(Number(this.widthInput.value)),
-    );
-    panel.appendChild(this.widthInput);
-
-    this.fillBtn = makeButton("⬛ 填充", "填充开/关", () => {
+    this.fillBtn = document.createElement("button");
+    this.fillBtn.className = "tool-btn fill-toggle";
+    this.fillBtn.title = "填充开/关（新绘制图形默认填充；选中元素时作用于选中）";
+    // 填充图标（Excalidraw 风格：空心方块 + 下半实心；激活时下半不透明）
+    this.fillBtn.innerHTML =
+      `<svg class="fill-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">` +
+      `<rect x="3.5" y="3.5" width="17" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/>` +
+      `<path class="fill-half" d="M3.5 14h17v6.5H3.5z" fill="currentColor" opacity="0.35"/>` +
+      `</svg>`;
+    this.fillBtn.addEventListener("click", () => {
       const next = !this.fillBtn.classList.contains("active");
       this.fillBtn.classList.toggle("active", next);
       handlers.onFillChange(next);
     });
-    panel.appendChild(this.fillBtn);
 
-    container.appendChild(panel);
-
+    container.append(this.toolGroup, this.fillBtn);
     this.setTool("select");
-    this.setStroke("#4f8cff");
   }
 
-  /** 按注册表渲染工具按钮（内置 + 自定义），保留当前激活态 */
+  /** 构建一个分组下拉：按钮 + 弹出菜单（fixed 定位，点击外部关闭） */
+  private buildGroupUI(group: ToolGroup): GroupUI {
+    const meta = GROUP_META[group];
+    const btn = document.createElement("button");
+    btn.className = "tool-btn group-btn";
+    btn.title = `${meta.label}工具（点击展开）`;
+    const iconEl = document.createElement("span");
+    iconEl.className = "group-icon";
+    iconEl.textContent = meta.defaultIcon;
+    const caret = document.createElement("span");
+    caret.className = "group-caret";
+    caret.textContent = "▾";
+    btn.append(iconEl, caret);
+
+    const menu = document.createElement("div");
+    menu.className = "group-menu";
+    menu.hidden = true;
+    document.body.appendChild(menu);
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+      btn.classList.toggle("open", !menu.hidden);
+      if (!menu.hidden) {
+        const r = btn.getBoundingClientRect();
+        menu.style.left = `${r.left}px`;
+        menu.style.top = `${r.bottom + 6}px`;
+      }
+    });
+    // 点击菜单外部关闭
+    document.addEventListener("pointerdown", (e) => {
+      if (menu.hidden) {
+        return;
+      }
+      if (!menu.contains(e.target as Node) && e.target !== btn) {
+        menu.hidden = true;
+        btn.classList.remove("open");
+      }
+    });
+
+    return { group, btn, iconEl, menu, items: new Map(), tools: [], inserted: false };
+  }
+
+  /** 按注册表渲染工具按钮（同类型工具收进分组下拉），保留当前激活态 */
   private renderTools() {
     this.toolGroup.innerHTML = "";
     this.toolButtons.clear();
+    for (const ui of this.groups.values()) {
+      ui.tools = [];
+      ui.inserted = false;
+    }
     for (const t of this.registry.list()) {
+      if (t.group) {
+        const ui = this.groups.get(t.group);
+        if (!ui) {
+          continue; // 未知分组（注册表已校验，正常不会发生）
+        }
+        ui.tools.push(t);
+        if (!ui.inserted) {
+          // 在原分组工具位置插入下拉按钮（保持工具顺序）
+          this.toolGroup.appendChild(ui.btn);
+          ui.inserted = true;
+        }
+        continue;
+      }
       const btn = makeButton(t.icon, t.title, () => this.handlers.onTool(t.id));
       btn.classList.toggle("active", t.id === this.activeToolId);
       this.toolGroup.appendChild(btn);
       this.toolButtons.set(t.id, btn);
+    }
+    // 重建各分组下拉菜单项
+    for (const ui of this.groups.values()) {
+      ui.menu.innerHTML = "";
+      ui.items.clear();
+      ui.btn.title = `${GROUP_META[ui.group].label}：${ui.tools.map((t) => t.name).join(" / ")}`;
+      for (const t of ui.tools) {
+        const item = makeButton(`${t.icon} ${t.name}`, t.title, () => {
+          this.handlers.onTool(t.id);
+          ui.menu.hidden = true;
+          ui.btn.classList.remove("open");
+        });
+        item.classList.add("group-item");
+        item.classList.toggle("active", t.id === this.activeToolId);
+        ui.menu.appendChild(item);
+        ui.items.set(t.id, item);
+      }
+      // 分组为空时隐藏按钮
+      ui.btn.style.display = ui.tools.length ? "" : "none";
     }
   }
 
@@ -242,61 +210,19 @@ export class Toolbar {
     for (const [t, btn] of this.toolButtons) {
       btn.classList.toggle("active", t === tool);
     }
-  }
-
-  setUndoRedo(canUndo: boolean, canRedo: boolean) {
-    this.undoBtn.classList.toggle("disabled", !canUndo);
-    this.redoBtn.classList.toggle("disabled", !canRedo);
-  }
-
-  setStroke(color: string) {
-    this.strokeChannelColor = color;
-    this.strokeChannelBtn.querySelector<HTMLElement>(".channel-chip")!.style.background = color;
-    if (this.activeChannel === "stroke") {
-      this.setActiveColor(color);
+    // 分组下拉：激活组内工具时按钮显示该工具图标并高亮
+    for (const ui of this.groups.values()) {
+      const g = ui.tools.find((t) => t.id === tool);
+      ui.btn.classList.toggle("active", !!g);
+      if (g) {
+        ui.iconEl.textContent = g.icon;
+      } else if (ui.tools.length) {
+        ui.iconEl.textContent = ui.tools[0].icon;
+      }
+      for (const [t, item] of ui.items) {
+        item.classList.toggle("active", t === tool);
+      }
     }
-  }
-
-  /** 更新填充通道颜色（仅激活填充通道时同步色板高亮） */
-  setFillColor(color: string) {
-    this.fillChannelColor = color;
-    this.fillChannelBtn.querySelector<HTMLElement>(".channel-chip")!.style.background = color;
-    if (this.activeChannel === "fill") {
-      this.setActiveColor(color);
-    }
-  }
-
-  private setChannel(channel: "stroke" | "fill") {
-    this.activeChannel = channel;
-    this.strokeChannelBtn.classList.toggle("active", channel === "stroke");
-    this.fillChannelBtn.classList.toggle("active", channel === "fill");
-    // 切换后色板高亮与取色器跟随当前通道颜色
-    this.setActiveColor(
-      channel === "stroke" ? this.strokeChannelColor : this.fillChannelColor,
-    );
-  }
-
-  private setActiveColor(color: string) {
-    for (const [c, el] of this.swatches) {
-      el.classList.toggle("active", c.toLowerCase() === color.toLowerCase());
-    }
-    this.colorInput.value = color;
-  }
-
-  private makeChannelBtn(label: string, onClick: () => void): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "channel-btn";
-    btn.title = `${label}颜色：色板点击作用于${label}色`;
-    const chip = document.createElement("span");
-    chip.className = "channel-chip";
-    chip.style.background = "#4f8cff";
-    btn.append(chip, document.createTextNode(label));
-    btn.addEventListener("click", onClick);
-    return btn;
-  }
-
-  setWidth(width: number) {
-    this.widthInput.value = String(width);
   }
 
   setFill(enabled: boolean) {

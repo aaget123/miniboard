@@ -89,14 +89,14 @@ const builtinGenerators: Record<string, (c: GeneratorContext) => ElementData> = 
 const BUILTIN: ToolDef[] = [
   { id: "select", name: "选择", icon: "↖", title: "选择 (V)", shortcut: "v", kind: "interaction", source: "builtin" },
   { id: "hand", name: "画布移动", icon: "✋", title: "画布移动 (H)", shortcut: "h", kind: "interaction", source: "builtin" },
-  { id: "marquee", name: "框选", icon: "⛶", title: "框选 (M)", shortcut: "m", kind: "interaction", source: "builtin" },
-  { id: "lasso", name: "套索选中", icon: "∿", title: "套索选中 (Q)", shortcut: "q", kind: "interaction", source: "builtin" },
+  { id: "marquee", name: "框选", icon: "⛶", title: "框选 (M)", shortcut: "m", kind: "interaction", group: "select", source: "builtin" },
+  { id: "lasso", name: "套索选中", icon: "∿", title: "套索选中 (Q)", shortcut: "q", kind: "interaction", group: "select", source: "builtin" },
   { id: "pen", name: "画笔", icon: "✏", title: "画笔 (P)", shortcut: "p", kind: "freehand", source: "builtin" },
   { id: "eraser", name: "橡皮擦", icon: "⌫", title: "橡皮擦 (E)", shortcut: "e", kind: "interaction", source: "builtin" },
   { id: "line", name: "直线", icon: "╱", title: "直线 (L)", shortcut: "l", kind: "drag", source: "builtin" },
   { id: "arrow", name: "箭头", icon: "→", title: "箭头 (A)", shortcut: "a", kind: "drag", source: "builtin" },
-  { id: "rect", name: "矩形", icon: "▭", title: "矩形 (R)", shortcut: "r", kind: "drag", source: "builtin" },
-  { id: "ellipse", name: "椭圆", icon: "◯", title: "椭圆 (O)", shortcut: "o", kind: "drag", source: "builtin" },
+  { id: "rect", name: "矩形", icon: "▭", title: "矩形 (R)", shortcut: "r", kind: "drag", group: "shape", source: "builtin" },
+  { id: "ellipse", name: "椭圆", icon: "◯", title: "椭圆 (O)", shortcut: "o", kind: "drag", group: "shape", source: "builtin" },
   { id: "text", name: "文本", icon: "T", title: "文本 (T)", shortcut: "t", kind: "interaction", source: "builtin" },
 ];
 
@@ -113,7 +113,12 @@ export class ToolRegistry {
   private onChangeFn: () => void = () => {};
 
   constructor() {
-    this.custom = this.load();
+    const { list, migrated } = this.load();
+    this.custom = list;
+    if (migrated) {
+      // 旧数据补上分组标记后立即持久化，后续不再重复迁移
+      this.save();
+    }
   }
 
   /** 注册表变化回调（用于工具栏刷新等） */
@@ -204,6 +209,7 @@ export class ToolRegistry {
       shortcut: input.shortcut?.trim().toLowerCase() || undefined,
       kind: "drag",
       source: "custom",
+      group: input.group, // 同类型工具归入同一分组（如形状类归入 shape 下拉）
       generator: input.generator,
       description: input.description,
       createdAt: Date.now(),
@@ -233,6 +239,7 @@ export class ToolRegistry {
       generator: patch.generator ?? tool.generator,
       description:
         patch.description !== undefined ? patch.description : tool.description,
+      group: patch.group !== undefined ? patch.group : tool.group,
     };
     this.validateInput(next);
     this.checkShortcutConflict({ ...tool, ...next }, id);
@@ -242,6 +249,7 @@ export class ToolRegistry {
     tool.title = this.titleOf(tool.name, tool.shortcut);
     tool.generator = next.generator;
     tool.description = next.description;
+    tool.group = next.group;
     this.compiled.delete(id); // 生成器可能已变，清缓存
     this.save();
     this.onChangeFn();
@@ -277,6 +285,10 @@ export class ToolRegistry {
     if (!input.generator?.trim()) {
       throw new Error("生成器代码不能为空");
     }
+    if (input.group !== undefined && input.group !== "shape") {
+      // AI 工具均为拖拽生成类，目前只允许归入形状分组；select 组为内置选中类工具专属
+      throw new Error(`分组 ${String(input.group)} 不支持，自定义工具只能归入 shape（形状下拉）或省略`);
+    }
     this.compileGenerator(input.generator); // 编译失败会抛错
   }
 
@@ -304,25 +316,37 @@ export class ToolRegistry {
     return id;
   }
 
-  private load(): CustomToolDef[] {
+  /**
+   * 从 localStorage 读取自定义工具；对旧数据（无分组标记）按名称关键词
+   * 迁移分组：名称含形状特征词的工具归入 shape（形状下拉）。
+   */
+  private load(): { list: CustomToolDef[]; migrated: boolean } {
+    let migrated = false;
     try {
       const raw = localStorage.getItem(LS_KEY);
       if (!raw) {
-        return [];
+        return { list: [], migrated };
       }
       const parsed = JSON.parse(raw) as CustomToolDef[];
       if (!Array.isArray(parsed)) {
-        return [];
+        return { list: [], migrated };
       }
-      return parsed.filter(
+      const list = parsed.filter(
         (t) =>
           t &&
           typeof t.id === "string" &&
           typeof t.generator === "string" &&
           typeof t.name === "string",
       );
+      for (const t of list) {
+        if (!t.group && /三角|星|圆|矩形|正方|长方|菱形|边形|心形|形状|形$/.test(t.name)) {
+          t.group = "shape";
+          migrated = true;
+        }
+      }
+      return { list, migrated };
     } catch {
-      return [];
+      return { list: [], migrated };
     }
   }
 
