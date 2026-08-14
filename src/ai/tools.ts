@@ -4,7 +4,7 @@ import type { ToolRegistry } from "../board/registry";
 import type { Toolbar } from "../ui/toolbar";
 import type { CustomToolInput, ElementData } from "../types";
 import { describeFreehandShape } from "../board/beautify";
-import { localToCanvas, round1 } from "../board/coords";
+import { canvasToLocal, localToCanvas, round1 } from "../board/coords";
 import type { AiMode, AiTool, AiToolExecution } from "./types";
 
 // ================= 画布感知（非多模态：把画布转成 JSON 给模型看） =================
@@ -186,6 +186,160 @@ export function describeCanvas(board: Board, ids?: string[]): string {
   );
 }
 
+// ================= 官方 leafer JSON 解析（create_elements 用） =================
+// 对应数据契约格式 A（D:\CanvasCompanion\data-contract.md），将来随内核迁移至 core/leafer-adapter.ts。
+// 规则：白名单字段、无 id（系统分配）、禁止 fill:"none"（leafer 渲染黑色实心）、
+// points 传画布绝对坐标（自动换算回局部坐标）。
+
+const LEAFFER_TYPES = [
+  "rect",
+  "ellipse",
+  "line",
+  "arrow",
+  "path",
+  "text",
+  "image",
+] as const;
+
+function numOf(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function strOf(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/** 解析单个官方格式元素为 ElementData（非法返回错误原因，不抛异常） */
+function parseLeaferElement(
+  obj: Record<string, unknown>,
+): { data?: ElementData; error?: string } {
+  const type = strOf(obj.type);
+  if (!type || !(LEAFFER_TYPES as readonly string[]).includes(type)) {
+    return { error: `type 必须是 ${LEAFFER_TYPES.join("/")} 之一` };
+  }
+  const x = numOf(obj.x);
+  const y = numOf(obj.y);
+  if (x === undefined || y === undefined) {
+    return { error: "缺少 x/y 坐标" };
+  }
+  const rotation = numOf(obj.rotation);
+  const stroke = strOf(obj.stroke);
+  const strokeWidth = numOf(obj.strokeWidth);
+  // leafer 中 "none" 会渲染成黑色实心：无填充时省略字段
+  const fill = obj.fill === "none" ? undefined : strOf(obj.fill);
+
+  if (type === "line" || type === "arrow") {
+    const raw = Array.isArray(obj.points) ? obj.points : [];
+    const pts = raw
+      .filter(
+        (p): p is { x: number; y: number } =>
+          typeof p === "object" &&
+          p !== null &&
+          typeof (p as { x?: unknown }).x === "number" &&
+          typeof (p as { y?: unknown }).y === "number",
+      )
+      .map((p) => ({ x: p.x, y: p.y }));
+    if (pts.length < 2) {
+      return { error: "line/arrow 需要至少 2 个 points 点" };
+    }
+    // points 为画布绝对坐标：元素定位到包围盒左上角，再换算回局部坐标
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const box = {
+      x: minX,
+      y: minY,
+      width: Math.max(...xs) - minX,
+      height: Math.max(...ys) - minY,
+      rotation,
+    };
+    const endArrow = strOf(obj.endArrow);
+    const data: ElementData = {
+      type: type === "arrow" || (endArrow !== undefined && endArrow !== "none") ? "arrow" : "line",
+      x: minX,
+      y: minY,
+      width: box.width,
+      height: box.height,
+      points: pts.map((p) => canvasToLocal(box, p)),
+    };
+    if (rotation !== undefined) {
+      data.rotation = rotation;
+    }
+    if (stroke !== undefined) {
+      data.stroke = stroke;
+    }
+    if (strokeWidth !== undefined) {
+      data.strokeWidth = strokeWidth;
+    }
+    return { data };
+  }
+
+  const data: ElementData = { type: type as ElementData["type"], x, y, width: 0, height: 0 };
+  if (rotation !== undefined) {
+    data.rotation = rotation;
+  }
+  if (stroke !== undefined) {
+    data.stroke = stroke;
+  }
+  if (strokeWidth !== undefined) {
+    data.strokeWidth = strokeWidth;
+  }
+  if (fill !== undefined) {
+    data.fill = fill;
+  }
+  switch (type) {
+    case "rect":
+    case "ellipse":
+      data.width = numOf(obj.width) ?? 100;
+      data.height = numOf(obj.height) ?? 100;
+      break;
+    case "path": {
+      const path = strOf(obj.path);
+      if (path === undefined) {
+        return { error: "path 元素需要 path 字符串（相对元素左上角的局部坐标）" };
+      }
+      data.path = path;
+      data.width = numOf(obj.width) ?? 100;
+      data.height = numOf(obj.height) ?? 100;
+      break;
+    }
+    case "text": {
+      const text = strOf(obj.text);
+      if (text === undefined) {
+        return { error: "text 元素需要 text 字符串" };
+      }
+      data.text = text;
+      data.fontSize = numOf(obj.fontSize) ?? TEXT_FONT_SIZE;
+      break;
+    }
+    case "image": {
+      const url = strOf(obj.url);
+      if (url === undefined) {
+        return { error: "image 元素需要 url" };
+      }
+      data.url = url;
+      data.width = numOf(obj.width) ?? 200;
+      data.height = numOf(obj.height) ?? 150;
+      break;
+    }
+  }
+  return { data };
+}
+
+/** 解析官方 leafer JSON 数组（create_elements 入参），逐元素报告成败 */
+export function parseLeaferJSON(raw: unknown): { data?: ElementData; error?: string }[] {
+  if (!Array.isArray(raw)) {
+    return [{ error: "elements 必须是数组" }];
+  }
+  return raw.map((item) => {
+    if (typeof item !== "object" || item === null) {
+      return { error: "元素必须是对象" };
+    }
+    return parseLeaferElement(item as Record<string, unknown>);
+  });
+}
+
 // ================= 工具定义 =================
 
 /** 画布感知工具：交流/编辑模式共用（只读，不修改画布） */
@@ -275,6 +429,27 @@ function chatTools(): AiTool[] {
           },
         },
         required: ["updates"],
+      },
+      mutating: true,
+    },
+    {
+      name: "create_elements",
+      description:
+        "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
+      parameters: {
+        type: "object",
+        properties: {
+          elements: {
+            type: "array",
+            items: {
+              type: "object",
+              description: "一个 leafer 官方格式元素（type/x/y 必填）",
+              additionalProperties: true,
+            },
+            description: "要创建的元素数组",
+          },
+        },
+        required: ["elements"],
       },
       mutating: true,
     },
@@ -582,14 +757,39 @@ export function executeTool(
           changed: false,
         };
       }
+      // 字段白名单：只放行外观/几何字段，运行时字段（id/locked/penPoints 等）
+      // 与未知字段一律忽略，防止模型写入破坏元素数据一致性
+      const ALLOWED_FIELDS = new Set([
+        "stroke",
+        "strokeWidth",
+        "fill",
+        "rotation",
+        "x",
+        "y",
+        "width",
+        "height",
+        "text",
+        "fontSize",
+        "points",
+        "path",
+      ]);
       let ok = 0;
+      let ignored = 0;
       const failed: string[] = [];
       for (const u of updates) {
         if (!u.id || typeof u.patch !== "object" || u.patch === null) {
           failed.push(u.id ?? "(缺 id)");
           continue;
         }
-        const done = board.updateElement(u.id, u.patch as Partial<ElementData>);
+        const patch: Record<string, unknown> = {};
+        for (const key of Object.keys(u.patch)) {
+          if (ALLOWED_FIELDS.has(key)) {
+            patch[key] = u.patch[key];
+          } else {
+            ignored++;
+          }
+        }
+        const done = board.updateElement(u.id, patch as Partial<ElementData>);
         if (done) {
           ok++;
         } else {
@@ -600,9 +800,43 @@ export function executeTool(
         name: tool.name,
         args,
         result: failed.length
-          ? `已更新 ${ok} 个元素；失败 ${failed.length} 个：${failed.join("、")}（不存在或已锁定）`
-          : `已更新 ${ok} 个元素`,
+          ? `已更新 ${ok} 个元素；失败 ${failed.length} 个：${failed.join("、")}（不存在或已锁定）${ignored ? `；${ignored} 个字段不在白名单，已忽略` : ""}`
+          : `已更新 ${ok} 个元素${ignored ? `（${ignored} 个字段不在白名单，已忽略）` : ""}`,
         changed: ok > 0,
+      };
+    }
+
+    case "create_elements": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：create_elements 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const parsed = parseLeaferJSON(args.elements);
+      const created: string[] = [];
+      const failed: string[] = [];
+      parsed.forEach((r, i) => {
+        if (!r.data) {
+          failed.push(`第 ${i + 1} 个：${r.error ?? "未知错误"}`);
+          return;
+        }
+        const id = board.addElement(r.data);
+        if (id) {
+          created.push(id);
+        } else {
+          failed.push(`第 ${i + 1} 个：创建失败`);
+        }
+      });
+      return {
+        name: tool.name,
+        args,
+        result: failed.length
+          ? `已创建 ${created.length} 个元素（id：${created.join("、")}）；失败 ${failed.length} 个：${failed.join("；")}`
+          : `已创建 ${created.length} 个元素（id：${created.join("、")}）`,
+        changed: created.length > 0,
       };
     }
 

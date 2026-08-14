@@ -158,6 +158,8 @@ export class AiPanel {
   private atBtn!: HTMLButtonElement;
   private mode: AiMode = "chat";
   private busy = false;
+  /** 当前请求的取消句柄：生成中点击“停止”中断（请求随后抛 AbortError） */
+  private abortCtrl: AbortController | null = null;
   private history: ChatMessage[] = [];
   /** 历史总 token 估算（与 history 同步维护，用于超限压缩） */
   private historyTokens = 0;
@@ -219,7 +221,14 @@ export class AiPanel {
     document
       .getElementById("ai-close-btn")!
       .addEventListener("click", () => this.close());
-    this.sendBtn.addEventListener("click", () => this.send());
+    this.sendBtn.addEventListener("click", () => {
+      if (this.busy) {
+        // 生成中：按钮变为“停止”，中断当前请求
+        this.abortCtrl?.abort();
+        return;
+      }
+      this.send();
+    });
     this.atBtn.addEventListener("click", () => this.toggleAt());
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -313,9 +322,13 @@ export class AiPanel {
 
   private setBusy(busy: boolean) {
     this.busy = busy;
-    this.sendBtn.classList.toggle("disabled", busy);
-    this.sendBtn.textContent = busy ? "…" : "发送";
+    this.sendBtn.classList.toggle("stop", busy);
+    this.sendBtn.textContent = busy ? "停止" : "发送";
+    this.sendBtn.title = busy ? "停止生成（已输出的内容会保留）" : "发送";
     this.inputEl.disabled = busy;
+    if (!busy) {
+      this.abortCtrl = null;
+    }
   }
 
   // ---------- @ 选区 ----------
@@ -442,6 +455,8 @@ export class AiPanel {
       return;
     }
 
+    // 本轮请求取消句柄：中断后 catch 分支区分“停止”与真实失败
+    this.abortCtrl = new AbortController();
     this.setBusy(true);
     this.inputEl.value = "";
     // 记录发送前历史长度：失败时回滚本轮写入，避免残留未配对的工具轮次消息
@@ -508,7 +523,7 @@ export class AiPanel {
             this.renderBubble(bubble, fullText);
             this.scrollBottom();
           },
-        });
+        }, this.abortCtrl.signal);
         if (!res.toolCalls.length) {
           if (res.text) {
             this.pushHistory({ role: "assistant", content: res.text });
@@ -566,7 +581,7 @@ export class AiPanel {
             this.renderBubble(bubble, fullText);
             this.scrollBottom();
           },
-        });
+        }, this.abortCtrl.signal);
         if (res.text) {
           this.pushHistory({ role: "assistant", content: res.text });
         }
@@ -584,9 +599,16 @@ export class AiPanel {
         }
       }
       commitCanvasChange();
-      const msg = err instanceof Error ? err.message : String(err);
       this.renderBubble(bubble, fullText ? fullText : "");
-      this.appendError(`请求失败：${msg}`);
+      const stopped =
+        err instanceof Error &&
+        (err.name === "AbortError" || err.name === "TimeoutError");
+      if (stopped) {
+        this.appendError(fullText ? "已停止生成（已输出的内容保留）" : "已停止");
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendError(`请求失败：${msg}`);
+      }
     } finally {
       this.setBusy(false);
     }

@@ -3,6 +3,7 @@ export type ToolsFloatHandlers = {
   onSave: () => void;
   onInsertImage: () => void;
   onExport: () => void;
+  onExportSVG: () => void;
   onToggleAI: () => void;
   onClear: () => void;
   onSettings: () => void;
@@ -25,7 +26,7 @@ function makeItem(icon: string, title: string, onClick: () => void): HTMLButtonE
 }
 
 /**
- * 右侧圆形悬浮工具栏：文件操作（打开/保存/插入图片/导出）+ AI + 清空 + 设置。
+ * 右侧圆形悬浮工具栏：文件操作（打开/保存/插入图片/导出 PNG/SVG）+ AI + 清空 + 设置。
  * 常驻可见（无需选中），主按钮点击展开/收起，鼠标移开自动收起；
  * 主按钮可自由拖拽移动（位置记忆在 localStorage）。
  */
@@ -60,6 +61,7 @@ export class ToolsFloat {
       makeItem("💾", "保存文件 (Ctrl+S)", () => handlers.onSave()),
       makeItem("🖼", "插入图片", () => handlers.onInsertImage()),
       makeItem("📷", "导出 PNG 图片", () => handlers.onExport()),
+      makeItem("📄", "导出 SVG 矢量图", () => handlers.onExportSVG()),
     );
     this.aiBtn = makeItem("🤖", "AI 助手 (K)", () => handlers.onToggleAI());
     this.panel.appendChild(this.aiBtn);

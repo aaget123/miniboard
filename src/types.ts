@@ -130,4 +130,12 @@ export type SceneFile = {
   elements: ElementData[];
 };
 
+/** 项目元数据（多项目管理：项目目录 + 切换 + 独立自动保存） */
+export type ProjectMeta = {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export const FILE_VERSION = 1 as const;

@@ -23,6 +23,8 @@ import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
 import { penSizeOf, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
+import { elementsToSVG } from "./svg";
+import type { GridSettings } from "../ui/settings";
 
 export const BACKGROUND = "#1e1f22";
 export const TEXT_FONT_SIZE = 18;
@@ -397,8 +399,11 @@ export class Board {
   private cropHandles: Rect[] = [];
   private cropDragDir: string | null = null;
   private cropDragged = false;
-  // 文本缩放语义：横向拉伸换行、纵向/对角改字号（记录缩放前的原始状态）
+  /** 文本缩放语义：横向拉伸换行、纵向/对角改字号（记录缩放前的原始状态） */
   private textScaleOrig = new Map<Text, { fontSize: number; width: number }>();
+  // 网格：设置（大小/显示/吸附）与网格线层（挂在 zoomLayer 最底层，随缩放/平移重建）
+  private grid: GridSettings = { size: 20, show: false, snap: false };
+  private gridPath: Path | null = null;
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
@@ -445,6 +450,17 @@ export class Board {
     app.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
 
     this.editor.on(EditorMoveEvent.MOVE, (e) => {
+      // 网格吸附：单选拖动时位置对齐网格（多选保持相对位置不吸附）
+      const moved = (e as { operateEvent?: { target?: unknown } }).operateEvent
+        ?.target as UI | undefined;
+      if (
+        this.grid.snap &&
+        moved &&
+        this.editor.list.length === 1
+      ) {
+        moved.x = this.snapGrid(moved.x ?? 0);
+        moved.y = this.snapGrid(moved.y ?? 0);
+      }
       // 移动元素后刷新绑定箭头端点（被绑元素移动时端点跟随）
       this.updateBindings(e);
       this.scheduleHistory();
@@ -565,6 +581,7 @@ export class Board {
     layer.y = fy - ((fy - ly) * target) / s;
     layer.scaleX = target;
     layer.scaleY = target;
+    this.updateGrid();
   }
 
   zoomIn() {
@@ -587,6 +604,7 @@ export class Board {
     layer.y = 0;
     layer.scaleX = 1;
     layer.scaleY = 1;
+    this.updateGrid();
   }
 
   /** 视口中心（app 局部坐标） */
@@ -820,9 +838,9 @@ export class Board {
       return;
     }
     this.drawing = true;
-    this.startX = px;
-    this.startY = py;
-    this.draftData = this.runGenerator(px, py, px, py);
+    this.startX = this.snapGrid(px);
+    this.startY = this.snapGrid(py);
+    this.draftData = this.runGenerator(this.startX, this.startY, this.startX, this.startY);
     if (!this.draftData) {
       this.drawing = false;
       return;
@@ -885,6 +903,7 @@ export class Board {
         layer.x = this.panLayerStart.x + (e.x ?? 0) - this.panStart.x;
         layer.y = this.panLayerStart.y + (e.y ?? 0) - this.panStart.y;
       }
+      this.updateGrid();
       return;
     }
     // 橡皮擦拖动：隔段擦除，避免事件密集时重复命中
@@ -906,8 +925,8 @@ export class Board {
         this.movedAny = true;
       }
       for (const item of this.dragEls) {
-        item.el.x = item.x + dx;
-        item.el.y = item.y + dy;
+        item.el.x = this.snapGrid(item.x + dx);
+        item.el.y = this.snapGrid(item.y + dy);
       }
       this.scheduleHistory();
       return;
@@ -968,7 +987,12 @@ export class Board {
       return;
     }
     if (kind === "drag") {
-      const data = this.runGenerator(this.startX, this.startY, px, py);
+      const data = this.runGenerator(
+        this.startX,
+        this.startY,
+        this.snapGrid(px),
+        this.snapGrid(py),
+      );
       if (data) {
         this.draftData = data;
         this.applyDataToDraft(this.draft, data);
@@ -2467,6 +2491,7 @@ export class Board {
       }
     }
     this.editor.cancel();
+    this.updateGrid();
   }
 
   private dataToElement(d: ElementData): UI | null {
@@ -2563,6 +2588,78 @@ export class Board {
   }
 
   // ================= 导出 =================
+
+  /** 导出画布为 SVG 文档字符串（矢量，可无损缩放；图片以 dataURL 内嵌） */
+  exportSVG(): string {
+    return elementsToSVG(this.serialize(), this.background);
+  }
+
+  // ================= 网格 =================
+
+  /**
+   * 应用网格设置（设置弹窗调用）：保存并重建网格线；吸附在绘制/移动时即时生效。
+   */
+  applyGrid(g: GridSettings) {
+    this.grid = { ...g };
+    this.updateGrid();
+  }
+
+  /** 数值对齐到网格（吸附关闭或网格尺寸非法时原样返回） */
+  private snapGrid(v: number): number {
+    if (!this.grid.snap || !this.grid.size || this.grid.size < 4) {
+      return v;
+    }
+    return Math.round(v / this.grid.size) * this.grid.size;
+  }
+
+  /**
+   * 重建网格线：挂在 zoomLayer 最底层，覆盖当前视口的画布世界范围，
+   * 线宽随缩放反向（1/scale）保持 1px 屏幕宽度；关闭时移除。
+   */
+  private updateGrid() {
+    const layer = this.app.tree.zoomLayer;
+    if (!layer) {
+      return;
+    }
+    if (!this.grid.show || !this.grid.size || this.grid.size < 4) {
+      this.gridPath?.remove();
+      this.gridPath = null;
+      return;
+    }
+    const view = this.app.canvas.view as HTMLElement;
+    const vw = this.app.width ?? view.clientWidth;
+    const vh = this.app.height ?? view.clientHeight;
+    const s = layer.scaleX ?? 1;
+    const ox = layer.x ?? 0;
+    const oy = layer.y ?? 0;
+    const size = this.grid.size;
+    // 视口四角的画布世界坐标 → 对齐到网格整数倍（与吸附同基准，线/元素对齐）
+    const x0 = Math.floor((0 - ox) / s / size) * size;
+    const y0 = Math.floor((0 - oy) / s / size) * size;
+    const x1 = Math.ceil((vw - ox) / s / size) * size;
+    const y1 = Math.ceil((vh - oy) / s / size) * size;
+    const parts: string[] = [];
+    for (let x = x0; x <= x1; x += size) {
+      parts.push(`M ${x} ${y0} L ${x} ${y1}`);
+    }
+    for (let y = y0; y <= y1; y += size) {
+      parts.push(`M ${x0} ${y} L ${x1} ${y}`);
+    }
+    const d = parts.join(" ");
+    if (this.gridPath) {
+      this.gridPath.path = d;
+      this.gridPath.strokeWidth = 1 / s;
+      this.gridPath.remove();
+    } else {
+      this.gridPath = new Path({
+        path: d,
+        stroke: "rgba(127, 127, 127, 0.35)",
+        strokeWidth: 1 / s,
+        strokeCap: "round",
+      });
+    }
+    layer.addAt(this.gridPath, 0);
+  }
 
   async exportPNG(): Promise<string> {
     const out = await this.app.export("png", {

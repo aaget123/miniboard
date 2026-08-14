@@ -23,6 +23,40 @@ async function httpFetch(url: string, init: RequestInit): Promise<Response> {
   return fetch(url, init);
 }
 
+/** 对话请求超时（ms）：流式需读完整个回复，覆盖较长的生成时长 */
+const CHAT_TIMEOUT = 90_000;
+/** 模型列表/连接探测超时（ms）：接口应秒级响应，超时即判定不可用 */
+const PROBE_TIMEOUT = 15_000;
+
+/**
+ * 组合外部取消信号与内部超时的 fetch：任一触发即中断请求。
+ * 外部信号用于面板“停止”按钮；超时到抛 DOMException(TimeoutError)。
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal | undefined,
+  ms: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(
+    () => ctrl.abort(new DOMException("请求超时", "TimeoutError")),
+    ms,
+  );
+  const onAbort = () => ctrl.abort(signal?.reason);
+  if (signal?.aborted) {
+    ctrl.abort(signal.reason);
+  } else {
+    signal?.addEventListener("abort", onAbort);
+  }
+  try {
+    return await httpFetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 function chatURL(baseURL: string): string {
   const base = baseURL.trim().replace(/\/+$/, "");
   return base.endsWith("/chat/completions") ? base : `${base}/chat/completions`;
@@ -99,6 +133,7 @@ export async function chatTurn(
   messages: ChatMessage[],
   openAiTools: unknown[],
   cb?: ChatCallbacks,
+  signal?: AbortSignal,
 ): Promise<ChatTurnResult> {
   const url = chatURL(cfg.baseURL);
   const body = {
@@ -110,11 +145,16 @@ export async function chatTurn(
 
   // 流式主路径；失败时降级为非流式（个别服务对 stream 参数不友好）
   try {
-    const resp = await httpFetch(url, {
-      method: "POST",
-      headers: headers(cfg),
-      body: JSON.stringify(body),
-    });
+    const resp = await fetchWithTimeout(
+      url,
+      {
+        method: "POST",
+        headers: headers(cfg),
+        body: JSON.stringify(body),
+      },
+      signal,
+      CHAT_TIMEOUT,
+    );
     if (!resp.ok) {
       throw await toApiError(resp);
     }
@@ -123,7 +163,7 @@ export async function chatTurn(
     return result;
   } catch (err) {
     if (err instanceof Error && /stream/i.test(err.message)) {
-      return nonStreamChat(url, cfg, messages, openAiTools, cb);
+      return nonStreamChat(url, cfg, messages, openAiTools, cb, signal);
     }
     throw err;
   }
@@ -136,16 +176,22 @@ async function nonStreamChat(
   messages: ChatMessage[],
   openAiTools: unknown[],
   cb?: ChatCallbacks,
+  signal?: AbortSignal,
 ): Promise<ChatTurnResult> {
-  const resp = await httpFetch(url, {
-    method: "POST",
-    headers: headers(cfg),
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      tools: openAiTools.length ? openAiTools : undefined,
-    }),
-  });
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: headers(cfg),
+      body: JSON.stringify({
+        model: cfg.model,
+        messages,
+        tools: openAiTools.length ? openAiTools : undefined,
+      }),
+    },
+    signal,
+    CHAT_TIMEOUT,
+  );
   if (!resp.ok) {
     throw await toApiError(resp);
   }
@@ -175,14 +221,19 @@ async function toApiError(resp: Response): Promise<Error> {
 
 // ================= 模型查询与连接测试 =================
 
-/** 拉取服务端模型列表（OpenAI 兼容 GET /models） */
+/** 拉取服务端模型列表（OpenAI 兼容 GET /models，15s 超时） */
 export async function fetchModels(cfg: AiConfig): Promise<string[]> {
   // baseURL 可能已含 /chat/completions，统一替换为 /models
   const url = chatURL(cfg.baseURL).replace(/\/chat\/completions$/, "/models");
-  const resp = await httpFetch(url, {
-    method: "GET",
-    headers: headers(cfg),
-  });
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: "GET",
+      headers: headers(cfg),
+    },
+    undefined,
+    PROBE_TIMEOUT,
+  );
   if (!resp.ok) {
     throw await toApiError(resp);
   }
@@ -218,16 +269,21 @@ export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResul
     const modelsMsg =
       modelsErr instanceof Error ? modelsErr.message : String(modelsErr);
     try {
-      const resp = await httpFetch(chatURL(cfg.baseURL), {
-        method: "POST",
-        headers: headers(cfg),
-        body: JSON.stringify({
-          model: cfg.model,
-          messages: [{ role: "user", content: "ping" }],
-          max_tokens: 1,
-          stream: false,
-        }),
-      });
+      const resp = await fetchWithTimeout(
+        chatURL(cfg.baseURL),
+        {
+          method: "POST",
+          headers: headers(cfg),
+          body: JSON.stringify({
+            model: cfg.model,
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1,
+            stream: false,
+          }),
+        },
+        undefined,
+        PROBE_TIMEOUT,
+      );
       if (!resp.ok) {
         throw await toApiError(resp);
       }

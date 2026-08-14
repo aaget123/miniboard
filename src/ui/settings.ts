@@ -7,6 +7,50 @@ import {
 } from "../ai/config";
 import { testConnection } from "../ai/client";
 import type { AiConfig, AiProfile, AiProfileStore } from "../ai/types";
+import { ProjectStore } from "../storage";
+import type { ProjectMeta } from "../types";
+
+// ---------- 画布网格 ----------
+
+const GRID_KEY = "miniboard:grid";
+
+/** 画布网格设置：间距（px）/ 是否显示 / 绘制与移动时是否吸附 */
+export type GridSettings = {
+  size: number;
+  show: boolean;
+  snap: boolean;
+};
+
+const DEFAULT_GRID: GridSettings = { size: 20, show: false, snap: false };
+
+/** 读取网格设置（localStorage，数据损坏/缺失时回退默认值） */
+export function loadGrid(): GridSettings {
+  try {
+    const raw = localStorage.getItem(GRID_KEY);
+    if (!raw) {
+      return { ...DEFAULT_GRID };
+    }
+    const g = JSON.parse(raw) as Partial<GridSettings>;
+    return {
+      size:
+        typeof g.size === "number" && g.size >= 4 && g.size <= 100
+          ? Math.round(g.size)
+          : DEFAULT_GRID.size,
+      show: g.show === true,
+      snap: g.snap === true,
+    };
+  } catch {
+    return { ...DEFAULT_GRID };
+  }
+}
+
+export function saveGrid(g: GridSettings) {
+  try {
+    localStorage.setItem(GRID_KEY, JSON.stringify(g));
+  } catch {
+    // localStorage 不可用时仅本次会话生效
+  }
+}
 
 // ---------- 主题 ----------
 
@@ -36,6 +80,7 @@ export function applyTheme(theme: Theme, board: Board) {
 /**
  * 设置弹窗（☰ 文件与工具 → ⚙ 设置）：
  * - 主题：深色/浅色切换，即时生效并持久化（画布背景/导出/截图跟随）
+ * - 画布网格：间距/显示/吸附，即时生效并持久化（绘制与移动时吸附到网格）
  * - AI 模型配置：注册多个配置（名称/地址/Key/模型/多模态），点选激活使用，
  *   支持编辑/删除/新建与连接测试（复用 /models 探测）
  */
@@ -58,8 +103,20 @@ export class SettingsDialog {
   private statusEl!: HTMLElement;
   private modelListEl!: HTMLElement;
   private deleteBtn!: HTMLButtonElement;
+  private gridForm!: {
+    size: HTMLInputElement;
+    show: HTMLInputElement;
+    snap: HTMLInputElement;
+  };
+  private projectListEl!: HTMLElement;
+  private projectNameInput!: HTMLInputElement;
 
-  constructor(private board: Board) {
+  constructor(
+    private board: Board,
+    private projects: ProjectStore,
+    /** 项目切换/重命名/删除后通知宿主（刷新状态栏项目名等） */
+    private onProjectChange?: () => void,
+  ) {
     this.build();
   }
 
@@ -68,6 +125,12 @@ export class SettingsDialog {
     this.editingId = this.store.activeId;
     this.renderList();
     this.loadForm(this.editingId);
+    // 画布网格表单与当前设置同步（每次打开弹窗刷新，外部改动不丢失）
+    const g = loadGrid();
+    this.gridForm.size.value = String(g.size);
+    this.gridForm.show.checked = g.show;
+    this.gridForm.snap.checked = g.snap;
+    this.renderProjects();
     this.mask.hidden = false;
   }
 
@@ -105,6 +168,37 @@ export class SettingsDialog {
     });
     modal.appendChild(closeBtn);
 
+    // ---- 项目 ----
+    const projectSection = document.createElement("section");
+    projectSection.className = "settings-section";
+    const projectLabel = document.createElement("h4");
+    projectLabel.className = "settings-label";
+    projectLabel.textContent = "项目";
+    projectSection.appendChild(projectLabel);
+
+    this.projectListEl = document.createElement("div");
+    this.projectListEl.className = "project-list";
+    projectSection.appendChild(this.projectListEl);
+
+    const createRow = document.createElement("div");
+    createRow.className = "project-create";
+    this.projectNameInput = document.createElement("input");
+    this.projectNameInput.type = "text";
+    this.projectNameInput.placeholder = "新项目名称";
+    this.projectNameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        this.createProject();
+      }
+    });
+    const createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "tool-btn project-add";
+    createBtn.textContent = "＋ 新建项目";
+    createBtn.addEventListener("click", () => this.createProject());
+    createRow.append(this.projectNameInput, createBtn);
+    projectSection.appendChild(createRow);
+    modal.appendChild(projectSection);
+
     // ---- 主题 ----
     const themeSection = document.createElement("section");
     themeSection.className = "settings-section";
@@ -125,6 +219,55 @@ export class SettingsDialog {
     }
     themeSection.appendChild(themeOptions);
     modal.appendChild(themeSection);
+
+    // ---- 画布网格 ----
+    const gridSection = document.createElement("section");
+    gridSection.className = "settings-section";
+    const gridLabel = document.createElement("h4");
+    gridLabel.className = "settings-label";
+    gridLabel.textContent = "画布网格";
+    gridSection.appendChild(gridLabel);
+    const sizeLabel = document.createElement("label");
+    sizeLabel.className = "ai-modal-label";
+    sizeLabel.textContent = "网格间距（px，4-100）";
+    const sizeInput = document.createElement("input");
+    sizeInput.type = "number";
+    sizeInput.min = "4";
+    sizeInput.max = "100";
+    sizeInput.step = "1";
+    const showRow = document.createElement("label");
+    showRow.className = "ai-modal-row";
+    const showBox = document.createElement("input");
+    showBox.type = "checkbox";
+    showRow.append(document.createTextNode("显示网格"), showBox);
+    const snapRow = document.createElement("label");
+    snapRow.className = "ai-modal-row";
+    const snapBox = document.createElement("input");
+    snapBox.type = "checkbox";
+    snapRow.append(
+      document.createTextNode("绘制 / 移动时吸附到网格（多选移动不吸附，保持相对位置）"),
+      snapBox,
+    );
+    // 任一改动即时应用到画布并持久化（网格线随缩放/平移重建）
+    const applyGridSettings = () => {
+      const g: GridSettings = {
+        size: Math.min(
+          100,
+          Math.max(4, Math.round(Number(sizeInput.value) || DEFAULT_GRID.size)),
+        ),
+        show: showBox.checked,
+        snap: snapBox.checked,
+      };
+      sizeInput.value = String(g.size);
+      saveGrid(g);
+      this.board.applyGrid(g);
+    };
+    sizeInput.addEventListener("change", applyGridSettings);
+    showBox.addEventListener("change", applyGridSettings);
+    snapBox.addEventListener("change", applyGridSettings);
+    gridSection.append(sizeLabel, sizeInput, showRow, snapRow);
+    modal.appendChild(gridSection);
+    this.gridForm = { size: sizeInput, show: showBox, snap: snapBox };
 
     // ---- AI 模型配置 ----
     const aiSection = document.createElement("section");
@@ -448,5 +591,88 @@ export class SettingsDialog {
     this.statusEl.className = cls
       ? `ai-modal-status ${cls}`
       : "ai-modal-status";
+  }
+
+  // ---------- 项目 ----------
+
+  private renderProjects() {
+    this.projectListEl.textContent = "";
+    const list = this.projects.list();
+    if (!list.length) {
+      this.projectListEl.textContent = "（无项目）";
+      return;
+    }
+    for (const p of list) {
+      const active = p.id === this.projects.current?.id;
+      const row = document.createElement("div");
+      row.className = `project-row${active ? " active" : ""}`;
+
+      const name = document.createElement("button");
+      name.type = "button";
+      name.className = "project-name";
+      name.title = active ? "当前项目" : "点击切换到此项目";
+      name.textContent = active ? `📄 ${p.name}（当前）` : `📄 ${p.name}`;
+      name.addEventListener("click", () => this.switchTo(p.id));
+
+      const rename = document.createElement("button");
+      rename.type = "button";
+      rename.className = "project-rename";
+      rename.title = "重命名";
+      rename.textContent = "✎";
+      rename.addEventListener("click", () => this.renameProject(p));
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "project-del";
+      del.title = "删除项目";
+      del.textContent = "🗑";
+      del.addEventListener("click", () => this.removeProject(p.id));
+
+      row.append(name, rename, del);
+      this.projectListEl.appendChild(row);
+    }
+  }
+
+  private async switchTo(id: string) {
+    const ok = await this.projects.open(id);
+    if (ok) {
+      this.renderProjects();
+      this.onProjectChange?.();
+    }
+  }
+
+  private async renameProject(p: ProjectMeta) {
+    const name = window.prompt("新项目名称", p.name);
+    if (name === null) {
+      return;
+    }
+    if (await this.projects.rename(p.id, name)) {
+      this.renderProjects();
+      this.onProjectChange?.();
+    }
+  }
+
+  private async removeProject(id: string) {
+    const meta = this.projects.list().find((p) => p.id === id);
+    if (!meta) {
+      return;
+    }
+    if (!window.confirm(`确定删除项目「${meta.name}」？此操作不可恢复。`)) {
+      return;
+    }
+    await this.projects.remove(id);
+    this.renderProjects();
+    this.onProjectChange?.();
+  }
+
+  private async createProject() {
+    const name = this.projectNameInput.value.trim();
+    if (!name) {
+      return;
+    }
+    await this.projects.create(name);
+    this.projectNameInput.value = "";
+    this.renderProjects();
+    this.onProjectChange?.();
   }
 }

@@ -1,10 +1,10 @@
 import { Board } from "./board/canvas";
 import { ToolRegistry } from "./board/registry";
-import { Storage } from "./storage";
+import { ProjectStore } from "./storage";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
 import { ToolsFloat } from "./ui/toolsfloat";
-import { SettingsDialog, applyTheme, loadTheme } from "./ui/settings";
+import { SettingsDialog, applyTheme, loadGrid, loadTheme } from "./ui/settings";
 import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
@@ -89,12 +89,18 @@ async function main() {
     selectionBar.show(info, board.currentTool === "select" && !textEditing);
   };
 
-  const storage = new Storage(board);
+  const storage = new ProjectStore(board);
 
-  // 设置弹窗（☰ 文件与工具 → ⚙）：主题切换 + AI 多模型配置
-  const settingsDialog = new SettingsDialog(board);
+  // 设置弹窗（☰ 文件与工具 → ⚙）：项目切换 + 主题 + 画布网格 + AI 多模型配置
+  // 项目变更回调：刷新状态栏项目名 + 元素数（切换/新建/删除后场景内容已变）
+  const settingsDialog = new SettingsDialog(board, storage, () => {
+    statusBar.setProject(storage.current?.name ?? "");
+    updateStatus();
+  });
   // 按已保存主题初始化画布背景（默认深色）
   applyTheme(loadTheme(), board);
+  // 画布网格设置（显示/吸附/间距，默认关闭）
+  board.applyGrid(loadGrid());
 
   let aiPanel!: AiPanel;
 
@@ -212,6 +218,16 @@ async function main() {
         .then((ok) => {
           if (ok) {
             toast("📷 已导出 PNG");
+          }
+        })
+        .catch((err) => toast(`导出失败：${err}`));
+    },
+    onExportSVG: () => {
+      storage
+        .exportSVG()
+        .then((ok) => {
+          if (ok) {
+            toast("📄 已导出 SVG");
           }
         })
         .catch((err) => toast(`导出失败：${err}`));
@@ -408,14 +424,20 @@ async function main() {
     }
   }).observe(aiEl, { attributes: true, attributeFilter: ["hidden"] });
 
-  const restored = await storage.restoreAutosave();
+    // 项目恢复（多项目：初始化迁移旧数据并载入激活项目场景）
+  const restored = await storage.init();
+  statusBar.setProject(storage.current?.name ?? "");
   // 压入会话基线快照：保证本会话首个操作（含 AI 画的流程图）可直接撤销
   board.pushSnapshot(board.serialize());
   statusBar.setUndoRedo(board.canUndo, board.canRedo);
   updateStatus();
   // 顶部填充开关状态与默认样式对齐
   toolbar.setFill(style.fillEnabled);
-  toast(restored ? "已恢复上次的画布" : "欢迎使用 Miniboard");
+  toast(
+    restored
+      ? `已恢复项目「${storage.current?.name ?? ""}」的画布`
+      : "欢迎使用 Miniboard",
+  );
 }
 
 void main();

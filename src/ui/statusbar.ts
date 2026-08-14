@@ -29,6 +29,7 @@ export class StatusBar {
   private redoBtn!: HTMLButtonElement;
   private zoomBtn!: HTMLButtonElement;
   private infoEl!: HTMLElement;
+  private projectEl!: HTMLElement;
 
   constructor(
     container: HTMLElement,
@@ -39,6 +40,10 @@ export class StatusBar {
 
     this.infoEl = document.createElement("span");
     this.infoEl.id = "sb-info";
+
+    // 当前项目名（多项目）：切换项目后由宿主更新
+    this.projectEl = document.createElement("span");
+    this.projectEl.id = "sb-project";
 
     const right = document.createElement("div");
     right.className = "sb-right";
@@ -56,7 +61,12 @@ export class StatusBar {
     right.append(this.zoomBtn);
     right.append(makeBtn("＋", "放大 (Ctrl+＋)", () => handlers.onZoomIn()));
 
-    this.el.append(this.infoEl, right);
+    this.el.append(this.projectEl, this.infoEl, right);
+  }
+
+  /** 左侧项目名（空串隐藏），与元素信息同栏展示 */
+  setProject(name: string) {
+    this.projectEl.textContent = name ? `📁 ${name} · ` : "";
   }
 
   setUndoRedo(canUndo: boolean, canRedo: boolean) {

@@ -843,6 +843,11 @@ input[type="color"] {
   pointer-events: none;
 }
 
+/* 生成中：发送按钮变为“停止”（可点击中断请求） */
+.ai-send-btn.stop {
+  background: var(--danger);
+}
+
 /* ---------- AI 设置弹窗 ---------- */
 .ai-modal-mask {
   position: fixed;
@@ -1127,6 +1132,119 @@ input[type="color"] {
 .profile-add:hover {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+/* ---- 项目列表（多项目：切换/重命名/删除/新建） ---- */
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg);
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.project-row:hover {
+  border-color: var(--border);
+}
+
+.project-row.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.project-name {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  padding: 5px 4px;
+  cursor: pointer;
+  border-radius: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-name:hover {
+  color: var(--accent);
+}
+
+.project-row.active .project-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.project-rename,
+.project-del {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.project-rename:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+
+.project-del:hover {
+  background: var(--bg-3);
+  color: var(--danger);
+}
+
+.project-create {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.project-create input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.project-add {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.project-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: transparent;
 }
 
 .settings-form-title {
