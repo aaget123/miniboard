@@ -1,4 +1,5 @@
 import type { ElementData } from "../types";
+import { strokeOutlinePath } from "./stroke";
 
 /**
  * 本地整理引擎：纯数据变换（不动 leafer）。
@@ -8,7 +9,7 @@ import type { ElementData } from "../types";
  * - 闭合且近似三角形/四边形/五边形等 → 标准多边形 Path
  * - 近似直线 → 标准 Line
  * - 其余 → 折线拉直（Douglas-Peucker 简化）
- * 只整理画笔手绘（M/L/Q）路径；保留描边颜色/粗细/填充与稳定 id。
+ * 只整理画笔手绘（freehand 采样点 / 旧版 M/L/Q 路径）；保留描边颜色/粗细/填充与稳定 id。
  */
 
 export type BeautifyStats = { label: string; count: number }[];
@@ -48,6 +49,29 @@ function round1(v: number): number {
 /** 路径是否只含画笔命令（M/L/Q）；含 A/C/S/T/Z 的路径视为已完成的标准图形，不整理 */
 function isPenPath(path: string): boolean {
   return /^[MLQ\s\d.\-]+$/.test(path);
+}
+
+/** 重建拉直后的 freehand 元素：新采样点（元素局部基准）+ 重新生成轮廓 path */
+function rebuildFreehand(
+  e: ElementData,
+  kept: number[][],
+  ox: number,
+  oy: number,
+): ElementData {
+  const rel = kept.map((p) => [round1(p[0] - ox), round1(p[1] - oy)]);
+  return {
+    type: "freehand",
+    id: e.id,
+    x: e.x,
+    y: e.y,
+    width: e.width,
+    height: e.height,
+    path: strokeOutlinePath(rel, { size: e.penSize }),
+    penPoints: rel,
+    penSize: e.penSize,
+    stroke: e.stroke,
+    strokeWidth: e.strokeWidth,
+  };
 }
 
 /** 解析画笔路径（M + 中点二次贝塞尔 Q + L），提取手绘采样点序列 */
@@ -481,7 +505,75 @@ function straightenPenPaths(
 ): ElementData[] {
   for (let i = 0; i < els.length; i++) {
     const e = els[i];
-    if (e.type !== "path" || !e.path || e.locked) {
+    if (e.locked) {
+      continue;
+    }
+    // freehand 元素（新笔迹）：采样点即中心线，直接识别/拉直
+    if (e.type === "freehand") {
+      const raw = e.penPoints ?? [];
+      if (raw.length < 3) {
+        continue;
+      }
+      const ox = e.x ?? 0;
+      const oy = e.y ?? 0;
+      const cpts = raw.map((p) => [p[0] + ox, p[1] + oy]);
+      const first = cpts[0];
+      const last = cpts[cpts.length - 1];
+      let diag = 0;
+      if (cpts.length >= 2) {
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const p of cpts) {
+          minX = Math.min(minX, p[0]);
+          maxX = Math.max(maxX, p[0]);
+          minY = Math.min(minY, p[1]);
+          maxY = Math.max(maxY, p[1]);
+        }
+        diag = Math.hypot(maxX - minX, maxY - minY);
+      }
+      const closeDist = Math.max(CLOSE_DIST, diag * 0.09);
+      const closed =
+        cpts.length > 4 &&
+        Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
+      if (closed && cpts.length >= MIN_PTS) {
+        const fitted = perfectClosedShape(e, cpts);
+        if (fitted) {
+          els[i] = fitted.el;
+          mergeStats(stats, fitted.label);
+          continue;
+        }
+      }
+      const kept = closed
+        ? simplifyRing(cpts, TOLERANCE)
+        : simplify(cpts, TOLERANCE);
+      if (kept.length < 2 || kept.length === raw.length) {
+        continue; // 已经足够直，保留原样
+      }
+      if (!closed && kept.length === 2) {
+        els[i] = {
+          type: "line",
+          id: e.id,
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+          points: [
+            { x: round1(first[0]), y: round1(first[1]) },
+            { x: round1(last[0]), y: round1(last[1]) },
+          ],
+          stroke: e.stroke,
+          strokeWidth: e.strokeWidth,
+        };
+        mergeStats(stats, "完善为直线");
+        continue;
+      }
+      els[i] = rebuildFreehand(e, kept, ox, oy);
+      mergeStats(stats, "画笔拉直");
+      continue;
+    }
+    if (e.type !== "path" || !e.path) {
       continue;
     }
     if (!isPenPath(e.path)) {

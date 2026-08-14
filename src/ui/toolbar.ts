@@ -26,6 +26,8 @@ export type ToolbarHandlers = {
   onUndo: () => void;
   onRedo: () => void;
   onBeautify: () => void;
+  /** 选中图形应用手绘风格（rough.js） */
+  onSketchify: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
@@ -99,6 +101,13 @@ export class Toolbar {
       "tool-btn beautify",
     );
 
+    const sketchBtn = makeButton(
+      "✎ 手绘",
+      "手绘风格：选中图形转手绘外观（rough.js，可复现）",
+      () => handlers.onSketchify(),
+      "tool-btn sketch",
+    );
+
     const zoomGroup = document.createElement("div");
     zoomGroup.className = "tool-group";
     zoomGroup.append(
@@ -118,7 +127,7 @@ export class Toolbar {
       makeButton("🤖", "AI 助手", () => handlers.onToggleAI()),
     );
 
-    container.append(this.toolGroup, editGroup, beautifyBtn, zoomGroup, fileGroup);
+    container.append(this.toolGroup, editGroup, beautifyBtn, sketchBtn, zoomGroup, fileGroup);
 
     // ---- 样式面板 ----
     const panel = document.createElement("div");

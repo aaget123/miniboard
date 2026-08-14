@@ -75,7 +75,15 @@ export type CustomToolInput = {
 };
 
 export type ElementData = {
-  type: "rect" | "ellipse" | "line" | "arrow" | "path" | "text" | "image";
+  type:
+    | "rect"
+    | "ellipse"
+    | "line"
+    | "arrow"
+    | "path"
+    | "freehand"
+    | "text"
+    | "image";
   /** 稳定标识（AI 编辑模式按 id 引用元素），序列化时自动分配 */
   id?: string;
   x: number;
@@ -87,7 +95,13 @@ export type ElementData = {
   stroke?: string;
   strokeWidth?: number;
   points?: { x: number; y: number }[]; // line/arrow: 相对元素原点的坐标点
-  path?: string; // path: SVG 路径字符串（相对坐标）
+  path?: string; // path: SVG 路径字符串（相对坐标）；freehand: 笔迹轮廓 path（与 penPoints 同基准）
+  /** freehand: 原始笔迹采样点 [x, y, pressure?]（与 path 同基准），形状识别/重绘用 */
+  penPoints?: number[][];
+  /** freehand: perfect-freehand 的 size（笔画直径） */
+  penSize?: number;
+  /** rough 手绘风格：seed 保证抖动可复现，original 记录原几何类型（供还原/AI 理解） */
+  rough?: { seed: number; original?: string };
   text?: string;
   fontSize?: number;
   url?: string; // image: dataURL 或路径

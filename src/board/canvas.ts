@@ -15,6 +15,8 @@ import type { BoardStyle, ElementData } from "../types";
 import { History } from "./history";
 import { TextOverlay } from "./textedit";
 import type { ToolRegistry } from "./registry";
+import { isSketchable, sketchifyData } from "./rough";
+import { penSizeOf, strokeOutlinePath } from "./stroke";
 
 export const BACKGROUND = "#1e1f22";
 export const TEXT_FONT_SIZE = 18;
@@ -192,30 +194,12 @@ function numOf(value: unknown): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-/** 画笔路径：点序折线 + 中点二次贝塞尔平滑 */
-function buildPenPath(points: number[][]): string {
-  const pts = [points[0]];
-  for (let i = 1; i < points.length; i++) {
-    const [px, py] = points[i];
-    const [lx, ly] = pts[pts.length - 1];
-    if (Math.hypot(px - lx, py - ly) >= 1.5) {
-      pts.push([px, py]);
-    }
-  }
-  if (pts.length < 2) {
-    return "";
-  }
-  let d = `M ${pts[0][0]} ${pts[0][1]}`;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [mx, my] = [
-      (pts[i][0] + pts[i + 1][0]) / 2,
-      (pts[i][1] + pts[i + 1][1]) / 2,
-    ];
-    d += ` Q ${pts[i][0]} ${pts[i][1]} ${mx} ${my}`;
-  }
-  const last = pts[pts.length - 1];
-  d += ` L ${last[0]} ${last[1]}`;
-  return d;
+/** 判断 leafer 元素是否为 freehand 笔迹（Path 渲染 + 采样点元数据） */
+function isFreehandEl(el: UI): boolean {
+  return (
+    (el as unknown as { __freehandPoints?: unknown }).__freehandPoints !==
+    undefined
+  );
 }
 
 export class Board {
@@ -230,6 +214,8 @@ export class Board {
   private startX = 0;
   private startY = 0;
   private penPoints: number[][] = [];
+  /** 当前笔迹的 perfect-freehand size（直径，由笔画粗细换算） */
+  private penSize = 8;
   private history = new History();
   private textOverlay: TextOverlay;
   private historyTimer = 0;
@@ -471,16 +457,17 @@ export class Board {
       return;
     }
     const kind = this.opts.registry.getKind(this.tool);
-    // 画笔：自由笔迹（保留专有实现）
+    // 画笔：压力敏感笔迹（perfect-freehand 轮廓，填充渲染）
     if (kind === "freehand") {
       this.drawing = true;
       this.penPoints = [[px, py]];
       const style = this.opts.getStyle();
+      this.penSize = penSizeOf(style.strokeWidth);
       this.draft = new Path({
-        path: `M ${px} ${py}`,
-        stroke: style.stroke,
-        strokeWidth: style.strokeWidth,
-        fill: undefined,
+        path: strokeOutlinePath(this.penPoints, { size: this.penSize }),
+        fill: style.stroke,
+        stroke: undefined, // leafer 2.x 中 "none" 渲染为黑色实心，必须用 undefined
+        strokeWidth: style.strokeWidth, // 数据透传：笔画粗细随元素保存（整理/序列化读取）
         strokeCap: "round",
         strokeJoin: "round",
       });
@@ -614,9 +601,9 @@ export class Board {
     const kind = this.opts.registry.getKind(this.tool);
     if (kind === "freehand") {
       this.penPoints.push([px, py]);
-      const path = buildPenPath(this.penPoints);
+      const path = strokeOutlinePath(this.penPoints, { size: this.penSize });
       if (path) {
-        (this.draft as Path).path = path as string;
+        (this.draft as Path).path = path;
       }
       return;
     }
@@ -665,6 +652,11 @@ export class Board {
     if (this.draft) {
       if (this.isTinyDraft()) {
         this.draft.remove();
+      } else if (this.opts.registry.getKind(this.tool) === "freehand") {
+        // 笔迹转正：挂载采样点元数据，序列化时输出 freehand 元素（供整理识别/重绘）
+        const t = this.draft as unknown as Record<string, unknown>;
+        t.__freehandPoints = this.penPoints.map((p) => [...p]);
+        t.__penSize = this.penSize;
       }
       this.draft = null;
       this.draftData = null;
@@ -882,6 +874,8 @@ export class Board {
       if (partial.stroke !== undefined) {
         if (el instanceof Text) {
           el.fill = partial.stroke; // Text 主色 = fill，保持"点颜色改文字色"直觉
+        } else if (isFreehandEl(el)) {
+          el.fill = partial.stroke; // 笔迹颜色 = 轮廓填充色（渲染通道是 fill）
         } else {
           el.stroke = partial.stroke; // 描边独立变色，不影响填充
         }
@@ -910,6 +904,55 @@ export class Board {
     this.scheduleHistory();
     this.opts.onMutated();
     return true;
+  }
+
+  /**
+   * 手绘风格：把选中的标准图形（矩形/椭圆/直线/箭头/标准多边形）转为 rough.js 手绘外观。
+   * 替换为 path 元素，抖动 seed 随数据保存（可复现）；锁定/文本/图片/笔迹跳过。
+   * 返回是否发生了转换。
+   */
+  sketchifySelection(): boolean {
+    const list = this.selectedList.filter((el) => !el.locked);
+    if (!list.length) {
+      return false;
+    }
+    let changed = 0;
+    for (const el of list) {
+      if (
+        this.isEditorInternal(el) ||
+        el instanceof Text ||
+        el instanceof Image
+      ) {
+        continue;
+      }
+      const d = this.elementToData(el);
+      if (!d || !isSketchable(d)) {
+        continue;
+      }
+      const sketched = sketchifyData(d);
+      if (!sketched) {
+        continue;
+      }
+      const replaced = this.dataToElement({
+        ...d,
+        type: "path",
+        path: sketched.path,
+        rough: { seed: sketched.seed, original: d.type },
+      });
+      if (!replaced) {
+        continue;
+      }
+      // 位置/旋转/样式/稳定 id 已随数据透传，替换 tree 节点
+      el.remove();
+      this.app.tree.add(replaced);
+      changed++;
+    }
+    if (changed) {
+      this.editor.cancel();
+      this.commitHistory();
+      this.opts.onMutated();
+    }
+    return changed > 0;
   }
 
   // ================= 右键菜单 =================
@@ -1249,7 +1292,11 @@ export class Board {
       return false;
     }
     if (patch.stroke !== undefined) {
-      el.stroke = patch.stroke || undefined;
+      if (isFreehandEl(el)) {
+        el.fill = patch.stroke || undefined;
+      } else {
+        el.stroke = patch.stroke || undefined;
+      }
     }
     if (patch.strokeWidth !== undefined) {
       el.strokeWidth = patch.strokeWidth;
@@ -1418,12 +1465,33 @@ export class Board {
       };
     }
     if (el instanceof Path) {
+      const t = el as unknown as {
+        __freehandPoints?: number[][];
+        __penSize?: number;
+        __rough?: { seed: number; original?: string };
+      };
+      if (t.__freehandPoints) {
+        // freehand 笔迹：颜色走 stroke 通道（渲染通道是 fill），采样点用于整理识别/重绘
+        return {
+          ...base,
+          type: "freehand",
+          width: el.width ?? 0,
+          height: el.height ?? 0,
+          path: el.path as string,
+          penPoints: t.__freehandPoints,
+          penSize: t.__penSize,
+          stroke: colorOf(el.fill),
+          fill: undefined,
+        };
+      }
       return {
         ...base,
         type: "path",
         width: el.width ?? 0,
         height: el.height ?? 0,
         path: el.path as string,
+        fill: colorOf(el.fill),
+        rough: t.__rough,
       };
     }
     if (el instanceof Text) {
@@ -1493,14 +1561,34 @@ export class Board {
           points: d.points,
           endArrow: "triangle",
         });
-      case "path":
-        return new Path({
+      case "path": {
+        const el = new Path({
           ...common,
           path: d.path,
-          fill: undefined,
+          fill: fill,
           strokeCap: "round",
           strokeJoin: "round",
         });
+        // 手绘风格元素：seed 随数据透传到实例（撤销/重载后序列化不丢）
+        if (d.rough) {
+          (el as unknown as Record<string, unknown>).__rough = d.rough;
+        }
+        return el;
+      }
+      case "freehand": {
+        const el = new Path({
+          ...common,
+          path: d.path,
+          fill: d.stroke,
+          stroke: undefined,
+          strokeCap: "round",
+          strokeJoin: "round",
+        });
+        const t = el as unknown as Record<string, unknown>;
+        t.__freehandPoints = d.penPoints;
+        t.__penSize = d.penSize;
+        return el;
+      }
       case "text":
         return new Text({
           ...common,

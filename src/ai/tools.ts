@@ -100,7 +100,13 @@ export function describeCanvas(board: Board, ids?: string[]): string {
     if (el.text != null) d.text = el.text;
     if (typeof el.fontSize === "number") d.fontSize = el.fontSize;
     if (el.type === "path" && el.path) {
-      d.path = describePath(el.path, el.width ?? 0, el.height ?? 0);
+      // rough 手绘风格元素：直接用原几何类型描述（C 命令密集，路径段数无意义）
+      d.path = el.rough?.original
+        ? `手绘风格的${el.rough.original}（rough seed=${el.rough.seed}）`
+        : describePath(el.path, el.width ?? 0, el.height ?? 0);
+    }
+    if (el.type === "freehand") {
+      d.path = `手绘笔迹（${(el.penPoints ?? []).length} 个采样点）`;
     }
     if ((el.type === "line" || el.type === "arrow") && el.points) {
       d.points = el.points.slice(0, 2).map((p) => ({ x: round1(p.x), y: round1(p.y) }));

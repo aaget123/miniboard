@@ -109,6 +109,14 @@ async function main() {
         `✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`,
       );
     },
+    onSketchify: () => {
+      const ok = board.sketchifySelection();
+      toast(
+        ok
+          ? "✎ 已应用手绘风格（选中图形）"
+          : "✎ 请先选中图形（矩形/椭圆/直线/箭头等）",
+      );
+    },
     onZoomIn: () => board.zoomIn(),
     onZoomOut: () => board.zoomOut(),
     onZoomReset: () => board.zoomReset(),
