@@ -224,29 +224,6 @@ input[type="color"] {
   cursor: grabbing;
 }
 
-/* ---------- 文本编辑浮层 ---------- */
-#text-editor {
-  position: absolute;
-  z-index: 20;
-  display: none;
-}
-
-#text-editor textarea {
-  width: 200px;
-  min-height: 40px;
-  padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.97);
-  color: #111;
-  border: 2px solid var(--accent);
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 16px;
-  line-height: 1.4;
-  resize: both;
-  outline: none;
-  box-shadow: var(--shadow);
-}
-
 /* ---------- 状态栏 ---------- */
 #statusbar {
   position: absolute;

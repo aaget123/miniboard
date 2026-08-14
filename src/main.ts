@@ -26,7 +26,9 @@ function toast(message: string) {
 function isEditableTarget(target: EventTarget | null) {
   return (
     target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement
+    target instanceof HTMLTextAreaElement ||
+    // contentEditable（leafer 文本内联编辑器）：编辑中的快捷键交给输入框原生处理
+    (target instanceof HTMLElement && target.isContentEditable)
   );
 }
 

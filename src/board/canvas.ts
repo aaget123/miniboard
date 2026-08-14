@@ -5,15 +5,17 @@ import {
   EditorMoveEvent,
   EditorScaleEvent,
   EditorRotateEvent,
+  InnerEditorEvent,
 } from "@leafer-in/editor";
 // 注册导出插件（app.export 需要），须在创建 App 前导入
 import "@leafer-in/export";
 // 注册箭头插件（Line 的 endArrow 属性需要）
 import "@leafer-in/arrow";
+// 注册文本内联编辑器（新建/双击文字后就地 WYSIWYG 编辑），须在创建 App 前导入
+import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { BoardStyle, ElementData } from "../types";
 import { History } from "./history";
-import { TextOverlay } from "./textedit";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
 import { penSizeOf, strokeOutlinePath } from "./stroke";
@@ -217,7 +219,6 @@ export class Board {
   /** 当前笔迹的 perfect-freehand size（直径，由笔画粗细换算） */
   private penSize = 8;
   private history = new History();
-  private textOverlay: TextOverlay;
   private historyTimer = 0;
   private lastTapTime = 0;
   private lastTapTarget: unknown = null;
@@ -263,7 +264,6 @@ export class Board {
       },
     });
     this.editor = (this.app as AppWithEditor).editor;
-    this.textOverlay = new TextOverlay(container);
     this.bindEvents();
     // 自研滚轮缩放：以鼠标位置为不动点
     (this.app.canvas.view as HTMLElement).addEventListener(
@@ -290,16 +290,21 @@ export class Board {
     this.editor.on(EditorMoveEvent.MOVE, () => this.scheduleHistory());
     this.editor.on(EditorScaleEvent.SCALE, () => this.scheduleHistory());
     this.editor.on(EditorRotateEvent.ROTATE, () => this.scheduleHistory());
+    // 文本内联编辑关闭：空文本即删；内容变化才入历史（对齐 fabric object:modified 时机）
+    this.editor.on(InnerEditorEvent.CLOSE, (e) => this.onInnerEditorClose(e));
   }
 
   // ================= 工具 =================
 
   setTool(tool: string) {
     this.tool = tool;
+    // 内联文本编辑中：先关闭编辑器（触发收尾：空文本删除/历史提交）
+    if (this.editor.innerEditor) {
+      this.editor.closeInnerEditor();
+    }
     if (tool !== "select") {
       this.editor.cancel();
     }
-    this.textOverlay.close();
     // 切换工具时终止未完成的拖拽/框选/擦除，并同步光标
     this.panning = false;
     this.erasing = false;
@@ -393,7 +398,9 @@ export class Board {
   // ================= 绘制交互 =================
 
   private onDown(e: IPointerEvent) {
-    if (this.textOverlay.isOpen) {
+    // 内联文本编辑中：交互交由 TextEditor 处理
+    // （点击输入框内定位光标，点击外部由它负责关闭编辑）
+    if (this.editor.innerEditor) {
       return;
     }
     // 手型平移：拖动整块画布（zoomLayer），用 app 坐标差值即可
@@ -453,7 +460,19 @@ export class Board {
       return;
     }
     if (this.tool === "text") {
-      this.openTextEditor(px, py, null);
+      // 新建空文本元素并立即就地编辑（WYSIWYG：输入实时显示在画布上）
+      const style = this.opts.getStyle();
+      const el = new Text({
+        x: px,
+        y: py,
+        text: "",
+        fontSize: TEXT_FONT_SIZE,
+        // 文字主色 = fill，跟随填充通道颜色
+        fill: style.fillColor || style.stroke,
+      });
+      (el as unknown as Record<string, unknown>).__textBeforeEdit = "";
+      this.app.tree.add(el);
+      this.openTextEdit(el);
       return;
     }
     const kind = this.opts.registry.getKind(this.tool);
@@ -688,6 +707,10 @@ export class Board {
   // ================= 文本编辑 =================
 
   private onTap(e: IPointerEvent) {
+    // 内联文本编辑中：单击/双击均不参与（避免干扰编辑框内的光标定位）
+    if (this.editor.innerEditor) {
+      return;
+    }
     const now = Date.now();
     const isDouble =
       this.lastTapTarget === e.target && now - this.lastTapTime < 300;
@@ -700,40 +723,34 @@ export class Board {
       e.target instanceof Text
     ) {
       const el = e.target as unknown as Text;
-      this.openTextEditor(el.x ?? 0, el.y ?? 0, el);
+      this.openTextEdit(el);
     }
   }
 
-  private openTextEditor(worldX: number, worldY: number, existing: Text | null) {
-    const rect = (this.app.config.view as HTMLElement).getBoundingClientRect();
-    const inner = this.app.tree.getInnerPoint({ x: worldX, y: worldY });
-    const zoom = this.app.tree.zoomLayer?.scaleX ?? 1;
-    this.textOverlay.open({
-      innerX: rect.left + inner.x,
-      innerY: rect.top + inner.y,
-      initialText: existing?.text != null ? String(existing.text) : "",
-      fontSize:
-        (typeof existing?.fontSize === "number"
-          ? existing.fontSize
-          : TEXT_FONT_SIZE) * zoom,
-      onSubmit: (text) => {
-        if (existing) {
-          existing.text = text;
-        } else {
-          this.app.tree.add(
-            new Text({
-              x: worldX,
-              y: worldY,
-              text,
-              fontSize: TEXT_FONT_SIZE,
-              // 文字主色 = fill，跟随填充通道颜色
-              fill: this.opts.getStyle().fillColor || this.opts.getStyle().stroke,
-            }),
-          );
-        }
-        this.commitHistory();
-      },
-    });
+  /** 打开文本内联编辑：先选中元素（openInnerEditor 仅对单选状态生效），并聚焦覆盖层 */
+  private openTextEdit(el: Text) {
+    (el as unknown as Record<string, unknown>).__textBeforeEdit = String(
+      el.text ?? "",
+    );
+    this.editor.openInnerEditor(el, "TextEditor", true);
+    // TextEditor 只设置 selection 不 focus：主动聚焦，否则键盘输入被全局快捷键拦截
+    document.querySelector<HTMLElement>(".leafer-text-editor")?.focus();
+  }
+
+  /** 文本内联编辑关闭：空文本删除元素；内容变化才提交历史 */
+  private onInnerEditorClose(e: { editTarget?: unknown }) {
+    const t = e.editTarget;
+    if (!(t instanceof Text)) {
+      return;
+    }
+    const before = (t as unknown as Record<string, unknown>).__textBeforeEdit;
+    const text = String(t.text ?? "");
+    if (!text.trim()) {
+      // 空文本：元素未入过历史，直接移除不留痕
+      t.remove();
+    } else if (text !== before) {
+      this.commitHistory();
+    }
   }
 
   // ================= 选择命中 =================
