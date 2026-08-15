@@ -13,6 +13,12 @@
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
     "fs:allow-write-file",
-    "fs:allow-read-file"
+    "fs:allow-read-file",
+    "fs:allow-remove",
+    { "identifier": "fs:create-app-specific-dirs", "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPLOCALDATA/**" }] },
+    { "identifier": "fs:allow-read-text-file", "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPLOCALDATA/**" }] },
+    { "identifier": "fs:allow-write-text-file", "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPLOCALDATA/**" }] },
+    { "identifier": "fs:allow-write-file", "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPLOCALDATA/**" }] },
+    { "identifier": "fs:allow-remove", "allow": [{ "path": "$APPDATA/**" }, { "path": "$APPLOCALDATA/**" }] }
   ]
 }

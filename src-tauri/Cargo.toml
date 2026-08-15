@@ -2,13 +2,11 @@
 name = "miniboard"
 version = "0.1.0"
 description = "Miniboard - 极简离线白板"
-authors = ["miniboard"]
-license = ""
-repository = ""
+authors = ["aaget123"]
+license = "MIT"
+repository = "https://github.com/aaget123/miniboard"
 edition = "2021"
 rust-version = "1.77.2"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "miniboard_lib"
