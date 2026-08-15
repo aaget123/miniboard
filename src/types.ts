@@ -48,11 +48,13 @@ export type GeneratorContext = {
 export type ToolKind = "drag" | "click" | "freehand" | "interaction";
 
 /**
- * 工具栏分组：shape = 收进“形状”下拉按钮（矩形/椭圆等基础形状），
- * select = 收进“选择”下拉按钮（框选/套索等选中类工具），
+ * 工具栏分组：select = 选中类工具（选择/框选/套索）收进“选择”下拉按钮，
+ * shape = 收进“形状”下拉按钮（矩形/椭圆等基础形状），
  * ai = 收进“AI 工具”下拉按钮（AI 生成的自定义工具默认归入）。
+ * 分组按钮为拆分式：点击主按钮直接使用组内当前工具，点击右侧箭头展开菜单切换。
+ * 内置三个分组；用户可在设置中自建分组（id 形如 "cg-*"），工具可被拖入自定义分组。
  */
-export type ToolGroup = "shape" | "select" | "ai";
+export type ToolGroup = "select" | "shape" | "ai" | (string & {});
 
 /** 统一功能定义：内置工具与 AI 生成工具共用 */
 export type ToolDef = {

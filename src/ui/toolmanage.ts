@@ -40,12 +40,6 @@ export class ToolManageDialog {
   // ---------- 构建 ----------
 
   private build(root: HTMLElement) {
-    const hint = document.createElement("div");
-    hint.className = "ai-modal-hint";
-    hint.textContent =
-      "管理 AI 生成的自定义工具：修改名称/图标/快捷键/分组或删除；内置工具只读。生成器代码由 AI 在编辑模式维护。";
-    root.appendChild(hint);
-
     // ---- 列表视图 ----
     this.listEl = document.createElement("div");
     this.listEl.className = "tm-list";

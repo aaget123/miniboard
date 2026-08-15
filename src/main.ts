@@ -152,9 +152,13 @@ async function main() {
   });
 
   // 设置弹窗（☰ → ⚙）：页签式——外观（主题+网格）/ 工具栏布局 / AI 模型 / AI 工具 / 系统提示词
-  const settingsDialog = new SettingsDialog(board, registry, (visible) =>
-    toolbar.setVisible(visible),
-  );
+  // 布局变更 → toolbar.setVisible；自定义分组增删 → toolbar.setCustomGroups 同步顶栏
+  const settingsDialog = new SettingsDialog(board, registry, (visible, defs) => {
+    toolbar.setVisible(visible);
+    if (defs) {
+      toolbar.setCustomGroups(defs);
+    }
+  });
   // 按已保存主题初始化画布背景（默认跟随系统）
   applyTheme(loadTheme(), board);
   // 系统主题变化监听：偏好为“跟随系统”时自动切换实际主题

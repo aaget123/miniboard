@@ -45,7 +45,8 @@ export type IconName =
   | "sun"
   | "monitor"
   | "download"
-  | "caret";
+  | "caret"
+  | "grip";
 
 type IconDef = {
   /** 内部元素（path/circle/rect 等），stroke 风格统一由外层 svg 属性控制 */
@@ -134,6 +135,15 @@ const DEFS: Record<IconName, IconDef> = {
   monitor: { body: `<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>` },
   download: { body: `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>` },
   caret: { body: `<path d="m6 9 6 6 6-6"/>` },
+  grip: {
+    body:
+      `<circle cx="9" cy="6" r="1.4" fill="currentColor" stroke="none"/>` +
+      `<circle cx="15" cy="6" r="1.4" fill="currentColor" stroke="none"/>` +
+      `<circle cx="9" cy="12" r="1.4" fill="currentColor" stroke="none"/>` +
+      `<circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/>` +
+      `<circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/>` +
+      `<circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>`,
+  },
 };
 
 /** 生成完整 SVG 字符串（默认 16px，描边风格跟随 currentColor） */

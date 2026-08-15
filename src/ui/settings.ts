@@ -13,9 +13,43 @@ import {
 } from "../ai/prompts";
 import type { AiConfig, AiMode, AiProfile, AiProfileStore } from "../ai/types";
 import type { ToolRegistry } from "../board/registry";
+import type { ToolDef, ToolGroup } from "../types";
 import { ToolManageDialog } from "./toolmanage";
 import { iconHTML } from "./icons";
-import { loadToolbarPref, renderToolIcon, saveToolbarPref } from "./toolbar";
+import {
+  computeToolbarNodes,
+  effectiveGroup,
+  FILL_ICON_HTML,
+  foldIntoMore,
+  groupLabel,
+  groupMarker,
+  isGroupMarker,
+  loadCustomGroups,
+  loadGroupOrderPref,
+  loadGroupOverrides,
+  loadToolbarPref,
+  markerGroup,
+  renderToolIcon,
+  saveCustomGroups,
+  saveGroupOrderPref,
+  saveGroupOverrides,
+  saveToolbarPref,
+  type CustomGroupDef,
+} from "./toolbar";
+
+/** 预览条按钮（无交互，仅展示真实顶栏外观；tool-btn 类供溢出折叠算法识别） */
+function makePreviewBtn(
+  icon: string,
+  title: string,
+  cls = "tb-preview-item",
+): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = cls;
+  btn.title = title;
+  renderToolIcon(btn, icon);
+  return btn;
+}
 
 // ---------- 画布网格 ----------
 
@@ -29,13 +63,6 @@ export type GridSettings = {
 };
 
 const DEFAULT_GRID: GridSettings = { size: 20, show: false, snap: false };
-
-/** 工具分组中文标签（工具栏页签列表徽章用） */
-const GROUP_LABEL: Record<string, string> = {
-  shape: "形状",
-  select: "选择",
-  ai: "AI 工具",
-};
 
 /** 读取网格设置（localStorage，数据损坏/缺失时回退默认值） */
 export function loadGrid(): GridSettings {
@@ -181,6 +208,23 @@ export class SettingsDialog {
   private promptStatusEl!: HTMLElement;
   // 工具栏布局：当前勾选平铺顶栏的工具 id 数组（顺序即显示顺序）
   private toolbarVisible: string[] = [];
+  /** 布局偏好（null = 默认布局）：预览按此渲染，与真实顶栏 1:1 */
+  private toolbarPref: string[] | null = null;
+  /** 分组收纳区展开状态（默认折叠，与顶栏下拉一致） */
+  private toolbarGroupOpen = new Map<string, boolean>();
+  /** 分组顺序（三个分组在顶栏中的显示顺序；拖动分组头调整） */
+  private toolbarGroupOrder: ToolGroup[] = [];
+  /** 自定义分组定义（用户自建；新建/删除/重命名后保存并同步顶栏） */
+  private customGroups: CustomGroupDef[] = loadCustomGroups();
+  /** 工具归属覆盖：toolId → 分组 id（拖到自定义分组头时写入，内置组清除） */
+  private groupOverrides: Record<string, string> = loadGroupOverrides();
+  /** 分组名称编辑状态：null=无；new=新建；rename=重命名该组（渲染内联输入行） */
+  private groupEdit:
+    | { mode: "new" }
+    | { mode: "rename"; id: string; initial: string }
+    | null = null;
+  /** 待确认删除的自定义分组 id（删除按钮两段式确认，避免误删） */
+  private confirmDelete: string | null = null;
   private toolbarListEl!: HTMLElement;
   private toolbarCountEl!: HTMLElement;
   private toolbarPreviewEl!: HTMLElement;
@@ -188,8 +232,11 @@ export class SettingsDialog {
   constructor(
     private board: Board,
     private registry: ToolRegistry,
-    /** 工具栏布局变更回调（main.ts 转 toolbar.setVisible 持久化并重渲染顶栏） */
-    private onToolbarChange: (visible: string[] | null) => void,
+    /** 工具栏布局变更回调（main.ts 转 toolbar.setVisible；自定义组定义变化时一并同步顶栏） */
+    private onToolbarChange: (
+      visible: string[] | null,
+      customGroups?: CustomGroupDef[],
+    ) => void,
   ) {
     this.build();
   }
@@ -208,6 +255,7 @@ export class SettingsDialog {
     // 提示词编辑区与当前存储同步
     this.loadPromptEditor();
     // 工具栏布局与当前偏好同步（工具可能被 AI 增删，每次打开重建列表）
+    this.toolbarPref = loadToolbarPref();
     this.renderToolbarPane();
     if (tab) {
       this.switchTab(tab);
@@ -480,12 +528,6 @@ export class SettingsDialog {
     this.panes.set("toolbar", toolbarPane);
     modal.appendChild(toolbarPane);
 
-    const toolbarHint = document.createElement("div");
-    toolbarHint.className = "ai-modal-hint";
-    toolbarHint.textContent =
-      "勾选「平铺顶栏」的工具按钮会直接显示在顶部工具栏；未勾选的分组工具收纳进对应下拉（形状▾/选择▾），未勾选的其他工具隐藏。拖拽勾选行可调整平铺顺序。";
-    toolbarPane.appendChild(toolbarHint);
-
     // 实时预览：当前平铺顺序所见即所得（勾选/排序即时刷新）
     this.toolbarPreviewEl = document.createElement("div");
     this.toolbarPreviewEl.className = "tb-preview";
@@ -524,12 +566,6 @@ export class SettingsDialog {
     promptPane.hidden = true;
     this.panes.set("prompt", promptPane);
     modal.appendChild(promptPane);
-
-    const promptHint = document.createElement("div");
-    promptHint.className = "ai-modal-hint";
-    promptHint.textContent =
-      "AI 助手按当前模式使用对应系统提示词；编辑保存后对新对话生效，可随时恢复默认。";
-    promptPane.appendChild(promptHint);
 
     const promptModeRow = document.createElement("div");
     promptModeRow.className = "prompt-mode-row";
@@ -781,152 +817,722 @@ export class SettingsDialog {
   // ---------- 工具栏布局 ----------
 
   /**
-   * 重建「工具栏」页签列表：每行一个工具（图标 + 名称 + 分组/来源徽章 +
-   * 排序按钮 + 平铺复选框）。顺序 = 当前偏好顺序（无偏好时 = 默认布局的无分组顺序）。
+   * 重建「工具栏」页签：与顶栏同构分区展示——平铺区（拖拽排序）
+   * + 分组收纳区（折叠展示，与顶栏下拉一一对应）+ 隐藏区。
+   * 顺序 = 当前偏好顺序（无偏好时 = 默认布局的无分组顺序）。
    */
   private renderToolbarPane() {
     const pref = loadToolbarPref();
+    this.toolbarPref = pref;
     this.toolbarVisible = pref ?? this.defaultToolbarVisible();
+    // 分组顺序：偏好优先，缺失的组按注册表首次出现顺序补到末尾，自定义组最后
+    const order = loadGroupOrderPref() ?? [];
+    const overrides = loadGroupOverrides();
+    this.groupOverrides = overrides;
+    for (const t of this.registry.list()) {
+      const g = effectiveGroup(t, overrides);
+      if (g && !order.includes(g)) {
+        order.push(g);
+      }
+    }
+    for (const d of this.customGroups) {
+      if (!order.includes(d.id as ToolGroup)) {
+        order.push(d.id as ToolGroup);
+      }
+    }
+    this.toolbarGroupOrder = order;
     this.toolbarListEl.innerHTML = "";
-    // 勾选项按平铺顺序置顶显示，未勾选项按注册表顺序排后（所见即所得）
     const pinnedSet = new Set(this.toolbarVisible);
-    const pinned: NonNullable<ReturnType<ToolRegistry["getTool"]>>[] = [];
-    for (const id of this.toolbarVisible) {
-      const t = this.registry.getTool(id);
-      if (t) {
-        pinned.push(t);
+    // 平铺序列元素：工具 id 或分组标记（"g:select" = 顶栏该位置有一个完整分组按钮）
+    const rest = this.registry
+      .list()
+      .filter((t) => !pinnedSet.has(t.id));
+
+    // ---- 平铺区：勾选工具与分组按钮行，拖拽调整顺序 ----
+    const pinnedSection = document.createElement("div");
+    pinnedSection.className = "tb-section";
+    const pinnedTitle = document.createElement("div");
+    pinnedTitle.className = "tb-section-title";
+    // 计数只算工具，分组按钮单独标注（数字不虚高）
+    const pinnedTools = this.toolbarVisible.filter((x) => !isGroupMarker(x)).length;
+    const pinnedGroups = this.toolbarVisible.length - pinnedTools;
+    pinnedTitle.textContent = pinnedGroups
+      ? `平铺顶栏（${pinnedTools} 工具 + ${pinnedGroups} 分组按钮）：拖拽调整顺序`
+      : `平铺顶栏（${pinnedTools}）：拖拽调整顺序`;
+    pinnedSection.appendChild(pinnedTitle);
+    if (!this.toolbarVisible.length) {
+      const empty = document.createElement("div");
+      empty.className = "tb-section-empty";
+      empty.textContent =
+        "暂无平铺内容：勾选工具行「平铺顶栏」，或把下方分组头拖上来（保持分组整体）";
+      // 空平铺区也是拖放目标：拖入工具行平铺到开头（分组头不再拖入——平铺区与分组区分开）
+      empty.addEventListener("dragover", (e) => {
+        const src = e.dataTransfer?.getData("text/plain");
+        if (src && isGroupMarker(src)) {
+          return; // 分组头/分组按钮行禁止拖入平铺区（保持两区分开）
+        }
+        e.preventDefault();
+        empty.classList.add("drag-over");
+      });
+      empty.addEventListener("dragleave", () =>
+        empty.classList.remove("drag-over"),
+      );
+      empty.addEventListener("drop", (e) => {
+        e.preventDefault();
+        empty.classList.remove("drag-over");
+        const src = e.dataTransfer?.getData("text/plain");
+        if (!src) {
+          return;
+        }
+        const list = [...this.toolbarVisible];
+        if (list.includes(src)) {
+          return;
+        }
+        list.unshift(src);
+        this.toolbarVisible = list;
+        this.applyToolbarLayout();
+      });
+      pinnedSection.appendChild(empty);
+    }
+    for (const item of this.toolbarVisible) {
+      if (isGroupMarker(item)) {
+        // 分组按钮行：顶栏该位置显示完整分组按钮（不拆开）
+        const g = markerGroup(item) as ToolGroup;
+        const gTools = this.registry
+          .list()
+          .filter((t) => effectiveGroup(t, this.groupOverrides) === g);
+        if (gTools.length || this.customGroups.some((d) => d.id === g)) {
+          pinnedSection.appendChild(this.makeGroupPinnedRow(g, gTools));
+        }
+      } else {
+        const t = this.registry.getTool(item);
+        if (t) {
+          pinnedSection.appendChild(this.makeToolbarRow(t, true));
+        }
       }
     }
-    const rest = this.registry.list().filter((t) => !pinnedSet.has(t.id));
-    for (const t of [...pinned, ...rest]) {
-      const row = document.createElement("div");
-      row.className = "tb-row";
-      const pinnedRow = pinnedSet.has(t.id);
-      // 勾选项可拖拽排序（拖到目标行时插入其前）
-      row.draggable = pinnedRow;
-      if (pinnedRow) {
-        row.title = "拖拽调整平铺顺序，或使用 ↑↓ 微调";
+    this.toolbarListEl.appendChild(pinnedSection);
+
+    // ---- 分组收纳区：与顶栏下拉一一对应（按分组顺序），默认折叠展示，分组头可拖拽排序 ----
+    const groupTools = new Map<ToolGroup, ToolDef[]>();
+    for (const t of rest) {
+      const g = effectiveGroup(t, overrides);
+      if (!g) {
+        continue;
       }
-
-      const icon = document.createElement("span");
-      icon.className = "tb-row-icon";
-      renderToolIcon(icon, t.icon);
-      row.appendChild(icon);
-
-      const name = document.createElement("span");
-      name.className = "tb-row-name";
-      name.textContent = t.name;
-      name.title = t.title;
-      if (t.group) {
-        const g = document.createElement("span");
-        g.className = "tb-badge";
-        g.textContent = GROUP_LABEL[t.group];
-        name.appendChild(g);
+      const arr = groupTools.get(g) ?? [];
+      arr.push(t);
+      groupTools.set(g, arr);
+    }
+    // 分组区总标题 + 新建分组（自定义分组即使为空也显示，可拖入工具归组）
+    const groupsTitle = document.createElement("div");
+    groupsTitle.className = "tb-pane-title";
+    const gtText = document.createElement("span");
+    gtText.textContent =
+      "分组收纳区（顶栏下拉按钮）：拖拽分组头调序；工具行拖到分组头上收进该组";
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "tb-add-group-btn";
+    addBtn.title = "新建分组：创建后把工具行拖到分组头上即可归入";
+    addBtn.innerHTML = iconHTML("plus", 12) + "新建分组";
+    addBtn.addEventListener("click", () => this.createCustomGroup());
+    groupsTitle.append(gtText, addBtn);
+    this.toolbarListEl.appendChild(groupsTitle);
+    // 新建/重命名内联输入行（不依赖 window.prompt，Tauri WebView 不支持原生 prompt）
+    if (this.groupEdit) {
+      this.toolbarListEl.appendChild(this.makeGroupEditRow());
+    }
+    for (const g of this.toolbarGroupOrder) {
+      const tools = groupTools.get(g);
+      const isCustom = this.customGroups.some((d) => d.id === g);
+      if (!tools?.length && !isCustom) {
+        continue; // 内置空组（如暂无 AI 工具）不显示；自定义空组显示（可拖入工具）
       }
-      if (t.source === "custom") {
-        const b = document.createElement("span");
-        b.className = "tb-badge tb-badge-ai";
-        b.textContent = "AI";
-        name.appendChild(b);
-      }
-      row.appendChild(name);
-
-      // 排序按钮：仅在勾选列表中可用（置灰处理）
-      const idx = this.toolbarVisible.indexOf(t.id);
-      const upBtn = document.createElement("button");
-      upBtn.type = "button";
-      upBtn.className = "tb-move";
-      upBtn.textContent = "↑";
-      upBtn.title = "上移（平铺顺序）";
-      upBtn.disabled = !pinnedRow || idx === 0;
-      upBtn.addEventListener("click", () => this.moveToolbarItem(t.id, -1));
-      const downBtn = document.createElement("button");
-      downBtn.type = "button";
-      downBtn.className = "tb-move";
-      downBtn.textContent = "↓";
-      downBtn.title = "下移（平铺顺序）";
-      downBtn.disabled = !pinnedRow || idx === this.toolbarVisible.length - 1;
-      downBtn.addEventListener("click", () => this.moveToolbarItem(t.id, 1));
-      row.append(upBtn, downBtn);
-
-      const checkRow = document.createElement("label");
-      checkRow.className = "tb-check";
-      // 分组工具取消勾选 = 收进对应下拉（语义说明）
-      checkRow.title = t.group
-        ? `勾选：平铺顶栏；取消勾选：收进「${GROUP_LABEL[t.group]}▾」下拉`
-        : "勾选：平铺顶栏；取消勾选：从顶栏隐藏";
-      const box = document.createElement("input");
-      box.type = "checkbox";
-      box.checked = pinnedRow;
-      box.addEventListener("change", () => this.toggleToolbarItem(t.id, box.checked));
-      checkRow.append(document.createTextNode("平铺顶栏"), box);
-      row.appendChild(checkRow);
-
-      // 拖拽排序（仅勾选行）：拖到目标行时插入其前
-      if (pinnedRow) {
-        row.addEventListener("dragstart", (e) => {
-          e.dataTransfer?.setData("text/plain", t.id);
-          row.classList.add("dragging");
+      const section = document.createElement("div");
+      section.className = "tb-section";
+      const open = this.toolbarGroupOpen.get(g) ?? false;
+      const head = document.createElement("div");
+      head.className = "tb-group-head" + (open ? " open" : "");
+      head.draggable = true;
+      head.title = isCustom
+        ? "点击展开/折叠组内工具；拖拽调整顺序；右侧可重命名/删除"
+        : "点击展开/折叠组内工具；拖拽调整分组在顶栏中的顺序";
+      // 拖拽手柄：提示该分组整体可拖拽（拖动后顶栏分组按钮顺序同步变化）
+      const grip = document.createElement("span");
+      grip.className = "tb-grip tb-group-grip";
+      grip.title = "拖拽调整分组在顶栏中的顺序";
+      grip.innerHTML = iconHTML("grip", 12);
+      const gicon = document.createElement("span");
+      gicon.className = "tb-group-icon";
+      renderToolIcon(gicon, tools?.length ? tools[0].icon : "folder");
+      const gname = document.createElement("span");
+      gname.className = "tb-group-name";
+      gname.textContent = `${groupLabel(g, this.customGroups)}▾`;
+      const gdesc = document.createElement("span");
+      gdesc.className = "tb-group-desc";
+      gdesc.textContent = tools?.length
+        ? tools.map((t) => t.name).join(" / ")
+        : "（空分组：拖入工具归组）";
+      const caret = document.createElement("span");
+      caret.className = "tb-group-caret";
+      caret.textContent = open ? "▾" : "▸";
+      // 自定义分组操作：重命名 / 删除（内置组无）
+      const ops = document.createElement("span");
+      ops.className = "tb-group-ops";
+      if (isCustom) {
+        const rename = document.createElement("button");
+        rename.type = "button";
+        rename.className = "tb-group-op";
+        rename.title = "重命名分组";
+        rename.innerHTML = iconHTML("pencil", 11);
+        rename.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.renameCustomGroup(g);
         });
-        row.addEventListener("dragend", () => row.classList.remove("dragging"));
-        row.addEventListener("dragover", (e) => e.preventDefault());
-        row.addEventListener("drop", (e) => {
-          e.preventDefault();
-          const src = e.dataTransfer?.getData("text/plain");
-          if (!src || src === t.id) {
-            return;
-          }
-          const list = [...this.toolbarVisible];
-          const from = list.indexOf(src);
-          const to = list.indexOf(t.id);
-          if (from < 0 || to < 0) {
-            return;
-          }
-          list.splice(from, 1);
-          list.splice(to, 0, src);
-          this.toolbarVisible = list;
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className =
+          "tb-group-op tb-group-op-danger" +
+          (this.confirmDelete === g ? " tb-group-op-confirm" : "");
+        const deleting = this.confirmDelete === g;
+        del.title = deleting
+          ? "再次点击确认删除（组内工具回到原分组）"
+          : "删除分组（组内工具回到原分组）";
+        del.innerHTML = deleting
+          ? iconHTML("trash", 11) + "确认删除"
+          : iconHTML("trash", 11);
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.deleteCustomGroup(g);
+        });
+        ops.append(rename, del);
+      }
+      head.append(grip, gicon, gname, gdesc, ops, caret);
+      head.addEventListener("click", () => {
+        this.toolbarGroupOpen.set(g, !open);
+        this.renderToolbarPane();
+      });
+      // 拖拽排序：把该分组移到目标分组前（同时作用于顶栏分组按钮顺序）；
+      // 也可拖到上方平铺区：在该位置插入完整分组按钮（保持分组整体，不拆开）
+      head.addEventListener("dragstart", (e) => {
+        e.dataTransfer?.setData("text/plain", groupMarker(g));
+        head.classList.add("dragging");
+      });
+      head.addEventListener("dragend", () => {
+        head.classList.remove("dragging", "drag-over");
+      });
+      head.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        head.classList.add("drag-over");
+      });
+      head.addEventListener("dragleave", () =>
+        head.classList.remove("drag-over"),
+      );
+      head.addEventListener("drop", (e) => {
+        e.preventDefault();
+        head.classList.remove("drag-over");
+        const raw = e.dataTransfer?.getData("text/plain");
+        if (!raw) {
+          return;
+        }
+        if (isGroupMarker(raw)) {
+          // 平铺区中的分组按钮行拖回分组区：移除标记（组按钮回到末尾/偏好位置）
+          this.toolbarVisible = this.toolbarVisible.filter((x) => x !== raw);
           this.applyToolbarLayout();
-        });
+          return;
+        }
+        if (this.registry.getTool(raw)) {
+          // 平铺工具拖到分组头：归入该组并取消平铺
+          // 自定义组写入归属覆盖；内置组清除覆盖（恢复注册默认归属）
+          this.setToolGroup(raw, isCustom ? g : undefined);
+          this.toggleToolbarItem(raw, false);
+          return;
+        }
+        const src = raw as ToolGroup;
+        if (src === g) {
+          return;
+        }
+        const list = [...this.toolbarGroupOrder];
+        const from = list.indexOf(src);
+        const to = list.indexOf(g);
+        if (from < 0 || to < 0) {
+          return;
+        }
+        list.splice(from, 1);
+        list.splice(to, 0, src);
+        this.toolbarGroupOrder = list;
+        saveGroupOrderPref(list);
+        this.renderToolbarPane();
+        // 通知顶栏重渲染（分组按钮顺序变化）
+        this.onToolbarChange(this.toolbarPref);
+      });
+      section.appendChild(head);
+      if (open) {
+        const body = document.createElement("div");
+        body.className = "tb-group-body";
+        for (const t of tools ?? []) {
+          body.appendChild(this.makeToolbarRow(t, false));
+        }
+        section.appendChild(body);
       }
-
-      this.toolbarListEl.appendChild(row);
+      this.toolbarListEl.appendChild(section);
     }
+
+    // ---- 隐藏区：无分组且未勾选（顶栏不可见） ----
+    const hidden = rest.filter((t) => !t.group);
+    if (hidden.length) {
+      const section = document.createElement("div");
+      section.className = "tb-section";
+      const title = document.createElement("div");
+      title.className = "tb-section-title";
+      title.textContent = `已隐藏（${hidden.length}）：取消勾选后顶栏不可见`;
+      section.appendChild(title);
+      for (const t of hidden) {
+        section.appendChild(this.makeToolbarRow(t, false));
+      }
+      this.toolbarListEl.appendChild(section);
+    }
+
     this.updateToolbarCount();
     this.renderToolbarPreview();
   }
 
-  /** 动态计数：已平铺数量与建议上限对比，超限标红警告 */
-  private updateToolbarCount() {
-    const n = this.toolbarVisible.length;
-    this.toolbarCountEl.textContent =
-      n > 8
-        ? `已平铺 ${n} 个工具（超出 8 个，顶栏将自动折叠多余工具进“更多▾”）`
-        : `已平铺 ${n} 个工具（建议不超过 8 个；超出部分自动折叠进“更多▾”）`;
-    this.toolbarCountEl.classList.toggle("warn", n > 8);
+  /**
+   * 单行工具：拖拽手柄 + 图标 + 名称/徽章 + 去向徽章 + 平铺复选框。
+   * 所有行均可拖拽：拖到平铺区行 = 排序（未平铺则自动勾选并插入该位置）；
+   * 拖到分组区/隐藏区行 = 取消平铺（分组工具收进对应下拉，其他工具隐藏）。
+   */
+  private makeToolbarRow(t: ToolDef, pinnedRow: boolean): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "tb-row";
+    row.draggable = true;
+    row.title = pinnedRow
+      ? "拖拽调整平铺顺序；拖到下方分组区可取消平铺"
+      : "拖到上方「平铺顶栏」区即可平铺到顶栏";
+    // 拖拽手柄（所有行可拖；分组/隐藏行拖到平铺区 = 平铺）
+    const grip = document.createElement("span");
+    grip.className = "tb-grip";
+    grip.title = pinnedRow
+      ? "拖拽排序；拖到下方分组区取消平铺"
+      : "拖到上方「平铺顶栏」区即可平铺";
+    grip.innerHTML = iconHTML("grip", 12);
+    row.appendChild(grip);
+
+    const icon = document.createElement("span");
+    icon.className = "tb-row-icon";
+    renderToolIcon(icon, t.icon);
+    row.appendChild(icon);
+
+    const name = document.createElement("span");
+    name.className = "tb-row-name";
+    name.textContent = t.name;
+    name.title = t.title;
+    const grp = effectiveGroup(t, this.groupOverrides);
+    if (grp) {
+      const g = document.createElement("span");
+      g.className = "tb-badge";
+      g.textContent = groupLabel(grp, this.customGroups);
+      name.appendChild(g);
+    }
+    if (t.source === "custom") {
+      const b = document.createElement("span");
+      b.className = "tb-badge tb-badge-ai";
+      b.textContent = "AI";
+      name.appendChild(b);
+    }
+    row.appendChild(name);
+
+    // 去向徽章：勾选=平铺顶栏；未勾选分组=收进对应下拉；未勾选其他=从顶栏隐藏
+    const dest = document.createElement("span");
+    const grp2 = effectiveGroup(t, this.groupOverrides);
+    dest.className = pinnedRow
+      ? "tb-badge tb-badge-bar"
+      : grp2
+        ? "tb-badge tb-badge-drop"
+        : "tb-badge tb-badge-hidden";
+    dest.textContent = pinnedRow
+      ? "顶栏"
+      : grp2
+        ? `收纳于 ${groupLabel(grp2, this.customGroups)}▾`
+        : "隐藏";
+    dest.title = pinnedRow
+      ? "平铺在顶部工具栏，可拖拽调整顺序"
+      : grp2
+        ? `未平铺：点击顶栏「${groupLabel(grp2, this.customGroups)}▾」下拉仍可使用`
+        : "未平铺且不在任何分组：顶栏不可见";
+    row.appendChild(dest);
+
+    const checkRow = document.createElement("label");
+    checkRow.className = "tb-check";
+    // 勾选/取消平铺：勾选顶栏；取消勾选：分组工具收进对应下拉，其他隐藏
+    checkRow.title = grp
+      ? `勾选：平铺顶栏；取消勾选：收进「${groupLabel(grp, this.customGroups)}▾」下拉`
+      : "勾选：平铺顶栏；取消勾选：从顶栏隐藏";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = pinnedRow;
+    box.addEventListener("change", () =>
+      this.toggleToolbarItem(t.id, box.checked),
+    );
+    checkRow.append(document.createTextNode("平铺顶栏"), box);
+    row.appendChild(checkRow);
+
+    // 拖拽：所有行可拖（平铺区 ⇄ 分组/隐藏区双向）
+    row.addEventListener("dragstart", (e) => {
+      e.dataTransfer?.setData("text/plain", t.id);
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging", "drag-over");
+    });
+    row.addEventListener("dragover", (e) => {
+      if (pinnedRow) {
+        const src = e.dataTransfer?.getData("text/plain");
+        if (src && isGroupMarker(src)) {
+          return; // 分组头/分组按钮行禁止拖入平铺区（保持平铺区与分组区分开）
+        }
+      }
+      e.preventDefault();
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      const src = e.dataTransfer?.getData("text/plain");
+      if (!src) {
+        return;
+      }
+      if (pinnedRow) {
+        // 目标在平铺区：工具行/分组按钮行 → 排序或插入该位置（分组保持整体，不拆开）
+        this.dropIntoPinned(src, t.id);
+      } else if (isGroupMarker(src)) {
+        // 平铺区中的分组按钮行拖回分组/隐藏区：移除标记（组按钮回到末尾/偏好位置）
+        this.toolbarVisible = this.toolbarVisible.filter((x) => x !== src);
+        this.applyToolbarLayout();
+      } else if (this.toolbarVisible.includes(src)) {
+        // 目标在分组/隐藏区：源已平铺 → 取消勾选（分组工具收进对应下拉，其他隐藏）
+        this.toggleToolbarItem(src, false);
+      }
+    });
+    return row;
   }
 
-  /** 实时预览：按平铺顺序渲染图标序列（含常驻的样式/填充开关示意） */
+  /**
+   * 平铺区插入/排序：src 可为工具 id 或分组标记（"g:xxx"），插入到目标序列项位置。
+   * 分组标记整体移动（分组按钮保持完整，不拆开）；from < to 时先删后插需回退一位。
+   */
+  private dropIntoPinned(src: string, targetItem: string) {
+    if (!src || src === targetItem) {
+      return;
+    }
+    const list = [...this.toolbarVisible];
+    const to = list.indexOf(targetItem);
+    if (to < 0) {
+      return;
+    }
+    const from = list.indexOf(src);
+    if (from >= 0) {
+      list.splice(from, 1);
+      list.splice(from < to ? to - 1 : to, 0, src);
+    } else {
+      list.splice(to, 0, src);
+    }
+    this.toolbarVisible = list;
+    this.applyToolbarLayout();
+  }
+
+  /** 设置工具归属分组（自定义组写入覆盖；内置组传 undefined 清除覆盖恢复默认），并同步顶栏 */
+  private setToolGroup(id: string, group: ToolGroup | undefined) {
+    const next = { ...this.groupOverrides };
+    if (group) {
+      next[id] = group;
+    } else {
+      delete next[id];
+    }
+    this.groupOverrides = next;
+    saveGroupOverrides(next);
+    this.renderToolbarPane();
+    this.onToolbarChange(this.toolbarPref);
+  }
+
+  /** 新建自定义分组：打开内联名称输入行（创建后即使为空也可拖入工具归组） */
+  private createCustomGroup() {
+    this.confirmDelete = null;
+    this.groupEdit = { mode: "new" };
+    this.renderToolbarPane();
+  }
+
+  /** 新建/重命名分组的内联输入行：回车/确定提交，Esc/取消关闭 */
+  private makeGroupEditRow(): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "tb-group-edit";
+    const editing = this.groupEdit!;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 24;
+    input.placeholder =
+      editing.mode === "new" ? "分组名称（如：常用）" : "重命名分组";
+    if (editing.mode === "rename") {
+      input.value = editing.initial;
+      input.select();
+    }
+    const commit = () => {
+      const name = input.value.trim();
+      this.groupEdit = null;
+      if (!name) {
+        this.renderToolbarPane();
+        return;
+      }
+      if (editing.mode === "new") {
+        const id = `cg-${Date.now().toString(36)}`;
+        this.customGroups = [...this.customGroups, { id, name }];
+        saveCustomGroups(this.customGroups);
+        // 新组默认展开，方便立即拖入工具
+        this.toolbarGroupOpen.set(id, true);
+      } else {
+        const def = this.customGroups.find((d) => d.id === editing.id);
+        if (def && def.name !== name) {
+          def.name = name;
+          saveCustomGroups(this.customGroups);
+        }
+      }
+      this.renderToolbarPane();
+      this.onToolbarChange(this.toolbarPref, this.customGroups);
+    };
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "tb-group-op tb-group-edit-ok";
+    ok.textContent = "确定";
+    ok.addEventListener("click", commit);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "tb-group-op";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", () => {
+      this.groupEdit = null;
+      this.renderToolbarPane();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        commit();
+      } else if (e.key === "Escape") {
+        this.groupEdit = null;
+        this.renderToolbarPane();
+      }
+    });
+    row.append(input, ok, cancel);
+    // 渲染完成后聚焦输入框
+    requestAnimationFrame(() => input.focus());
+    return row;
+  }
+
+  /** 重命名自定义分组：打开内联输入行（预填当前名称） */
+  private renameCustomGroup(id: string) {
+    const def = this.customGroups.find((d) => d.id === id);
+    if (!def) {
+      return;
+    }
+    this.confirmDelete = null;
+    this.groupEdit = { mode: "rename", id, initial: def.name };
+    this.renderToolbarPane();
+  }
+
+  /** 删除自定义分组：两段式确认（第二次点击执行）；组内工具清除归属覆盖回原分组 */
+  private deleteCustomGroup(id: string) {
+    if (this.confirmDelete !== id) {
+      this.confirmDelete = id;
+      this.renderToolbarPane();
+      return;
+    }
+    this.confirmDelete = null;
+    this.customGroups = this.customGroups.filter((d) => d.id !== id);
+    saveCustomGroups(this.customGroups);
+    const next = { ...this.groupOverrides };
+    for (const [tid, g] of Object.entries(next)) {
+      if (g === id) {
+        delete next[tid];
+      }
+    }
+    this.groupOverrides = next;
+    saveGroupOverrides(next);
+    this.toolbarGroupOpen.delete(id);
+    this.renderToolbarPane();
+    this.onToolbarChange(this.toolbarPref, this.customGroups);
+  }
+
+  /**
+   * 平铺区中的分组按钮行：表示顶栏该位置有一个完整分组按钮（收纳组内工具，不拆开）。
+   * 可拖拽排序（平铺区内），可拖回分组区或取消勾选移除（组按钮回到末尾/偏好位置）。
+   */
+  private makeGroupPinnedRow(g: ToolGroup, tools: ToolDef[]): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "tb-row tb-group-pinned";
+    row.draggable = true;
+    row.title =
+      "顶栏分组按钮（整体）：拖拽调整位置；拖回下方分组区或取消勾选可移除";
+
+    const grip = document.createElement("span");
+    grip.className = "tb-grip";
+    grip.title = "拖拽调整分组按钮在顶栏中的位置";
+    grip.innerHTML = iconHTML("grip", 12);
+    row.appendChild(grip);
+
+    const icon = document.createElement("span");
+    icon.className = "tb-row-icon";
+    renderToolIcon(icon, tools[0].icon);
+    row.appendChild(icon);
+
+    const name = document.createElement("span");
+    name.className = "tb-row-name";
+    name.textContent = `${groupLabel(g, this.customGroups)}▾`;
+    name.title = "顶栏该位置显示完整分组按钮，点击箭头展开组内工具";
+    row.appendChild(name);
+
+    const dest = document.createElement("span");
+    dest.className = "tb-badge tb-badge-bar";
+    dest.textContent = "顶栏分组";
+    dest.title = `顶栏分组按钮：收纳 ${tools.length} 个工具，保持整体不拆开`;
+    row.appendChild(dest);
+
+    const checkRow = document.createElement("label");
+    checkRow.className = "tb-check";
+    checkRow.title = "取消勾选：顶栏移除该分组按钮（组内工具未平铺时按钮回到末尾）";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = true;
+    box.addEventListener("change", () => {
+      this.toolbarVisible = this.toolbarVisible.filter(
+        (x) => x !== groupMarker(g),
+      );
+      this.applyToolbarLayout();
+    });
+    checkRow.append(document.createTextNode("平铺顶栏"), box);
+    row.appendChild(checkRow);
+
+    row.addEventListener("dragstart", (e) => {
+      e.dataTransfer?.setData("text/plain", groupMarker(g));
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging", "drag-over");
+    });
+    row.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      row.classList.add("drag-over");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+    row.addEventListener("drop", (e) => {
+      e.preventDefault();
+      row.classList.remove("drag-over");
+      const src = e.dataTransfer?.getData("text/plain");
+      if (!src) {
+        return;
+      }
+      this.dropIntoPinned(src, groupMarker(g));
+    });
+    return row;
+  }
+
+  /** 动态计数：已平铺工具/分组按钮数量与建议上限对比，超限标红警告 */
+  private updateToolbarCount() {
+    const total = this.toolbarVisible.length;
+    // 分组按钮也占顶栏位置（计入折叠预算），但与工具分开标注
+    const tools = this.toolbarVisible.filter((x) => !isGroupMarker(x)).length;
+    const groups = total - tools;
+    const warn = total > 8;
+    const detail = groups
+      ? `已平铺 ${tools} 个工具 + ${groups} 个分组按钮（共 ${total} 项）`
+      : `已平铺 ${tools} 个工具`;
+    this.toolbarCountEl.textContent = warn
+      ? `${detail}：超出 8 项，顶栏将自动折叠多余工具进“更多▾”`
+      : `${detail}（建议不超过 8 项；超出部分自动折叠进“更多▾”）`;
+    this.toolbarCountEl.classList.toggle("warn", warn);
+  }
+
+  /**
+   * 实时预览：与真实顶栏同一布局计算（含分组下拉按钮/更多▾折叠/常驻样式与填充），
+   * 任何勾选/排序组合下所见即所得。
+   */
   private renderToolbarPreview() {
     this.toolbarPreviewEl.innerHTML = "";
     const label = document.createElement("span");
     label.className = "tb-preview-label";
     label.textContent = "顶栏预览：";
     this.toolbarPreviewEl.appendChild(label);
-    for (const id of this.toolbarVisible) {
-      const t = this.registry.getTool(id);
-      if (!t) {
-        continue;
+
+    // 工具序列条（与真实顶栏 .tool-group 同构；样式/填充常驻按钮在条外，不参与折叠）
+    const bar = document.createElement("span");
+    bar.className = "tb-preview-bar";
+    this.toolbarPreviewEl.appendChild(bar);
+
+    const nodes = computeToolbarNodes(
+      this.registry,
+      this.toolbarPref,
+      this.groupOverrides,
+      this.customGroups,
+    );
+    const toolButtons = new Map<string, HTMLButtonElement>();
+    for (const node of nodes) {
+      if (node.kind === "tool") {
+        const t = this.registry.getTool(node.id);
+        if (!t) {
+          continue;
+        }
+        const btn = makePreviewBtn(t.icon, t.name);
+        btn.dataset.tool = t.id; // 溢出折叠时识别工具 id
+        bar.appendChild(btn);
+        toolButtons.set(t.id, btn);
+      } else if (node.kind === "group") {
+        // 分组拆分按钮（预览）：图标 = 组内第一个工具的图标（与真实顶栏默认态一致），箭头带分隔线
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "tb-preview-item tb-preview-group";
+        item.title = `${groupLabel(node.group, this.customGroups)}▾：收纳 ${node.tools
+          .map((t) => t.name)
+          .join(" / ")}`;
+        const gicon = document.createElement("span");
+        gicon.className = "tb-preview-gicon";
+        renderToolIcon(gicon, node.tools[0]?.icon ?? "");
+        const caret = document.createElement("span");
+        caret.className = "tb-preview-caret";
+        caret.innerHTML = iconHTML("caret", 9);
+        item.append(gicon, caret);
+        bar.appendChild(item);
       }
-      const item = document.createElement("span");
-      item.className = "tb-preview-item";
-      item.title = t.name;
-      renderToolIcon(item, t.icon);
-      this.toolbarPreviewEl.appendChild(item);
     }
-    const tail = document.createElement("span");
-    tail.className = "tb-preview-tail";
-    tail.textContent = "＋样式 / 填充开关（常驻）";
-    this.toolbarPreviewEl.appendChild(tail);
+
+    // 更多▾：与真实顶栏同一折叠算法（预览条放不下时末尾平铺工具自动收进，hover 可见提示）
+    const moreBtn = document.createElement("button");
+    moreBtn.type = "button";
+    moreBtn.className = "tb-preview-item tb-preview-more";
+    moreBtn.style.display = "none";
+    moreBtn.title = "更多▾：顶栏放不下时自动收纳的工具";
+    moreBtn.innerHTML = iconHTML("menu", 13);
+    bar.appendChild(moreBtn);
+    const moreMenu = document.createElement("span");
+    moreMenu.className = "tb-preview-more-menu";
+    moreMenu.hidden = true;
+    this.toolbarPreviewEl.appendChild(moreMenu);
+    const moreItems = new Map<string, HTMLButtonElement>();
+    foldIntoMore(bar, bar, moreBtn, moreMenu, toolButtons, moreItems, "");
+    if (moreItems.size) {
+      moreBtn.title = `更多▾：顶栏放不下时自动收纳（${[...moreItems.keys()]
+        .map((id) => this.registry.getTool(id)?.name ?? id)
+        .join(" / ")}）`;
+    }
+
+    // 常驻按钮：样式 / 填充开关（与真实顶栏一致位于工具序列之后）
+    const styleItem = document.createElement("span");
+    styleItem.className = "tb-preview-item tb-preview-const";
+    styleItem.title = "样式（常驻）：描边/填充颜色与粗细";
+    styleItem.innerHTML = iconHTML("sliders", 13);
+    this.toolbarPreviewEl.appendChild(styleItem);
+    const fillItem = document.createElement("span");
+    fillItem.className = "tb-preview-item tb-preview-const";
+    fillItem.title = "填充开关（常驻）";
+    fillItem.innerHTML = FILL_ICON_HTML;
+    this.toolbarPreviewEl.appendChild(fillItem);
   }
 
   /** 默认布局：无分组工具全部平铺（与未自定义时的顶栏一致） */
@@ -940,6 +1546,7 @@ export class SettingsDialog {
   /** 应用当前布局：持久化并通知顶栏重渲染（空列表 = 恢复默认） */
   private applyToolbarLayout() {
     const visible = this.toolbarVisible.length ? [...this.toolbarVisible] : null;
+    this.toolbarPref = visible;
     saveToolbarPref(visible);
     this.onToolbarChange(visible);
     this.renderToolbarPane();
@@ -957,26 +1564,16 @@ export class SettingsDialog {
     this.applyToolbarLayout();
   }
 
-  /** 排序：在平铺列表中上移/下移一位 */
-  private moveToolbarItem(id: string, dir: -1 | 1) {
-    const idx = this.toolbarVisible.indexOf(id);
-    const target = idx + dir;
-    if (idx < 0 || target < 0 || target >= this.toolbarVisible.length) {
-      return;
-    }
-    const list = [...this.toolbarVisible];
-    [list[idx], list[target]] = [list[target], list[idx]];
-    this.toolbarVisible = list;
-    this.applyToolbarLayout();
-  }
-
-  /** 恢复默认布局：清除偏好（存 null 而非默认数组，与“未自定义过”状态一致）并重置顶栏 */
+  /** 恢复默认布局：清除平铺与分组顺序偏好（存 null 而非默认数组，与“未自定义过”状态一致）并重置顶栏 */
   private resetToolbarLayout() {
     if (!window.confirm("恢复默认工具栏布局？当前自定义的平铺/排序将被清除。")) {
       return;
     }
     this.toolbarVisible = this.defaultToolbarVisible();
+    this.toolbarPref = null;
     saveToolbarPref(null);
+    saveGroupOrderPref(null);
+    this.toolbarGroupOrder = [];
     this.onToolbarChange(null);
     this.renderToolbarPane();
   }

@@ -139,10 +139,13 @@ const builtinGenerators: Record<
 };
 
 /** 内置工具元数据（顺序即工具栏显示顺序；交互/笔迹工具保留 canvas 专有实现）
- * icon 为 src/ui/icons.ts 的图标名（SVG 渲染），与 AI 工具字符图标区分 */
+ * icon 为 src/ui/icons.ts 的图标名（SVG 渲染），与 AI 工具字符图标区分
+ * 选中类工具（选择/框选/套索）归入 select 组：顶栏显示为拆分按钮，
+ * 点击主按钮直接使用当前选择工具（默认“选择”），右侧箭头展开切换框选/套索；
+ * 画布移动保持平铺（高频且不与选中类工具互相替代） */
 const BUILTIN: ToolDef[] = [
-  { id: "select", name: "选择", icon: "select", title: "选择 (V)", shortcut: "v", kind: "interaction", source: "builtin" },
-  { id: "hand", name: "画布移动", icon: "hand", title: "画布移动 (H)", shortcut: "h", kind: "interaction", group: "select", source: "builtin" },
+  { id: "select", name: "选择", icon: "select", title: "选择 (V)", shortcut: "v", kind: "interaction", group: "select", source: "builtin" },
+  { id: "hand", name: "画布移动", icon: "hand", title: "画布移动 (H)", shortcut: "h", kind: "interaction", source: "builtin" },
   { id: "marquee", name: "框选", icon: "marquee", title: "框选 (M)", shortcut: "m", kind: "interaction", group: "select", source: "builtin" },
   { id: "lasso", name: "套索选中", icon: "lasso", title: "套索选中 (Q)", shortcut: "q", kind: "interaction", group: "select", source: "builtin" },
   { id: "pen", name: "画笔", icon: "pen", title: "画笔 (P)", shortcut: "p", kind: "freehand", source: "builtin" },

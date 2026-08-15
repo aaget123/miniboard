@@ -798,6 +798,23 @@ export class Board {
       // 用 app 坐标做命中检测（el.hit 内部按世界矩阵转换，缩放/平移下也准确）
       const hit = this.hitTest({ x: e.x ?? 0, y: e.y ?? 0 });
       if (hit) {
+        // 连续点击选取：Ctrl/Cmd 切换选中（点未选中的加入、点已选中的移出），
+        // Shift 累加（只加不减）；无修饰键保持单选替换（现有行为）
+        if (e.ctrlKey || e.metaKey) {
+          if (this.editor.hasItem(hit)) {
+            this.editor.removeItem(hit); // 点已选中的元素 → 取消选中
+          } else {
+            // 点未选中的元素 → 加入多选（addItem 内部跳过锁定元素）
+            this.editor.addItem(hit);
+          }
+          return;
+        }
+        if (e.shiftKey) {
+          if (!this.editor.hasItem(hit) && !hit.locked) {
+            this.editor.addItem(hit); // 累加：只加不减
+          }
+          return;
+        }
         this.editor.target = hit ?? undefined;
         return;
       }
@@ -808,7 +825,15 @@ export class Board {
       // 未命中元素本体：点击点落在选中元素包围盒内时，
       // 手动拖动整个选择（覆盖选中框内空白区域）
       if (this.editor.list.length && this.pointInSelection(e.x ?? 0, e.y ?? 0)) {
+        // 修饰键点击包围盒内空白：保持选择不变（连续选取中误点空白不丢失已选内容）
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+          return;
+        }
         this.beginDragSelection(px, py);
+        return;
+      }
+      // 修饰键点击空白：保持当前选择（连续多选过程中误点空白不取消全部）
+      if (e.ctrlKey || e.metaKey || e.shiftKey) {
         return;
       }
       this.editor.target = undefined;
