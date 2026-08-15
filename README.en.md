@@ -3,7 +3,7 @@
 **English** | [简体中文](./README.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/badge/Release-v0.1.0-blue.svg)](https://github.com/aaget123/miniboard/releases)
+[![Release](https://img.shields.io/github/v/release/aaget123/miniboard.svg)](https://github.com/aaget123/miniboard/releases)
 [![CI](https://github.com/aaget123/miniboard/actions/workflows/test.yml/badge.svg)](https://github.com/aaget123/miniboard/actions)
 
 A **local-first, fully offline** hand-drawn whiteboard. Built with Tauri 2 and leafer-ui. All project data and AI-generated tools are stored on your own disk (customizable directory) — no cloud dependency.
