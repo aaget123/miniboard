@@ -12,11 +12,7 @@
 
 ## 📸 界面截图
 
-<!-- TODO: 添加应用截图（建议 1-2 张：主界面 + AI 助手面板），示例：
-![主界面](docs/screenshot-main.png)
--->
-
-> 截图待补充。
+![Miniboard 主界面](docs/screenshots/miniboard.png)
 
 ## ✨ 特性
 
