@@ -90,22 +90,252 @@ function describePath(path: string, w: number, h: number): string {
   return `开放路径（直线 ${lines} 段 + 曲线 ${curves} 段）`;
 }
 
+/** 世界坐标矩形区域（与元素 x/y 同基准；get_canvas 的 bounds/viewport 过滤用） */
+export type CanvasRegion = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+/**
+ * 元素的世界坐标 AABB（含 rotation 四角；line/arrow 取 points 绝对坐标端点）。
+ * 区域过滤与网格索引共用；与 svg.ts 内容包围盒的几何口径一致。
+ */
+function elementBounds(e: ElementData): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
+  if ((e.type === "line" || e.type === "arrow") && e.points?.length) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of e.points) {
+      const a = localToCanvas(e, p);
+      minX = Math.min(minX, a.x);
+      minY = Math.min(minY, a.y);
+      maxX = Math.max(maxX, a.x);
+      maxY = Math.max(maxY, a.y);
+    }
+    return { minX, minY, maxX, maxY };
+  }
+  const w = e.width ?? 0;
+  const h = e.height ?? 0;
+  const cx = w / 2;
+  const cy = h / 2;
+  const rad = ((e.rotation ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [lx, ly] of [
+    [0, 0],
+    [w, 0],
+    [w, h],
+    [0, h],
+  ] as const) {
+    const dx = lx - cx;
+    const dy = ly - cy;
+    const px = e.x + dx * cos - dy * sin + cx;
+    const py = e.y + dx * sin + dy * cos + cy;
+    minX = Math.min(minX, px);
+    minY = Math.min(minY, py);
+    maxX = Math.max(maxX, px);
+    maxY = Math.max(maxY, py);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** 元素 AABB 是否与区域相交 */
+function inRegion(
+  b: { minX: number; minY: number; maxX: number; maxY: number },
+  r: CanvasRegion,
+): boolean {
+  return (
+    b.minX <= r.maxX && b.maxX >= r.minX && b.minY <= r.maxY && b.maxY >= r.minY
+  );
+}
+
+/** 九宫格区域名（固定展示顺序：行优先，左上 → 右下） */
+const REGION_ORDER = [
+  "左上",
+  "上中",
+  "右上",
+  "左中",
+  "中心",
+  "右中",
+  "左下",
+  "下中",
+  "右下",
+] as const;
+
+/**
+ * 元素中心 → 3×3 语义区域（左/中/右 × 上/中/下，按内容包围盒均分）：
+ * 把原始坐标抽象成“左上/中心/右下”等人类可读空间词汇，降低模型心算坐标差的负担；
+ * 包围盒退化为点（单元素/单行）时自动归入“中心”。
+ */
+function regionOf(
+  el: ElementData,
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+): string {
+  const w = box.maxX - box.minX;
+  const h = box.maxY - box.minY;
+  const cx = el.x + (el.width ?? 0) / 2;
+  const cy = el.y + (el.height ?? 0) / 2;
+  const col = cx < box.minX + w / 3 ? 0 : cx > box.maxX - w / 3 ? 2 : 1;
+  const row = cy < box.minY + h / 3 ? 0 : cy > box.maxY - h / 3 ? 2 : 1;
+  return REGION_ORDER[row * 3 + col];
+}
+
+/**
+ * 被省略元素的空间分布（400px 网格，每格统计类型数量）：
+ * 全画布超过 MAX_DESCRIBE 截断时追加，让模型知道被省略的部分"在哪、是什么"，
+ * 从而用 ids/region 参数定向补齐。网格超过 24 格时放弃（摘要过长无意义）。
+ */
+function gridIndex(elements: ElementData[]): string {
+  const CELL = 400;
+  const bounds = elements.map(elementBounds);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const b of bounds) {
+    minX = Math.min(minX, b.minX);
+    minY = Math.min(minY, b.minY);
+    maxX = Math.max(maxX, b.maxX);
+    maxY = Math.max(maxY, b.maxY);
+  }
+  if (!Number.isFinite(minX)) {
+    return "";
+  }
+  const cols = Math.max(1, Math.ceil((maxX - minX) / CELL));
+  const rows = Math.max(1, Math.ceil((maxY - minY) / CELL));
+  if (cols * rows > 24) {
+    return "";
+  }
+  const grid = new Map<number, Map<string, number>>();
+  for (let i = 0; i < elements.length; i++) {
+    const b = bounds[i];
+    const cx = (b.minX + b.maxX) / 2;
+    const cy = (b.minY + b.maxY) / 2;
+    const col = Math.min(cols - 1, Math.floor((cx - minX) / CELL));
+    const row = Math.min(rows - 1, Math.floor((cy - minY) / CELL));
+    const cell = grid.get(row * cols + col) ?? new Map<string, number>();
+    cell.set(elements[i].type, (cell.get(elements[i].type) ?? 0) + 1);
+    grid.set(row * cols + col, cell);
+  }
+  const parts: string[] = [];
+  for (const [key, cell] of [...grid.entries()].sort((a, b) => a[0] - b[0])) {
+    const col = key % cols;
+    const row = Math.floor(key / cols);
+    const x0 = Math.round(minX + col * CELL);
+    const y0 = Math.round(minY + row * CELL);
+    const desc = [...cell.entries()]
+      .map(([t, n]) => `${TYPE_LABELS[t] ?? t}${n}`)
+      .join("、");
+    parts.push(`[x${x0},y${y0}]区：${desc}`);
+  }
+  return `被省略元素的分布（每格 ${CELL}px，格角坐标为区域最小值）：${parts.join("；")}。`;
+}
+
 /**
  * 把画布序列化为紧凑 JSON 描述，供 LLM 理解内容：
  * - path 只保留路径段数（原始 SVG 路径 token 太大），手绘笔迹给出识别形状
  * - image 不包含 dataURL 本体，只保留尺寸
  * - line/arrow 的 points 输出画布绝对坐标（写回时系统自动换算回局部坐标）
- * - 元素过多时截断（最多 MAX_DESCRIBE 个）；显式传 ids（@选区）时不截断
- * - 返回内容前附带整体摘要（元素统计、内容范围、背景色），帮助模型理解布局
+ * - 元素过多时截断（最多 MAX_DESCRIBE 个，截断部分附带空间网格索引）；
+ *   显式传 ids（@选区）或 region（bounds/viewport 过滤）时不截断
+ * - 返回内容前附带整体摘要：元素统计、内容范围、空间分布（九宫格区域计数）、
+ *   坐标系说明、region 字段语义、当前视口（位置与缩放）、背景色
+ * - 每个元素附 region 字段：中心在内容包围盒 3×3 均分中的位置（如“左上/中心/右下”），
+ *   把原始坐标抽象为空间词汇，降低模型心算坐标差的负担（借鉴手绘代理的空间上下文做法）
  */
-export function describeCanvas(board: Board, ids?: string[]): string {
+export function describeCanvas(
+  board: Board,
+  ids?: string[],
+  region?: CanvasRegion | null,
+): string {
   const full = board.serialize();
   const all = ids?.length
     ? full.filter((e) => e.id && ids.includes(e.id))
-    : full;
-  const limited = ids?.length ? all : all.slice(0, MAX_DESCRIBE);
+    : region
+      ? full.filter((e) => inRegion(elementBounds(e), region))
+      : full;
+  const limited = ids?.length || region ? all : all.slice(0, MAX_DESCRIBE);
   // 按 (y, x) 排序，让模型按空间顺序读取元素而非 z 序
   const els = [...limited].sort((a, b) => a.y - b.y || a.x - b.x);
+  // 内容包围盒（与摘要“内容范围”同基准）：region 标签与空间分布摘要共用
+  let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+  if (els.length) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const e of els) {
+      minX = Math.min(minX, e.x);
+      maxX = Math.max(maxX, e.x + (e.width ?? 0));
+      minY = Math.min(minY, e.y);
+      maxY = Math.max(maxY, e.y + (e.height ?? 0));
+    }
+    box = { minX, minY, maxX, maxY };
+  }
+  // 相对位置摘要（text 找最近图形元素）：数量适中时才生成，避免文本过长与 O(n²) 开销
+  const withNear = els.length <= 120;
+  const centers = new Map(els.map((e) => [e, { x: e.x + (e.width ?? 0) / 2, y: e.y + (e.height ?? 0) / 2 }]));
+  const nearestAnchor = (el: ElementData): string | null => {
+    if (!withNear) {
+      return null;
+    }
+    const c = centers.get(el);
+    if (!c) {
+      return null;
+    }
+    let best: { d: number; dir: string; label: string } | null = null;
+    for (const other of els) {
+      if (other === el || other.type === "text") {
+        continue;
+      }
+      const o = centers.get(other);
+      if (!o) {
+        continue;
+      }
+      const dx = o.x - c.x;
+      const dy = o.y - c.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 500 || (best && d >= best.d)) {
+        continue;
+      }
+      const dir =
+        Math.abs(dx) > Math.abs(dy) * 1.5
+          ? dx > 0
+            ? "右侧"
+            : "左侧"
+          : Math.abs(dy) > Math.abs(dx) * 1.5
+            ? dy > 0
+              ? "下方"
+              : "上方"
+            : dx > 0
+              ? dy > 0
+                ? "右下方"
+                : "右上方"
+              : dy > 0
+                ? "左下方"
+                : "左上方";
+      best = {
+        d,
+        dir,
+        label: `${TYPE_LABELS[other.type] ?? other.type}(${other.id ?? "?"})`,
+      };
+    }
+    return best
+      ? `${best.label} ${best.dir} ${Math.round(best.d)}px`
+      : null;
+  };
   const compact = els.map((el) => {
     const d: Record<string, unknown> = {
       id: el.id,
@@ -143,14 +373,23 @@ export function describeCanvas(board: Board, ids?: string[]): string {
     if (el.type === "image") {
       d.image = `图片 ${round1(el.width ?? 0)}x${round1(el.height ?? 0)}`;
     }
+    if (el.type === "text") {
+      // 空间关系速查：最近图形元素的方位与距离，省去模型心算坐标差
+      const near = nearestAnchor(el);
+      if (near) d.near = near;
+    }
     if (el.bindStart || el.bindEnd) {
       d.boundTo = [el.bindStart, el.bindEnd].filter(Boolean).join("、");
     }
     if (el.locked) d.locked = true;
+    // 意图：AI 创建时自报（为何创建此元素）；历史/用户元素无此字段
+    if (el.intent) d.intent = el.intent;
+    // 区域标签：元素中心在内容包围盒 3×3 均分中的位置，省去模型心算坐标差
+    if (box) d.region = regionOf(el, box);
     return d;
   });
-  const over = ids?.length ? 0 : full.length - MAX_DESCRIBE;
-  // 摘要：全画布统计 + 返回集合的内容范围 + 背景色
+  const over = ids?.length || region ? 0 : full.length - MAX_DESCRIBE;
+  // 摘要：全画布统计 + 返回集合的内容范围 + 坐标系/视口说明 + 背景色
   const counts = new Map<string, number>();
   for (const e of full) {
     counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
@@ -161,29 +400,54 @@ export function describeCanvas(board: Board, ids?: string[]): string {
   let summary = `画布共 ${full.length} 个元素：${typeDesc}。`;
   if (ids?.length) {
     summary += `（本次返回其中 ${all.length} 个）`;
+  } else if (region) {
+    summary += `（本次返回区域内 ${all.length} 个）`;
   }
-  if (els.length) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
+  if (box) {
+    summary += ` 内容范围 x ${Math.round(box.minX)}~${Math.round(box.maxX)}，y ${Math.round(box.minY)}~${Math.round(box.maxY)}。`;
+    // 空间分布：按区域统计元素数量，让模型一眼看到内容集中在哪、哪里空旷
+    const dist = new Map<string, number>();
     for (const e of els) {
-      minX = Math.min(minX, e.x);
-      maxX = Math.max(maxX, e.x + (e.width ?? 0));
-      minY = Math.min(minY, e.y);
-      maxY = Math.max(maxY, e.y + (e.height ?? 0));
+      const r = regionOf(e, box);
+      dist.set(r, (dist.get(r) ?? 0) + 1);
     }
-    summary += ` 内容范围 x ${Math.round(minX)}~${Math.round(maxX)}，y ${Math.round(minY)}~${Math.round(maxY)}。`;
+    const parts: string[] = [];
+    for (const name of REGION_ORDER) {
+      const n = dist.get(name);
+      if (n) {
+        parts.push(`${name} ${n} 个`);
+      }
+    }
+    if (parts.length) {
+      summary += ` 空间分布：${parts.join("、")}。`;
+    }
   }
-  summary += ` 背景色 ${board.backgroundColor}`;
+  summary += ` 背景色 ${board.backgroundColor}。`;
+  // 坐标系说明：防止模型把 y 轴方向理解反，导致布局建议上下颠倒
+  summary += ` 坐标系：左上角为原点 (0,0)，y 轴向下，单位 px。`;
+  // region 语义说明：元素数据里的 region 字段基于内容包围盒九宫格划分
+  if (box) {
+    summary += ` 每个元素的 region 字段表示其中心在内容包围盒 3×3 均分中的位置（左上/上中/右上/左中/中心/右中/左下/下中/右下）。`;
+  }
+  // intent 语义说明：仅当本次返回里有 AI 自报意图的元素时给出，防止模型把意图当推断
+  if (els.some((e) => e.intent)) {
+    summary += ` 部分元素带 intent 字段：AI 创建时自报的创建意图（为何创建此元素），可据此理解其用途；不带 intent 的元素没有该信息，不要猜测其用途。`;
+  }
+  // 视口信息：模型据此知道使用者当前看到哪里（含缩放），回答"屏幕/眼前/视口"相关内容时以此为准
+  const vp = board.viewport;
+  summary += ` 当前视口：中心 (${Math.round(vp.center.x)}, ${Math.round(vp.center.y)})，可见范围 x ${Math.round(vp.minX)}~${Math.round(vp.maxX)}，y ${Math.round(vp.minY)}~${Math.round(vp.maxY)}，缩放 ${Math.round(vp.scale * 100)}%。`;
   if (els.length === 0) {
     return ids?.length
       ? `${summary}（未找到这些 id 的元素）`
-      : `${summary}（画布是空的）`;
+      : region
+        ? `${summary}（该区域内没有元素）`
+        : `${summary}（画布是空的）`;
   }
-  return (
-    summary + "\n" + JSON.stringify(compact) + (over > 0 ? `\n（另有 ${over} 个元素已省略）` : "")
-  );
+  let tail = "\n" + JSON.stringify(compact);
+  if (over > 0) {
+    tail += `\n（另有 ${over} 个元素已省略：${gridIndex(full.slice(MAX_DESCRIBE))}）`;
+  }
+  return summary + tail;
 }
 
 // ================= 官方 leafer JSON 解析（create_elements 用） =================
@@ -227,6 +491,8 @@ function parseLeaferElement(
   const strokeWidth = numOf(obj.strokeWidth);
   // leafer 中 "none" 会渲染成黑色实心：无填充时省略字段
   const fill = obj.fill === "none" ? undefined : strOf(obj.fill);
+  // AI 自报的创建意图：可选，透传到 ElementData 持久化（describeCanvas 输出供后续轮次理解）
+  const intent = strOf(obj.intent);
 
   if (type === "line" || type === "arrow") {
     const raw = Array.isArray(obj.points) ? obj.points : [];
@@ -272,6 +538,9 @@ function parseLeaferElement(
     if (strokeWidth !== undefined) {
       data.strokeWidth = strokeWidth;
     }
+    if (intent !== undefined) {
+      data.intent = intent;
+    }
     return { data };
   }
 
@@ -287,6 +556,9 @@ function parseLeaferElement(
   }
   if (fill !== undefined) {
     data.fill = fill;
+  }
+  if (intent !== undefined) {
+    data.intent = intent;
   }
   switch (type) {
     case "rect":
@@ -347,7 +619,7 @@ function getCanvasTool(): AiTool {
   return {
     name: "get_canvas",
     description:
-      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区）。返回内容附带整体摘要：元素数量与类型统计、内容范围、背景色；line/arrow 的 points 为画布绝对坐标",
+      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区），或传 viewport/bounds 只看某个世界坐标区域（如当前视口）内的元素。返回内容附带整体摘要：元素数量与类型统计、内容范围、空间分布（元素集中在哪个区域、哪里空旷）、当前视口范围与缩放、坐标系说明、背景色；每个元素带 region 字段（中心在内容包围盒九宫格中的位置）与形状描述，AI 创建的元素带 intent 字段（创建时自报的意图）；line/arrow 的 points 为画布绝对坐标。返回数据就是发送时刻的最新快照：画布未被修改时不要重复调用获取相同数据（浪费轮次与 token），如需细化请用 ids/bounds/viewport 参数定向获取",
     parameters: {
       type: "object",
       properties: {
@@ -355,6 +627,22 @@ function getCanvasTool(): AiTool {
           type: "array",
           items: { type: "string" },
           description: "可选：元素 id 列表，只返回这些元素的数据；不传则返回全部",
+        },
+        viewport: {
+          type: "boolean",
+          description:
+            "可选：true 时只返回当前视口（使用者当前看到的区域）内的元素；与 bounds 同时传时以 viewport 为准",
+        },
+        bounds: {
+          type: "object",
+          description:
+            "可选：只返回位于该世界坐标矩形区域内的元素（元素与区域相交即返回；坐标系与元素坐标、摘要中的视口范围同基准：左上角原点、y 轴向下、单位 px）",
+          properties: {
+            minX: { type: "number", description: "区域左边界（世界坐标）" },
+            minY: { type: "number", description: "区域上边界（世界坐标）" },
+            maxX: { type: "number", description: "区域右边界（世界坐标）" },
+            maxY: { type: "number", description: "区域下边界（世界坐标）" },
+          },
         },
       },
     },
@@ -452,7 +740,7 @@ function chatTools(): AiTool[] {
     {
       name: "create_elements",
       description:
-        "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
+        "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation；可选 intent（简短中文自报创建意图，如\"流程起点\"、\"标题\"——系统会保存并在 get_canvas 返回，供后续轮次理解你的设计意图）。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
       parameters: {
         type: "object",
         properties: {
@@ -837,10 +1125,37 @@ export async function executeTool(
       const ids = Array.isArray(args.ids)
         ? args.ids.filter((s): s is string => typeof s === "string")
         : undefined;
+      // 区域过滤：viewport 优先于 bounds；与 ids 同时传时以 ids 为准
+      let region: CanvasRegion | null = null;
+      if (!ids?.length) {
+        if (args.viewport === true) {
+          const vp = board.viewport;
+          region = { minX: vp.minX, minY: vp.minY, maxX: vp.maxX, maxY: vp.maxY };
+        } else if (typeof args.bounds === "object" && args.bounds !== null) {
+          const b = args.bounds as Record<string, unknown>;
+          const minX = typeof b.minX === "number" ? b.minX : NaN;
+          const minY = typeof b.minY === "number" ? b.minY : NaN;
+          const maxX = typeof b.maxX === "number" ? b.maxX : NaN;
+          const maxY = typeof b.maxY === "number" ? b.maxY : NaN;
+          if (
+            ![minX, minY, maxX, maxY].every(Number.isFinite) ||
+            minX >= maxX ||
+            minY >= maxY
+          ) {
+            return {
+              name: tool.name,
+              args,
+              result: "错误：bounds 需要合法的数字区域（minX < maxX、minY < maxY，世界坐标）",
+              changed: false,
+            };
+          }
+          region = { minX, minY, maxX, maxY };
+        }
+      }
       return {
         name: tool.name,
         args,
-        result: `当前画布元素数据：\n${describeCanvas(board, ids)}`,
+        result: `当前画布元素数据：\n${describeCanvas(board, ids, region)}`,
         changed: false,
       };
     }

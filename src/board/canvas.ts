@@ -228,6 +228,22 @@ function polygonHitsBox(
 
 type AppWithEditor = App & { editor: Editor };
 
+/**
+ * 当前视口信息：画布世界坐标可见范围（与元素 x/y 同基准，经 tree.getInnerPoint 换算，
+ * 不含 zoomLayer 变换）与画布像素尺寸、缩放倍率。AI 感知画布位置用：模型据此知道
+ * "使用者当前看到哪里"，回答屏幕/眼前/视口相关内容时不至于答非所问。
+ */
+export type ViewportInfo = {
+  /** 画布像素尺寸（app 局部坐标基准） */
+  view: { width: number; height: number };
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  center: { x: number; y: number };
+  scale: number;
+};
+
 export type BoardOptions = {
   getStyle: () => BoardStyle;
   onMutated: () => void;
@@ -574,6 +590,29 @@ export class Board {
   /** 当前缩放倍率（tree.zoomLayer 承载画布缩放/平移变换） */
   get scale(): number {
     return this.app.tree.zoomLayer?.scaleX ?? 1;
+  }
+
+  /**
+   * 当前视口信息（画布世界坐标，与元素 x/y 同基准）：可见范围、中心、缩放倍率。
+   * AI 感知画布位置用（describeCanvas 摘要、get_canvas 的 viewport 过滤、视口截图标注共用）。
+   */
+  get viewport(): ViewportInfo {
+    const view = this.app.canvas.view as HTMLElement;
+    const w = this.app.width ?? view.clientWidth;
+    const h = this.app.height ?? view.clientHeight;
+    // app 局部坐标 → 画布世界坐标（与 lastPointer/tools.ts 放置元素同基准）
+    const tl = this.app.tree.getInnerPoint({ x: 0, y: 0 });
+    const br = this.app.tree.getInnerPoint({ x: w, y: h });
+    const center = this.app.tree.getInnerPoint({ x: w / 2, y: h / 2 });
+    return {
+      view: { width: w, height: h },
+      minX: Math.min(tl.x, br.x),
+      minY: Math.min(tl.y, br.y),
+      maxX: Math.max(tl.x, br.x),
+      maxY: Math.max(tl.y, br.y),
+      center: { x: center.x, y: center.y },
+      scale: this.scale,
+    };
   }
 
   /**
@@ -1168,7 +1207,9 @@ export class Board {
   /** 草稿是否过于微小（点击而非拖拽）：自由笔迹看点数，拖拽管线看生成数据尺寸 */
   private isTinyDraft(): boolean {
     if (this.opts.registry.getKind(this.tool) === "freehand") {
-      return this.penPoints.length < 2;
+      // 单击（1 个采样点）也是有效笔迹：perfect-freehand 对单点生成圆形轮廓（直径≈笔粗），
+      // 允许保留为圆点；仅 0 点（无按下）视为微小
+      return this.penPoints.length < 1;
     }
     const list = this.draftData;
     if (!list?.length) {
@@ -2538,6 +2579,7 @@ export class Board {
       stroke: colorOf(el.stroke),
       strokeWidth: numOf(el.strokeWidth),
       locked: el.locked || undefined,
+      intent: (el as unknown as { __intent?: string }).__intent,
     };
     // 注意：Image 继承自 Rect，必须先于 Rect 判断
     if (el instanceof Image) {
@@ -2637,6 +2679,10 @@ export class Board {
     // 重建场景：退出点编辑/图片裁剪（sky 层手柄不随 tree.clear 清除）
     this.exitPointEdit();
     this.cancelCrop();
+    // 先取消编辑器选择（多选模拟层 simulateTarget 挂在 tree.zoomLayer 下）：
+    // 若不清除直接 tree.clear()，模拟层会被销毁，此后一切多选（框选/套索/editor.target=数组）
+    // 都会尝试挂载已销毁的 simulateTarget 而立即被编辑器 cancel 清空（整理/撤销/重载后框选失效）
+    this.editor.cancel();
     this.app.tree.clear();
     for (const d of data) {
       const el = this.dataToElement(d);
@@ -2653,6 +2699,10 @@ export class Board {
     if (el && d.id) {
       // 恢复/导入时把文件里的 id 写回实例缓存，保证 id 稳定
       (el as unknown as { __aiId?: string }).__aiId = d.id;
+    }
+    if (el && d.intent) {
+      // AI 创建时自报的创建意图：透传到实例，序列化/恢复后不丢
+      (el as unknown as { __intent?: string }).__intent = d.intent;
     }
     return el;
   }
@@ -2841,16 +2891,20 @@ export class Board {
   /**
    * 导出画布为限尺寸 JPEG dataURL（AI 多模态感知用）；画布为空返回 null。
    * size 限制输出最长边（px），JPEG + quality 控制体积，避免发给模型时流量/token 过大。
-   * 默认按内容包围盒导出（避免大片空白），失败时降级为整页导出。
+   * 默认按内容包围盒导出（避免大片空白）；region 传入时按指定区域截图（app 局部坐标基准，
+   * 如视口 {x:0,y:0,width,height}），失败时降级为整页导出。
    */
-  async exportImage(size = 1280): Promise<string | null> {
+  async exportImage(
+    size = 1280,
+    region?: { x: number; y: number; width: number; height: number },
+  ): Promise<string | null> {
     if (this.elementCount === 0) {
       return null;
     }
     try {
       const out = await this.app.export("jpg", {
         size,
-        screenshot: this.contentWorldBounds(12),
+        screenshot: region ?? this.contentWorldBounds(12),
         fill: this.background,
         quality: 0.85,
       });
@@ -2858,6 +2912,35 @@ export class Board {
       return url ?? this.exportImageFull(size);
     } catch {
       return this.exportImageFull(size);
+    }
+  }
+
+  /**
+   * 导出当前视口所见区域的渲染截图（JPEG dataURL）：供 AI 多模态感知"使用者当前看到的画面"。
+   * screenshot 区域为 app 局部坐标——视口原点即 (0,0)、尺寸即画布像素尺寸（与 contentWorldBounds
+   * 输出同基准）；返回视口世界范围供文本标注，让模型把截图与 get_canvas 数据对齐。
+   */
+  async exportViewportImage(
+    size = 1024,
+  ): Promise<{ url: string; viewport: ViewportInfo } | null> {
+    if (this.elementCount === 0) {
+      return null;
+    }
+    const vp = this.viewport;
+    try {
+      const out = await this.app.export("jpg", {
+        size,
+        screenshot: { x: 0, y: 0, width: vp.view.width, height: vp.view.height },
+        fill: this.background,
+        quality: 0.85,
+      });
+      const url = await this.toDataUrl(out);
+      if (!url) {
+        return null;
+      }
+      return { url, viewport: vp };
+    } catch {
+      return null;
     }
   }
 

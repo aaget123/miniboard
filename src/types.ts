@@ -128,6 +128,8 @@ export type ElementData = {
   bindStart?: string;
   bindEnd?: string;
   locked?: boolean; // 锁定后不可拖动/缩放/删除
+  /** AI 创建时自报的创建意图（简短中文，说明为何创建此元素；仅 AI 创建的元素有） */
+  intent?: string;
 };
 
 export type SceneFile = {

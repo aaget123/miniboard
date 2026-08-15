@@ -556,6 +556,15 @@ export class AiPanel {
       const ids = atData.map((d) => d.id).filter((v): v is string => !!v);
       userContent = `【@选区】使用者选中了 ${atData.length} 个元素，请重点针对它们评价与优化（可用 get_canvas 传 ids 复查，用 update_elements 修改它们；不要改动其他元素）：\n${describeCanvas(this.board, ids)}\n\n使用者的请求：${text}`;
       this.clearAt();
+    } else {
+      // 未 @ 但画布有选中：静默附带选中 id，让模型感知使用者当前关注的对象（不要求其改动）
+      const selIds = this.board
+        .getSelectionData()
+        .map((d) => d.id)
+        .filter((v): v is string => !!v);
+      if (selIds.length) {
+        userContent = `【当前画布选中】使用者当前选中了 ${selIds.length} 个元素（id：${selIds.join("、")}），回答时可参考这些元素，但除非使用者明确要求，不要改动它们。\n\n使用者的请求：${text}`;
+      }
     }
     this.pushHistory({ role: "user", content: userContent });
 
@@ -598,11 +607,31 @@ export class AiPanel {
         }
       } else if (this.mode === "chat") {
         try {
-          const shot = await this.board.exportImage();
+          // 视口渲染截图：模型看到"使用者当前看到的画面"（含手绘风格与缩放观感），
+          // 附世界坐标范围便于与 get_canvas 数据对齐；导出失败时降级为内容包围盒截图
+          let shot: { url: string; viewport: { minX: number; minY: number; maxX: number; maxY: number; scale: number } | null } | null = null;
+          const vpShot = await this.board.exportViewportImage(1024);
+          if (vpShot) {
+            shot = vpShot;
+          } else {
+            const url = await this.board.exportImage(1024);
+            if (url) {
+              shot = { url, viewport: null };
+            }
+          }
           if (shot) {
+            const vp = shot.viewport;
+            const rangeNote = vp
+              ? `（世界坐标范围 x ${Math.round(vp.minX)}~${Math.round(vp.maxX)}，y ${Math.round(vp.minY)}~${Math.round(vp.maxY)}，缩放 ${Math.round(vp.scale * 100)}%；坐标系：左上角原点、y 轴向下、单位 px）`
+              : "（按画布内容包围盒截取）";
             this.history[this.history.length - 1].content = [
-              { type: "text", text: userContent },
-              { type: "image_url", image_url: { url: shot } },
+              {
+                type: "text",
+                text:
+                  userContent +
+                  `\n\n随本消息附带当前视口渲染截图${rangeNote}。截图反映渲染观感（含手绘风格），文字等具体数据请以 get_canvas 返回的结构化 JSON 为准。`,
+              },
+              { type: "image_url", image_url: { url: shot.url } },
             ];
             this.historyTokens += IMAGE_TOKENS;
           }
@@ -626,6 +655,9 @@ export class AiPanel {
     let canvasChanged = false;
     // 画布改动合并为一步历史：执行前快照，整轮工具结束后统一提交
     const before = this.board.serialize();
+    // 发送时快照：检测对话期间画布被外部修改（工具执行或使用者手动编辑），提示模型数据可能过期
+    const beforeJson = JSON.stringify(before);
+    let staleNotified = false;
     // 提交函数在正常结束与失败时共用：失败时已执行的修改同样保留可撤销
     const commitCanvasChange = () => {
       if (canvasChanged) {
@@ -640,6 +672,15 @@ export class AiPanel {
     try {
       let exhausted = false;
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+        // 画布在对话期间被外部修改（工具执行或使用者手动编辑）：提示模型最新数据需重新获取
+        if (!staleNotified && JSON.stringify(this.board.serialize()) !== beforeJson) {
+          staleNotified = true;
+          this.pushHistory({
+            role: "user",
+            content:
+              "注意：画布内容在对话期间发生了变化（可能是工具执行或使用者手动编辑导致），如需准确数据请重新调用 get_canvas。",
+          });
+        }
         const res = await chatTurn(cfg, [system, ...this.history], openAiTools, {
           onText: (delta) => {
             fullText += delta;
