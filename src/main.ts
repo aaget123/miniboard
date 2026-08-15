@@ -1,6 +1,7 @@
 import { Board } from "./board/canvas";
 import { ToolRegistry } from "./board/registry";
-import { ProjectStore } from "./storage";
+import { ProjectStore, resolveDataDir } from "./storage";
+import type { CustomToolDef } from "./types";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
 import { ToolsFloat } from "./ui/toolsfloat";
@@ -16,7 +17,8 @@ import {
 import type { ThemePref } from "./ui/settings";
 import { ProjectDialog } from "./ui/projects";
 import { ExportDialog } from "./ui/exportdialog";
-import { CommandPalette, showShortcutHelp } from "./ui/palette";
+import { CommandPalette, showShortcutHelp, getShortcutHelpRows } from "./ui/palette";
+import { ShortcutManager, comboFromEvent, formatCombo } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
@@ -57,8 +59,43 @@ async function main() {
 
   const contextMenu = new ContextMenu(document.body);
 
+  // 数据根目录：桌面端读配置（未配置时默认 appDataDir）；浏览器 null（localStorage）
+  const dataDir = await resolveDataDir();
+
   // 统一功能注册表：内置 + AI 自定义工具（工具栏渲染、快捷键、绘制分发均以此为准）
-  const registry = new ToolRegistry();
+  // 桌面端：自定义工具持久化到数据目录 custom-tools.json；首次启动把 localStorage 旧数据迁移到文件
+  let registry: ToolRegistry;
+  if (dataDir) {
+    const { join } = await import("@tauri-apps/api/path");
+    const { readTextFile, writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const toolsPath = await join(dataDir, "custom-tools.json");
+    let initial: CustomToolDef[] | null = null;
+    try {
+      initial = JSON.parse(await readTextFile(toolsPath)) as CustomToolDef[];
+    } catch {
+      // 文件不存在：迁移 localStorage 旧数据（迁移成功后清理，避免下次重复）
+      try {
+        const legacy = localStorage.getItem("miniboard:custom-tools");
+        if (legacy) {
+          initial = JSON.parse(legacy) as CustomToolDef[];
+          void writeTextFile(toolsPath, legacy);
+          localStorage.removeItem("miniboard:custom-tools");
+        }
+      } catch {
+        // 无旧数据或迁移失败：忽略（后续保存会重建文件）
+      }
+    }
+    registry = new ToolRegistry({
+      read: () => initial,
+      write: (list) => {
+        void writeTextFile(toolsPath, JSON.stringify(list)).catch(() => {
+          console.error("[registry] 自定义工具保存失败");
+        });
+      },
+    });
+  } else {
+    registry = new ToolRegistry();
+  }
   // 顶部悬浮工具栏（创建于下方；board 双击自动切换工具与设置弹窗工具栏页签的回调闭包引用）
   let toolbar: Toolbar;
 
@@ -142,14 +179,30 @@ async function main() {
     );
   };
 
-  const storage = new ProjectStore(board);
+  const storage = new ProjectStore(board, dataDir);
 
   // 项目管理弹窗（☰ → 📁 项目）：新建/切换/重命名/删除；独立于设置弹窗
   // 项目变更回调：刷新状态栏项目名 + 元素数（切换/新建/删除后场景内容已变）
   const projectDialog = new ProjectDialog(storage, () => {
     statusBar.setProject(storage.current?.name ?? "");
     updateStatus();
+    // AI 对话随项目切换：先落盘旧项目分桶，再恢复新项目对应分桶
+    aiPanel.setProject(storage.current?.id ?? "");
   });
+
+  // 快捷键配置中心：操作 + 内置工具键位可自定义（⚙ 设置 →「快捷键」页签，localStorage 持久化），
+  // AI 自定义工具的快捷键仍由注册表维护（「AI 工具」页签编辑）；keymap 为生效映射（组合串 → 动作 id）
+  const shortcuts = new ShortcutManager();
+  let keymap: Record<string, string> = {};
+  const rebuildKeymap = () => {
+    keymap = shortcuts.allBindings(registry);
+  };
+  rebuildKeymap();
+  registry.setOnChange(() => {
+    rebuildKeymap();
+    toolbar.refresh();
+  });
+  shortcuts.setOnChange(() => rebuildKeymap());
 
   // 设置弹窗（☰ → ⚙）：页签式——外观（主题+网格）/ 工具栏布局 / AI 模型 / AI 工具 / 系统提示词
   // 布局变更 → toolbar.setVisible；自定义分组增删 → toolbar.setCustomGroups 同步顶栏
@@ -159,6 +212,24 @@ async function main() {
       toolbar.setCustomGroups(defs);
     }
   });
+  // 数据页签：展示当前数据目录；更改目录时调 Rust set_data_dir（创建/迁移/授权/记录），完成后重载存储
+  settingsDialog.setDataDirHandlers({
+    getDir: () => storage.getDataDir(),
+    change: async (newDir) => {
+      const oldDir = storage.getDataDir();
+      if (!oldDir) {
+        throw new Error("当前环境不支持更改数据目录");
+      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_data_dir", { oldDir, newDir });
+      const ok = await storage.reloadDataDir();
+      if (!ok) {
+        throw new Error("目录已切换，但项目加载失败");
+      }
+    },
+  });
+  // 快捷键页签：操作 + 内置工具键位自定义（改动即时重建 keymap）
+  settingsDialog.setShortcutSource(shortcuts);
   // 按已保存主题初始化画布背景（默认跟随系统）
   applyTheme(loadTheme(), board);
   // 系统主题变化监听：偏好为“跟随系统”时自动切换实际主题
@@ -310,24 +381,6 @@ async function main() {
     onZoomReset: () => board.zoomReset(),
   });
 
-  // 注册表变化：重建快捷键映射 + 刷新工具栏
-  const TOOL_KEYS: Record<string, string> = {};
-  const rebuildKeys = () => {
-    for (const k of Object.keys(TOOL_KEYS)) {
-      delete TOOL_KEYS[k];
-    }
-    for (const t of registry.list()) {
-      if (t.shortcut) {
-        TOOL_KEYS[t.shortcut] = t.id;
-      }
-    }
-  };
-  rebuildKeys();
-  registry.setOnChange(() => {
-    rebuildKeys();
-    toolbar.refresh();
-  });
-
   // AI 助手面板（交流 + 编辑双模式）；配置缺失时唤起设置弹窗并定位到模型页签
   aiPanel = new AiPanel(board, registry, toolbar, () => settingsDialog.open("model"));
 
@@ -344,7 +397,8 @@ async function main() {
       section: "工具" as const,
       title: t.name,
       icon: t.icon,
-      hint: t.shortcut ? t.shortcut.toUpperCase() : undefined,
+      // 内置/自定义工具统一显示生效键（配置优先，否则注册表键）
+      hint: formatCombo(shortcuts.toolKeys(t)[0]),
       keywords: `${t.kind} ${t.group ?? ""} ${t.source}`,
       run: () => {
         board.setTool(t.id);
@@ -352,18 +406,18 @@ async function main() {
         refreshSelectionBar(lastSelectionInfo);
       },
     })),
-    { id: "open", section: "操作", title: "打开文件", icon: "folder", hint: "Ctrl+O", run: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)) },
-    { id: "save", section: "操作", title: "保存文件", icon: "save", hint: "Ctrl+S", run: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)) },
+    { id: "open", section: "操作", title: "打开文件", icon: "folder", hint: formatCombo(shortcuts.getKeys("open")[0]), run: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)) },
+    { id: "save", section: "操作", title: "保存文件", icon: "save", hint: formatCombo(shortcuts.getKeys("save")[0]), run: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)) },
     { id: "image", section: "操作", title: "插入图片", icon: "image", run: insertImage },
     { id: "export", section: "操作", title: "导出画布", icon: "download", keywords: "PNG SVG 图片 矢量", run: () => exportDialog.open() },
     { id: "projects", section: "操作", title: "项目管理", icon: "folder", keywords: "项目 切换 重命名", run: () => projectDialog.open() },
     { id: "settings", section: "操作", title: "设置", icon: "settings", keywords: "AI 模型 主题 网格 提示词", run: () => settingsDialog.open() },
-    { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: "K", run: () => aiPanel.toggle() },
+    { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: formatCombo(shortcuts.getKeys("aiPanel")[0]), run: () => aiPanel.toggle() },
     { id: "clear", section: "操作", title: "清空画布", icon: "trash", run: clearCanvas },
     { id: "theme-dark", section: "操作", title: "主题：深色", icon: "moon", keywords: "dark 深色", run: () => setThemePref("dark") },
     { id: "theme-light", section: "操作", title: "主题：浅色", icon: "sun", keywords: "light 浅色", run: () => setThemePref("light") },
     { id: "theme-system", section: "操作", title: "主题：跟随系统", icon: "monitor", keywords: "system 自动", run: () => setThemePref("system") },
-    { id: "shortcuts", section: "操作", title: "快捷键帮助", icon: "keyboard", keywords: "help 帮助", run: () => showShortcutHelp() },
+    { id: "shortcuts", section: "操作", title: "快捷键帮助", icon: "keyboard", keywords: "help 帮助", run: () => showShortcutHelp(getShortcutHelpRows(registry, shortcuts)) },
   ]);
 
   function updateStatus() {
@@ -407,105 +461,54 @@ async function main() {
     selectionBar.hidePopover();
     toolsFloat.collapse();
   };
-  // 快捷键
-  window.addEventListener("keydown", (e) => {
-    if (isEditableTarget(e.target)) {
-      return;
-    }
-    const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      storage.saveToFile().catch((err) => toast(`保存失败：${err}`));
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "o") {
-      e.preventDefault();
-      storage.openFromFile().catch((err) => toast(`打开失败：${err}`));
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        board.redo();
-      } else {
-        board.undo();
-      }
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "y") {
-      e.preventDefault();
-      board.redo();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "c") {
-      e.preventDefault();
-      board.copy();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "x") {
-      e.preventDefault();
-      board.cut();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "v") {
-      e.preventDefault();
-      board.paste();
-      return;
-    }
-    if (mod && e.key.toLowerCase() === "a") {
-      e.preventDefault();
-      board.selectAll();
-      return;
-    }
-    // 命令面板（Ctrl+K，与 AI 面板开关的裸 K 区分）
-    if (mod && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      closeAllFloating();
-      palette.toggle();
-      return;
-    }
-    if (e.key === "Delete" || e.key === "Backspace") {
-      e.preventDefault();
-      board.deleteSelected();
-      return;
-    }
-    if (e.key === "Escape") {
+  // 快捷键（配置驱动）：keymap 查表分发；工具键切换画布工具，操作键执行动作处理器
+  const ACTION_HANDLERS: Record<string, () => void> = {
+    save: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)),
+    open: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)),
+    undo: () => board.undo(),
+    redo: () => board.redo(),
+    copy: () => board.copy(),
+    cut: () => board.cut(),
+    paste: () => board.paste(),
+    selectAll: () => board.selectAll(),
+    delete: () => board.deleteSelected(),
+    escape: () => {
       // 逐层退出：点编辑 → 图片裁剪 → 编辑框取消 → 悬浮浮层全部收起
       closeAllFloating();
       board.editor.cancel();
       board.exitPointEdit();
       board.cancelCrop();
+    },
+    palette: () => {
+      closeAllFloating();
+      palette.toggle();
+    },
+    aiPanel: () => aiPanel.toggle(),
+    zoomIn: () => board.zoomIn(),
+    zoomOut: () => board.zoomOut(),
+    zoomReset: () => board.zoomReset(),
+  };
+  window.addEventListener("keydown", (e) => {
+    if (isEditableTarget(e.target)) {
       return;
     }
-    if (mod && (e.key === "=" || e.key === "+")) {
+    const id = keymap[comboFromEvent(e)];
+    if (!id) {
+      return;
+    }
+    // 逐层退出沿用原语义不拦截默认行为，其余动作统一阻止（避免触发浏览器默认快捷键）
+    if (id !== "escape") {
       e.preventDefault();
-      board.zoomIn();
-      return;
     }
-    if (mod && e.key === "-") {
-      e.preventDefault();
-      board.zoomOut();
-      return;
-    }
-    if (mod && e.key === "0") {
-      e.preventDefault();
-      board.zoomReset();
-      return;
-    }
-    // AI 面板开关（k 为保留快捷键，优先级最高）
-    if (!mod && !e.altKey && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      aiPanel.toggle();
-      return;
-    }
-    const tool = TOOL_KEYS[e.key.toLowerCase()];
-    if (tool && !mod && !e.altKey) {
+    if (id.startsWith("tool:")) {
+      const tool = id.slice("tool:".length);
       board.setTool(tool);
       toolbar.setTool(tool);
       // 同步刷新左侧选中栏（画笔模式显示样式按钮）
       refreshSelectionBar(lastSelectionInfo);
       return;
     }
+    ACTION_HANDLERS[id]?.();
   });
 
   // 状态栏 zoom 轮询（画布手势为 leafer 内置，无事件回调）
@@ -533,6 +536,8 @@ async function main() {
     // 项目恢复（多项目：初始化迁移旧数据并载入激活项目场景）
   const restored = await storage.init();
   statusBar.setProject(storage.current?.name ?? "");
+  // AI 对话按激活项目恢复（项目×模式分桶存档，切模式/刷新/换项目均不丢）
+  aiPanel.setProject(storage.current?.id ?? "");
   // 压入会话基线快照：保证本会话首个操作（含 AI 画的流程图）可直接撤销
   board.pushSnapshot(board.serialize());
   statusBar.setUndoRedo(board.canUndo, board.canRedo);

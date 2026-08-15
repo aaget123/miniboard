@@ -1240,7 +1240,8 @@ body.theme-light #statusbar.docked {
 
 /* ---------- 设置弹窗（☰ → ⚙：外观 / AI 模型 / 系统提示词） ---------- */
 .settings-modal {
-  width: 440px;
+  /* 窄窗口自适应：窗口小于 472px 时随窗口收窄，避免内容被挤压换行 */
+  width: min(440px, calc(100vw - 32px));
   max-height: 82vh;
   overflow-y: auto;
   position: relative;
@@ -1288,6 +1289,7 @@ body.theme-light #statusbar.docked {
 
 .settings-tabs {
   display: flex;
+  flex-wrap: wrap; /* 窗口过窄时页签整体换行，而不是文字被折行 */
   gap: 4px;
   margin-top: 12px;
   padding: 3px;
@@ -1305,6 +1307,7 @@ body.theme-light #statusbar.docked {
   color: var(--fg-dim);
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap; /* 页签文字不折行（如“系统提示词”） */
   transition: background 0.12s, color 0.12s;
 }
 
@@ -1327,6 +1330,136 @@ body.theme-light #statusbar.docked {
   margin-top: 12px;
   padding-top: 0;
   border-top: none;
+}
+
+/* ---- 数据页签（存储目录管理） ---- */
+
+.settings-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+
+.data-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.data-dir-path {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-dir-btn {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.data-dir-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.data-dir-status {
+  margin-bottom: 0;
+  min-height: 18px;
+}
+
+/* ---- 快捷键页签（键位自定义） ---- */
+
+.sc-head {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 10px;
+}
+
+.sc-group-title {
+  margin: 10px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-dim);
+}
+
+.sc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-row:last-child {
+  border-bottom: none;
+}
+
+.sc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sc-keys {
+  flex-shrink: 0;
+  min-width: 120px;
+  padding: 3px 10px;
+  text-align: center;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.sc-keys.sc-recording {
+  color: var(--accent);
+  border-color: var(--accent);
+  animation: sc-blink 1s ease-in-out infinite;
+}
+
+@keyframes sc-blink {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.sc-btn {
+  height: 26px;
+  padding: 0 10px;
+}
+
+.sc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sc-btn:disabled:hover {
+  color: var(--fg-dim);
+  border-color: var(--border);
 }
 
 /* ---- 系统提示词编辑 ---- */
@@ -1417,9 +1550,9 @@ body.theme-light #statusbar.docked {
   color: var(--accent);
 }
 
-.tb-row.tb-group-pinned .tb-badge-bar {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+/* 与分组收纳区同步的分组按钮副本：虚线描边区分于手动固定的按钮 */
+.tb-row.tb-group-pinned.tb-group-pinned-auto {
+  border-style: dashed;
 }
 
 .tb-row-icon {
@@ -1460,23 +1593,6 @@ body.theme-light #statusbar.docked {
 }
 
 /* 去向徽章：勾选=平铺顶栏 / 未勾选分组=收纳于下拉 / 未勾选其他=隐藏 */
-.tb-badge-bar {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border: 1px solid var(--accent);
-}
-
-.tb-badge-drop {
-  background: var(--bg-3);
-  color: var(--fg);
-}
-
-.tb-badge-hidden {
-  background: var(--bg-3);
-  color: var(--fg-dim);
-  opacity: 0.6;
-}
-
 /* 拖拽手柄（所有工具行可见：拖到平铺区 = 平铺，拖到分组区 = 取消平铺） */
 .tb-grip {
   display: inline-flex;
@@ -1557,6 +1673,47 @@ body.theme-light #statusbar.docked {
 .tb-group-op:hover {
   background: var(--bg-2);
   color: var(--fg);
+}
+
+/* 分组头“+”按钮：从平铺区添加工具到该组（accent 色突出） */
+.tb-group-op.tb-group-add {
+  color: var(--accent);
+}
+
+/* “+”添加工具面板：列出平铺区可加入该组的工具 */
+.tb-group-add-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg));
+}
+
+.tb-group-add-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tb-group-add-item:hover {
+  background: var(--bg-3);
+}
+
+.tb-group-add-empty {
+  padding: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
 }
 
 .tb-group-op-danger:hover {
@@ -1749,18 +1906,6 @@ body.theme-light #statusbar.docked {
 /* 预览中“更多▾”折叠收纳的按钮（隐藏存放，仅统计提示用） */
 .tb-preview-more-menu {
   display: none;
-}
-
-/* 工具栏页签：动态计数（超 8 个标红警告） */
-.tb-count {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--fg-dim);
-}
-
-.tb-count.warn {
-  color: var(--danger);
 }
 
 /* 工具栏页签：拖拽（所有行可拖，拖动中半透明，可拖行显示抓手光标） */
@@ -2009,6 +2154,44 @@ body.theme-light #statusbar.docked {
   display: flex;
   gap: 6px;
   margin-top: 8px;
+}
+
+/* 重命名内联输入行（替代原生 prompt，Tauri WebView 不支持） */
+.project-rename-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.project-rename-row input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.project-rename-op {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.project-rename-op:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .project-create input {

@@ -112,6 +112,45 @@ export function saveGroupOverrides(o: Record<string, string>) {
   }
 }
 
+/** 加号入组记录存储键：groupId → 从平铺区加入该组的工具 id 列表（删除组时恢复平铺） */
+const GROUP_JOIN_KEY = "miniboard:tool-group-joins";
+
+/** 读取加号入组记录；数据损坏/缺失时返回空对象 */
+export function loadGroupJoins(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(GROUP_JOIN_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const out: Record<string, string[]> = {};
+    for (const [g, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        out[g] = v.filter((x): x is string => typeof x === "string");
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** 保存加号入组记录（空对象 = 清除） */
+export function saveGroupJoins(o: Record<string, string[]>) {
+  try {
+    if (Object.keys(o).length) {
+      localStorage.setItem(GROUP_JOIN_KEY, JSON.stringify(o));
+    } else {
+      localStorage.removeItem(GROUP_JOIN_KEY);
+    }
+  } catch {
+    // 忽略：仅本次会话生效
+  }
+}
+
 /** 工具实际归属分组：覆盖值优先，其次注册表默认（undefined = 未分组） */
 export function effectiveGroup(
   t: ToolDef,

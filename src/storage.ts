@@ -17,8 +17,35 @@ const LS_INDEX_KEY = "miniboard:projects";
 const LS_SCENE_PREFIX = "miniboard:project:";
 /** 单项目时代的旧自动保存键（首次启动迁移为“项目一”后不再读取） */
 const LS_LEGACY_KEY = "miniboard:autosave";
+/** 自定义数据目录配置文件名（桌面 appDataDir 下；Rust 端 set_data_dir 写入/读取） */
+const DATA_DIR_CFG = "data-dir.json";
 const FILE_EXT = "json";
 const FILE_FILTER = { name: "Miniboard 文件", extensions: [FILE_EXT] };
+
+/**
+ * 解析桌面端数据根目录：读 appDataDir()/data-dir.json 配置；
+ * 未配置时默认 appDataDir()（兼容旧版 projects 目录位置）。
+ * 浏览器环境返回 null（数据走 localStorage）。
+ */
+export async function resolveDataDir(): Promise<string | null> {
+  if (!isDesktop()) {
+    return null;
+  }
+  try {
+    const { appDataDir, join } = await import("@tauri-apps/api/path");
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    const cfg = JSON.parse(
+      await readTextFile(await join(await appDataDir(), DATA_DIR_CFG)),
+    ) as { dir?: string };
+    if (cfg.dir?.trim()) {
+      return cfg.dir.trim();
+    }
+  } catch {
+    // 无配置或读取失败：回退默认目录
+  }
+  const { appDataDir } = await import("@tauri-apps/api/path");
+  return await appDataDir();
+}
 
 function dateStamp() {
   const d = new Date();
@@ -54,8 +81,26 @@ export class ProjectStore {
   private projects: ProjectMeta[] = [];
   private currentId = "";
 
-  constructor(board: Board) {
+  constructor(
+    board: Board,
+    /** 桌面端数据根目录（resolveDataDir 结果；null = 浏览器环境） */
+    private dataDir: string | null,
+  ) {
     this.board = board;
+  }
+
+  /** 当前数据根目录（桌面端；浏览器 null），用于设置页展示与更改目录时传旧目录 */
+  getDataDir(): string | null {
+    return this.dataDir;
+  }
+
+  /**
+   * 数据目录变更后重载（Rust 端已复制文件并授权 scope）：
+   * 重置目录缓存后重新初始化，返回是否恢复成功。
+   */
+  async reloadDataDir(): Promise<boolean> {
+    this.dirPromise = null;
+    return this.init();
   }
 
   get current(): ProjectMeta | null {
@@ -404,8 +449,8 @@ export class ProjectStore {
   private async projectsDir(): Promise<string> {
     if (!this.dirPromise) {
       this.dirPromise = (async () => {
-        const { appDataDir, join } = await import("@tauri-apps/api/path");
-        const dir = await join(await appDataDir(), "projects");
+        const { join } = await import("@tauri-apps/api/path");
+        const dir = await join(this.dataDir!, "projects");
         const { mkdir } = await import("@tauri-apps/plugin-fs");
         try {
           await mkdir(dir, { recursive: true });

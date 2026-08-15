@@ -462,6 +462,8 @@ export class Board {
       "contextmenu",
       this.onContextMenu,
     );
+    // 初始视图：画布原点 (0,0) 居中显示（X0Y0 居中，与 zoomReset 一致）
+    this.centerOriginView();
   }
 
   private bindEvents() {
@@ -645,14 +647,25 @@ export class Board {
     this.zoomTo(this.scale / ZOOM_STEP, c.x, c.y);
   }
 
-  /** 重置为 100%：缩放归 1 并清除画布平移（回到初始视图） */
+  /** 重置为 100%：缩放归 1，画布原点 (0,0) 回到视口中心（初始视图与重置共用） */
   zoomReset() {
+    this.centerOriginView();
+  }
+
+  /**
+   * 初始/重置视图：画布原点 (0,0) 居中显示在视口中心（X0Y0 居中，
+   * 元素坐标数据不变，仅调整 zoomLayer 平移；缩放倍率归 1）。
+   */
+  private centerOriginView() {
     const layer = this.app.tree.zoomLayer;
     if (!layer) {
       return;
     }
-    layer.x = 0;
-    layer.y = 0;
+    const view = this.app.canvas.view as HTMLElement;
+    const w = this.app.width ?? view.clientWidth;
+    const h = this.app.height ?? view.clientHeight;
+    layer.x = w / 2;
+    layer.y = h / 2;
     layer.scaleX = 1;
     layer.scaleY = 1;
     this.updateGrid();

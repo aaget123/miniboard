@@ -11,6 +11,8 @@ export class ProjectDialog {
   private mask!: HTMLElement;
   private listEl!: HTMLElement;
   private nameInput!: HTMLInputElement;
+  /** 内联重命名中的项目 id（null = 无） */
+  private renamingId: string | null = null;
 
   constructor(
     private projects: ProjectStore,
@@ -21,6 +23,7 @@ export class ProjectDialog {
   }
 
   open() {
+    this.renamingId = null; // 关闭上次残留的重命名行
     this.renderList();
     this.mask.hidden = false;
   }
@@ -104,6 +107,12 @@ export class ProjectDialog {
       const row = document.createElement("div");
       row.className = `project-row${active ? " active" : ""}`;
 
+      if (this.renamingId === p.id) {
+        row.appendChild(this.makeRenameRow(p));
+        this.listEl.appendChild(row);
+        continue;
+      }
+
       const name = document.createElement("button");
       name.type = "button";
       name.className = "project-name";
@@ -138,15 +147,56 @@ export class ProjectDialog {
     }
   }
 
-  private async renameProject(p: ProjectMeta) {
-    const name = window.prompt("新项目名称", p.name);
-    if (name === null) {
-      return;
-    }
-    if (await this.projects.rename(p.id, name)) {
+  private renameProject(p: ProjectMeta) {
+    this.renamingId = p.id;
+    this.renderList();
+  }
+
+  /** 重命名内联输入行：回车/确定提交，Esc/取消关闭（替代原生 prompt，Tauri WebView 不支持） */
+  private makeRenameRow(p: ProjectMeta): HTMLElement {
+    const box = document.createElement("div");
+    box.className = "project-rename-row";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 40;
+    input.placeholder = "新项目名称";
+    input.value = p.name;
+    input.select();
+    const commit = async () => {
+      const name = input.value.trim();
+      this.renamingId = null;
+      if (name && (await this.projects.rename(p.id, name))) {
+        this.renderList();
+        this.onProjectChange?.();
+        return;
+      }
       this.renderList();
-      this.onProjectChange?.();
-    }
+    };
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "project-rename-op";
+    ok.textContent = "确定";
+    ok.addEventListener("click", () => void commit());
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "project-rename-op";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", () => {
+      this.renamingId = null;
+      this.renderList();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        void commit();
+      } else if (e.key === "Escape") {
+        this.renamingId = null;
+        this.renderList();
+      }
+    });
+    box.append(input, ok, cancel);
+    // 渲染完成后聚焦并全选名称，方便直接输入新名称
+    requestAnimationFrame(() => input.focus());
+    return box;
   }
 
   private async removeProject(id: string) {

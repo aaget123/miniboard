@@ -19,6 +19,7 @@ import type {
   AiToolExecution,
   ChatMessage,
 } from "./types";
+import { LS_CHAT_PREFIX, sanitizeForStorage, textOf } from "./history";
 
 const MAX_TOOL_ROUNDS = 4;
 /** 对话历史 token 预算（含系统提示词）：超限时从头部压缩，保证最近上下文完整 */
@@ -30,6 +31,29 @@ const IMAGE_TOKENS = 1200;
 /** @ 选区附带单图：图片数量上限与压缩后最长边（px），控制 token 与流量 */
 const MAX_AT_IMAGES = 3;
 const IMAGE_SEND_MAX_SIDE = 1024;
+
+// ---------- 对话持久化（按 项目×模式 分桶存储，切换模式/刷新/换项目不丢） ----------
+
+/** 一个模式分桶的对话状态：切换模式时整体保存/恢复，互不清空 */
+type HistoryState = {
+  history: ChatMessage[];
+  historyTokens: number;
+  systemTokens: number;
+  compressNotified: boolean;
+  pendingAt: ElementData[] | null;
+  inputText: string;
+};
+
+function emptyHistoryState(): HistoryState {
+  return {
+    history: [],
+    historyTokens: 0,
+    systemTokens: 0,
+    compressNotified: false,
+    pendingAt: null,
+    inputText: "",
+  };
+}
 
 /** 工具名 → 面板回执显示名 */
 const TOOL_LABELS: Record<string, string> = {
@@ -179,18 +203,23 @@ export class AiPanel {
   private busy = false;
   /** 当前请求的取消句柄：生成中点击“停止”中断（请求随后抛 AbortError） */
   private abortCtrl: AbortController | null = null;
-  private history: ChatMessage[] = [];
-  /** 历史总 token 估算（与 history 同步维护，用于超限压缩） */
-  private historyTokens = 0;
-  /** 当前系统提示词 token 估算（与 historyTokens 一并计入预算） */
-  private systemTokens = 0;
-  /** 压缩提示只展示一次，避免每次发送刷屏 */
-  private compressNotified = false;
+  /** 每个模式独立的对话分桶：切换模式时整体保存/恢复，互不清空 */
+  private modeHistories: Record<AiMode, HistoryState> = {
+    chat: emptyHistoryState(),
+    edit: emptyHistoryState(),
+  };
+  /** 当前激活项目 id（对话按 项目×模式 持久化），由 main.ts 在项目切换时更新 */
+  private projectId = "";
+  /** 存档防抖定时器（历史变化 500ms 后落盘） */
+  private persistTimer = 0;
   private modeTabs = new Map<AiMode, HTMLButtonElement>();
-  /** @ 选区：当前已选区（发送时注入对话上下文），null 表示未 @ */
-  private pendingAt: ElementData[] | null = null;
   /** 清除对话按钮 */
   private clearBtn!: HTMLButtonElement;
+
+  /** 当前模式分桶的便捷访问（所有对话状态读写统一走这里） */
+  private get st(): HistoryState {
+    return this.modeHistories[this.mode];
+  }
 
   constructor(
     private board: Board,
@@ -208,7 +237,11 @@ export class AiPanel {
     this.clearBtn.innerHTML = iconHTML("trash", 13);
     this.clearBtn.addEventListener("click", () => this.clearConversation());
     this.bindEvents();
-    this.appendSystem(this.modeHint(this.mode));
+    // 输入草稿实时同步到当前分桶（切换模式/持久化时一并带走）
+    this.inputEl.addEventListener("input", () => {
+      this.st.inputText = this.inputEl.value;
+    });
+    this.restoreConversation();
   }
 
   get isOpen() {
@@ -266,11 +299,13 @@ export class AiPanel {
     if (this.busy || mode === this.mode) {
       return;
     }
+    // 切换模式不再清空对话：先落盘当前桶，再切换指针并渲染目标桶（含输入草稿与 @ 选区）
+    this.persistNow();
     this.mode = mode;
     for (const [m, btn] of this.modeTabs) {
       btn.classList.toggle("active", m === mode);
     }
-    this.clearConversation();
+    this.renderConversation();
   }
 
   private modeHint(mode: AiMode): string {
@@ -279,16 +314,106 @@ export class AiPanel {
       : "编辑模式：告诉我你想添加/修改的绘制工具（如五角星、云朵、高亮笔、点击即生成的印章），我会按统一功能规则直接加到工具栏，并自动验证、试画效果。";
   }
 
-  /** 清除当前对话：清空历史与消息列表，仅保留模式引导（不影响画布内容） */
+  /** 清除当前对话：清空当前模式分桶的历史与消息列表，仅保留模式引导（不影响画布内容） */
   private clearConversation() {
-    this.history = [];
-    this.historyTokens = 0;
-    this.systemTokens = 0;
-    this.compressNotified = false;
-    this.clearAt();
+    this.modeHistories[this.mode] = emptyHistoryState();
     this.inputEl.value = "";
+    this.renderConversation();
+    this.schedulePersist();
+  }
+
+  // ---------- 对话持久化（按 项目×模式 分桶存档） ----------
+
+  /** 当前模式分桶的存档键 */
+  private storageKey(): string {
+    return `${LS_CHAT_PREFIX}${this.projectId || "default"}:${this.mode}`;
+  }
+
+  /** 历史变化后防抖落盘（清空对话同样落盘为空，避免旧存档复活） */
+  private schedulePersist() {
+    clearTimeout(this.persistTimer);
+    this.persistTimer = window.setTimeout(() => this.persistNow(), 500);
+  }
+
+  /** 立即落盘当前分桶：治理后仅存 user/assistant 文本轮次 */
+  private persistNow() {
+    clearTimeout(this.persistTimer);
+    try {
+      const cleaned = sanitizeForStorage(this.st.history);
+      if (!cleaned.length) {
+        localStorage.removeItem(this.storageKey());
+      } else {
+        localStorage.setItem(
+          this.storageKey(),
+          JSON.stringify({ history: cleaned }),
+        );
+      }
+    } catch {
+      // localStorage 不可用时忽略持久化（对话仍在内存中）
+    }
+  }
+
+  /** 从存档恢复当前分桶（启动与切项目时调用）；无存档时仅显示引导 */
+  private restoreConversation() {
+    try {
+      const raw = localStorage.getItem(this.storageKey());
+      if (raw) {
+        const parsed = JSON.parse(raw) as { history?: unknown };
+        if (Array.isArray(parsed.history)) {
+          const cleaned = sanitizeForStorage(
+            parsed.history.filter(
+              (m): m is ChatMessage =>
+                !!m &&
+                typeof m === "object" &&
+                ((m as ChatMessage).role === "user" ||
+                  (m as ChatMessage).role === "assistant"),
+            ),
+          );
+          this.st.history = cleaned;
+          this.st.historyTokens = cleaned.reduce(
+            (n, m) => n + estimateTokens(m.content),
+            0,
+          );
+        }
+      }
+    } catch {
+      // 存档损坏：从空对话开始
+    }
+    this.renderConversation();
+  }
+
+  /** 按当前分桶重绘消息列表：引导提示 + 历史消息 + 恢复标注（@ 按钮态与输入草稿同步） */
+  private renderConversation() {
+    const st = this.st;
     this.messagesEl.innerHTML = "";
     this.appendSystem(this.modeHint(this.mode));
+    const restored = st.history.length > 0;
+    for (const m of st.history) {
+      if (m.role === "user") {
+        this.appendUser(textOf(m.content));
+      } else if (m.role === "assistant" && m.content) {
+        this.appendAi(textOf(m.content));
+      }
+      // tool 轮次仅存在于内存（不落盘、不重渲染），跳过
+    }
+    if (restored) {
+      this.appendSystem("已恢复上次对话；画布数据可能已变化，AI 会按需重新查看。");
+    }
+    this.atBtn.classList.toggle("active", !!st.pendingAt);
+    this.inputEl.value = st.inputText;
+  }
+
+  /**
+   * 切换当前项目：先把当前分桶落盘到旧项目键，再从新项目键恢复对应分桶。
+   * 由 main.ts 在项目切换/启动恢复时调用，保证对话随项目走。
+   */
+  setProject(projectId: string) {
+    if (projectId === this.projectId) {
+      return;
+    }
+    this.persistNow();
+    this.projectId = projectId || "";
+    this.restoreConversation();
   }
 
   // ---------- 消息渲染 ----------
@@ -409,13 +534,13 @@ export class AiPanel {
   // ---------- @ 选区 ----------
 
   private clearAt() {
-    this.pendingAt = null;
+    this.st.pendingAt = null;
     this.atBtn.classList.remove("active");
   }
 
   /** @ 按钮：抓取画布当前选区，再次点击取消 */
   private toggleAt() {
-    if (this.pendingAt) {
+    if (this.st.pendingAt) {
       this.clearAt();
       return;
     }
@@ -424,7 +549,7 @@ export class AiPanel {
       this.appendError("请先在画布上选中一些元素，再点击 @");
       return;
     }
-    this.pendingAt = data;
+    this.st.pendingAt = data;
     this.atBtn.classList.add("active");
     this.appendSystem(
       `已 @ ${data.length} 个元素：${data
@@ -436,20 +561,20 @@ export class AiPanel {
   // ---------- 发送流程 ----------
 
   private pushHistory(msg: ChatMessage) {
-    this.history.push(msg);
-    this.historyTokens += estimateTokens(msg.content);
+    this.st.history.push(msg);
+    this.st.historyTokens += estimateTokens(msg.content);
     // 单条超长截断（画布 JSON 等）：保留开头并尽量保持 JSON 结构完整
     if (typeof msg.content === "string") {
       const trimmed = trimLongString(msg.content, MAX_MSG_TOKENS);
       if (trimmed !== msg.content) {
-        this.historyTokens -= estimateTokens(msg.content) - estimateTokens(trimmed);
+        this.st.historyTokens -= estimateTokens(msg.content) - estimateTokens(trimmed);
         msg.content = trimmed;
       }
     }
     // 超预算：优先从头丢弃完整的历史轮次（user 及其配套的 assistant/tool 消息），
     // 整轮不拆散，避免破坏 assistant(tool_calls) 与 tool 消息的配对；至少保留最近 1 轮
-    while (this.historyTokens + this.systemTokens > MAX_HISTORY_TOKENS) {
-      if (this.history.filter((m) => m.role === "user").length <= 1) {
+    while (this.st.historyTokens + this.st.systemTokens > MAX_HISTORY_TOKENS) {
+      if (this.st.history.filter((m) => m.role === "user").length <= 1) {
         // 仅剩当前轮：压缩较早的 get_canvas 大结果，无法再压缩才停止
         if (!this.shrinkCanvasData()) {
           break;
@@ -460,10 +585,11 @@ export class AiPanel {
         break;
       }
     }
-    if (this.historyTokens + this.systemTokens > MAX_HISTORY_TOKENS && !this.compressNotified) {
-      this.compressNotified = true;
+    if (this.st.historyTokens + this.st.systemTokens > MAX_HISTORY_TOKENS && !this.st.compressNotified) {
+      this.st.compressNotified = true;
       this.appendSystem("对话较长，较早的内容已按长度自动压缩，AI 可能不清楚最早的信息。");
     }
+    this.schedulePersist();
   }
 
   /**
@@ -472,8 +598,8 @@ export class AiPanel {
    */
   private shrinkCanvasData(): boolean {
     let changed = false;
-    for (let i = 0; i < this.history.length; i++) {
-      const m = this.history[i];
+    for (let i = 0; i < this.st.history.length; i++) {
+      const m = this.st.history[i];
       if (m.role !== "tool" || typeof m.content !== "string") {
         continue;
       }
@@ -481,9 +607,9 @@ export class AiPanel {
       if (m.content.includes("data:image/")) {
         const before = estimateTokens(m.content);
         m.content = "（图片数据已省略，如需再次查看请重新调用 read_image）";
-        this.historyTokens -= before - estimateTokens(m.content);
+        this.st.historyTokens -= before - estimateTokens(m.content);
         changed = true;
-        if (this.historyTokens + this.systemTokens <= MAX_HISTORY_TOKENS) {
+        if (this.st.historyTokens + this.st.systemTokens <= MAX_HISTORY_TOKENS) {
           break;
         }
         continue;
@@ -493,9 +619,9 @@ export class AiPanel {
       }
       const before = estimateTokens(m.content);
       m.content = "（画布数据已省略，如需最新内容请重新调用 get_canvas）";
-      this.historyTokens -= before - estimateTokens(m.content);
+      this.st.historyTokens -= before - estimateTokens(m.content);
       changed = true;
-      if (this.historyTokens + this.systemTokens <= MAX_HISTORY_TOKENS) {
+      if (this.st.historyTokens + this.st.systemTokens <= MAX_HISTORY_TOKENS) {
         break;
       }
     }
@@ -507,24 +633,24 @@ export class AiPanel {
    * 以"轮"为单位保证 assistant(tool_calls) 与其 tool 消息不拆散。
    */
   private dropFirstTurn(): boolean {
-    const firstUser = this.history.findIndex((m) => m.role === "user");
+    const firstUser = this.st.history.findIndex((m) => m.role === "user");
     if (firstUser < 0) {
       // 极端残留：全是工具轮次消息（无 user 的非法序列），整体清空
-      this.historyTokens = 0;
-      this.history = [];
+      this.st.historyTokens = 0;
+      this.st.history = [];
       return true;
     }
     // 轮次终点：下一条 user 消息之前；开头的非 user 残留（中断留下）一并丢弃
-    let end = this.history.length;
-    for (let i = firstUser + 1; i < this.history.length; i++) {
-      if (this.history[i].role === "user") {
+    let end = this.st.history.length;
+    for (let i = firstUser + 1; i < this.st.history.length; i++) {
+      if (this.st.history[i].role === "user") {
         end = i;
         break;
       }
     }
-    const dropped = this.history.splice(0, end);
+    const dropped = this.st.history.splice(0, end);
     for (const m of dropped) {
-      this.historyTokens -= estimateTokens(m.content);
+      this.st.historyTokens -= estimateTokens(m.content);
     }
     return dropped.length > 0;
   }
@@ -545,12 +671,13 @@ export class AiPanel {
     this.abortCtrl = new AbortController();
     this.setBusy(true);
     this.inputEl.value = "";
+    this.st.inputText = "";
     // 记录发送前历史长度：失败时回滚本轮写入，避免残留未配对的工具轮次消息
-    const historyLen = this.history.length;
+    const historyLen = this.st.history.length;
     this.appendUser(text);
     // @ 选区上下文与用户文字合并为一条 user 消息（避免连续两条 user 消息语义割裂），
     // 选区数据为发送时快照，不随画布变化
-    const atData = this.pendingAt;
+    const atData = this.st.pendingAt;
     let userContent = text;
     if (atData?.length) {
       const ids = atData.map((d) => d.id).filter((v): v is string => !!v);
@@ -600,8 +727,8 @@ export class AiPanel {
             text: userContent +
               `\n\n随本消息附带画布中以下图片的实际内容（请直接看图）：\n${attached.join("\n")}${extra}`,
           };
-          const msg = this.history[this.history.length - 1];
-          this.historyTokens +=
+          const msg = this.st.history[this.st.history.length - 1];
+          this.st.historyTokens +=
             estimateTokens(parts) - estimateTokens(msg.content as string);
           msg.content = parts;
         }
@@ -624,7 +751,7 @@ export class AiPanel {
             const rangeNote = vp
               ? `（世界坐标范围 x ${Math.round(vp.minX)}~${Math.round(vp.maxX)}，y ${Math.round(vp.minY)}~${Math.round(vp.maxY)}，缩放 ${Math.round(vp.scale * 100)}%；坐标系：左上角原点、y 轴向下、单位 px）`
               : "（按画布内容包围盒截取）";
-            this.history[this.history.length - 1].content = [
+            this.st.history[this.st.history.length - 1].content = [
               {
                 type: "text",
                 text:
@@ -633,7 +760,7 @@ export class AiPanel {
               },
               { type: "image_url", image_url: { url: shot.url } },
             ];
-            this.historyTokens += IMAGE_TOKENS;
+            this.st.historyTokens += IMAGE_TOKENS;
           }
         } catch {
           // 截图失败：降级为纯文本
@@ -647,7 +774,7 @@ export class AiPanel {
       content: buildSystemPrompt(mode),
     };
     // 系统提示词计入 token 预算（压缩时与 historyTokens 一并判断）
-    this.systemTokens = estimateTokens(system.content);
+    this.st.systemTokens = estimateTokens(system.content);
     const openAiTools = toOpenAiTools(toolsForMode(mode));
 
     const bubble = this.appendAi("");
@@ -681,7 +808,7 @@ export class AiPanel {
               "注意：画布内容在对话期间发生了变化（可能是工具执行或使用者手动编辑导致），如需准确数据请重新调用 get_canvas。",
           });
         }
-        const res = await chatTurn(cfg, [system, ...this.history], openAiTools, {
+        const res = await chatTurn(cfg, [system, ...this.st.history], openAiTools, {
           onText: (delta) => {
             fullText += delta;
             this.renderBubble(bubble, fullText);
@@ -739,7 +866,7 @@ export class AiPanel {
           content:
             "工具调用轮次已达上限，请基于已执行的结果直接给出总结回答，不要再调用任何工具。",
         });
-        const res = await chatTurn(cfg, [system, ...this.history], [], {
+        const res = await chatTurn(cfg, [system, ...this.st.history], [], {
           onText: (delta) => {
             fullText += delta;
             this.renderBubble(bubble, fullText);
@@ -756,10 +883,10 @@ export class AiPanel {
       }
     } catch (err) {
       // 回滚本轮写入的历史：中断可能残留未配对的工具轮次消息，避免污染后续对话
-      while (this.history.length > historyLen) {
-        const popped = this.history.pop();
+      while (this.st.history.length > historyLen) {
+        const popped = this.st.history.pop();
         if (popped) {
-          this.historyTokens -= estimateTokens(popped.content);
+          this.st.historyTokens -= estimateTokens(popped.content);
         }
       }
       commitCanvasChange();

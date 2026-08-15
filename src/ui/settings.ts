@@ -16,6 +16,9 @@ import type { ToolRegistry } from "../board/registry";
 import type { ToolDef, ToolGroup } from "../types";
 import { ToolManageDialog } from "./toolmanage";
 import { iconHTML } from "./icons";
+import { isDesktop } from "../storage";
+import { SHORTCUT_ACTIONS, comboFromEvent, formatCombo, formatKeys } from "./shortcuts";
+import type { ShortcutManager } from "./shortcuts";
 import {
   computeToolbarNodes,
   effectiveGroup,
@@ -25,12 +28,14 @@ import {
   groupMarker,
   isGroupMarker,
   loadCustomGroups,
+  loadGroupJoins,
   loadGroupOrderPref,
   loadGroupOverrides,
   loadToolbarPref,
   markerGroup,
   renderToolIcon,
   saveCustomGroups,
+  saveGroupJoins,
   saveGroupOrderPref,
   saveGroupOverrides,
   saveToolbarPref,
@@ -218,6 +223,10 @@ export class SettingsDialog {
   private customGroups: CustomGroupDef[] = loadCustomGroups();
   /** 工具归属覆盖：toolId → 分组 id（拖到自定义分组头时写入，内置组清除） */
   private groupOverrides: Record<string, string> = loadGroupOverrides();
+  /** 加号入组记录：groupId → 从平铺区加入该组的工具 id（删除组时恢复平铺还回） */
+  private groupJoins: Record<string, string[]> = loadGroupJoins();
+  /** “+”添加工具面板打开的组（null = 关闭） */
+  private groupAddOpen: ToolGroup | null = null;
   /** 分组名称编辑状态：null=无；new=新建；rename=重命名该组（渲染内联输入行） */
   private groupEdit:
     | { mode: "new" }
@@ -226,8 +235,22 @@ export class SettingsDialog {
   /** 待确认删除的自定义分组 id（删除按钮两段式确认，避免误删） */
   private confirmDelete: string | null = null;
   private toolbarListEl!: HTMLElement;
-  private toolbarCountEl!: HTMLElement;
   private toolbarPreviewEl!: HTMLElement;
+  /** 拖拽源暂存：WebView2 中 dataTransfer.getData 在拖拽过程不可靠，用实例字段传递 */
+  private dragSrc: string | null = null;
+  // 数据页签：目录路径展示 + 状态提示 + 更改回调（main.ts 注入）
+  private dataDirEl!: HTMLElement;
+  private dataStatusEl!: HTMLElement;
+  private dataHandlers: {
+    getDir: () => string | null;
+    change: (newDir: string) => Promise<void>;
+  } | null = null;
+  // 快捷键页签：配置中心（main.ts 注入）+ 页签内容容器 + 录制状态
+  private shortcuts: ShortcutManager | null = null;
+  private shortcutRoot!: HTMLElement;
+  /** 正在录制新键的配置 id（null = 未在录制） */
+  private recordingScId: string | null = null;
+  private recordingHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(
     private board: Board,
@@ -256,12 +279,17 @@ export class SettingsDialog {
     this.loadPromptEditor();
     // 工具栏布局与当前偏好同步（工具可能被 AI 增删，每次打开重建列表）
     this.toolbarPref = loadToolbarPref();
+    this.groupAddOpen = null; // 关闭上次残留的“+”添加面板
     this.renderToolbarPane();
     if (tab) {
       this.switchTab(tab);
     }
     // AI 工具列表与当前注册表同步（内嵌页签）
     this.toolManage.refresh();
+    // 数据页签与当前目录同步（目录可能在外部被更改）
+    this.refreshDataDir();
+    // 快捷键页签与当前配置同步（配置可能被外部/其他页签修改）
+    this.renderShortcutsPane();
     this.mask.hidden = false;
   }
 
@@ -307,7 +335,9 @@ export class SettingsDialog {
       { id: "toolbar", label: "工具栏" },
       { id: "model", label: "AI 模型" },
       { id: "tools", label: "AI 工具" },
+      { id: "shortcuts", label: "快捷键" },
       { id: "prompt", label: "系统提示词" },
+      { id: "data", label: "数据" },
     ];
     for (const def of TAB_DEFS) {
       const btn = document.createElement("button");
@@ -533,11 +563,6 @@ export class SettingsDialog {
     this.toolbarPreviewEl.className = "tb-preview";
     toolbarPane.appendChild(this.toolbarPreviewEl);
 
-    // 动态计数：超过 8 个标红警告（配合顶栏自动折叠“更多▾”兜底）
-    this.toolbarCountEl = document.createElement("span");
-    this.toolbarCountEl.className = "tb-count";
-    toolbarPane.appendChild(this.toolbarCountEl);
-
     this.toolbarListEl = document.createElement("div");
     this.toolbarListEl.className = "tb-list";
     toolbarPane.appendChild(this.toolbarListEl);
@@ -566,6 +591,60 @@ export class SettingsDialog {
     promptPane.hidden = true;
     this.panes.set("prompt", promptPane);
     modal.appendChild(promptPane);
+
+    const promptLabel = document.createElement("h4");
+    promptLabel.className = "settings-label";
+    promptLabel.textContent = "系统提示词";
+    promptPane.appendChild(promptLabel);
+    const promptHint = document.createElement("p");
+    promptHint.className = "settings-hint";
+    promptHint.textContent =
+      "自定义 AI 助手的行为指令：交流模式用于对话与建议，编辑模式用于绘制工具管理；保存后立即生效。";
+    promptPane.appendChild(promptHint);
+
+    // ---- 数据页签：存储位置管理（桌面端可更改目录，浏览器环境提示 localStorage） ----
+    const dataPane = document.createElement("div");
+    dataPane.className = "settings-pane";
+    dataPane.hidden = true;
+    this.panes.set("data", dataPane);
+    modal.appendChild(dataPane);
+
+    const dataSection = document.createElement("section");
+    dataSection.className = "settings-section";
+    const dataLabel = document.createElement("h4");
+    dataLabel.className = "settings-label";
+    dataLabel.textContent = "数据存储";
+    dataSection.appendChild(dataLabel);
+    const dataHint = document.createElement("p");
+    dataHint.className = "settings-hint";
+    dataHint.textContent =
+      "项目画布与 AI 自定义工具均存储于此目录；更改后旧数据自动迁移到新目录。";
+    dataSection.appendChild(dataHint);
+    const dataRow = document.createElement("div");
+    dataRow.className = "data-dir-row";
+    this.dataDirEl = document.createElement("code");
+    this.dataDirEl.className = "data-dir-path";
+    dataRow.appendChild(this.dataDirEl);
+    const changeBtn = document.createElement("button");
+    changeBtn.type = "button";
+    changeBtn.className = "data-dir-btn";
+    changeBtn.textContent = "更改目录…";
+    changeBtn.addEventListener("click", () => void this.chooseDataDir());
+    dataRow.appendChild(changeBtn);
+    dataSection.appendChild(dataRow);
+    this.dataStatusEl = document.createElement("p");
+    this.dataStatusEl.className = "settings-hint data-dir-status";
+    dataSection.appendChild(this.dataStatusEl);
+    dataPane.appendChild(dataSection);
+
+    // ---- 快捷键页签：操作 + 内置工具键位自定义（内容由 renderShortcutsPane 动态重建） ----
+    const shortcutsPane = document.createElement("div");
+    shortcutsPane.className = "settings-pane";
+    shortcutsPane.hidden = true;
+    this.panes.set("shortcuts", shortcutsPane);
+    modal.appendChild(shortcutsPane);
+    this.shortcutRoot = document.createElement("div");
+    shortcutsPane.appendChild(this.shortcutRoot);
 
     const promptModeRow = document.createElement("div");
     promptModeRow.className = "prompt-mode-row";
@@ -816,6 +895,11 @@ export class SettingsDialog {
 
   // ---------- 工具栏布局 ----------
 
+  /** 读取拖拽源：优先实例暂存（WebView2 中 dataTransfer 在 dragover/drop 时读不到），回退 dataTransfer */
+  private dragData(e: DragEvent): string {
+    return this.dragSrc ?? e.dataTransfer?.getData("text/plain") ?? "";
+  }
+
   /**
    * 重建「工具栏」页签：与顶栏同构分区展示——平铺区（拖拽排序）
    * + 分组收纳区（折叠展示，与顶栏下拉一一对应）+ 隐藏区。
@@ -829,6 +913,7 @@ export class SettingsDialog {
     const order = loadGroupOrderPref() ?? [];
     const overrides = loadGroupOverrides();
     this.groupOverrides = overrides;
+    this.groupJoins = loadGroupJoins();
     for (const t of this.registry.list()) {
       const g = effectiveGroup(t, overrides);
       if (g && !order.includes(g)) {
@@ -853,21 +938,35 @@ export class SettingsDialog {
     pinnedSection.className = "tb-section";
     const pinnedTitle = document.createElement("div");
     pinnedTitle.className = "tb-section-title";
+    // 平铺区实际项序列 = 显式平铺序列 + 分组收纳区自动同步的组副本：
+    // 分组区里有什么组，这里就复制一份对应的分组按钮行（组删除/清空后自动收起）
+    const pinnedItems = [...this.toolbarVisible];
+    for (const g of this.toolbarGroupOrder) {
+      if (pinnedItems.some((x) => isGroupMarker(x) && markerGroup(x) === g)) {
+        continue;
+      }
+      const gTools = this.registry
+        .list()
+        .filter((t) => effectiveGroup(t, this.groupOverrides) === g);
+      if (!gTools.length && !this.customGroups.some((d) => d.id === g)) {
+        continue; // 与分组收纳区显示规则一致：内置空组不显示，自定义空组显示
+      }
+      pinnedItems.push(groupMarker(g));
+    }
     // 计数只算工具，分组按钮单独标注（数字不虚高）
-    const pinnedTools = this.toolbarVisible.filter((x) => !isGroupMarker(x)).length;
-    const pinnedGroups = this.toolbarVisible.length - pinnedTools;
+    const pinnedTools = pinnedItems.filter((x) => !isGroupMarker(x)).length;
+    const pinnedGroups = pinnedItems.length - pinnedTools;
     pinnedTitle.textContent = pinnedGroups
-      ? `平铺顶栏（${pinnedTools} 工具 + ${pinnedGroups} 分组按钮）：拖拽调整顺序`
-      : `平铺顶栏（${pinnedTools}）：拖拽调整顺序`;
+      ? `顶栏（${pinnedTools} 工具 + ${pinnedGroups} 分组按钮）：拖拽调整顺序`
+      : `顶栏（${pinnedTools}）：拖拽调整顺序`;
     pinnedSection.appendChild(pinnedTitle);
-    if (!this.toolbarVisible.length) {
+    if (!pinnedItems.length) {
       const empty = document.createElement("div");
       empty.className = "tb-section-empty";
-      empty.textContent =
-        "暂无平铺内容：勾选工具行「平铺顶栏」，或把下方分组头拖上来（保持分组整体）";
-      // 空平铺区也是拖放目标：拖入工具行平铺到开头（分组头不再拖入——平铺区与分组区分开）
+      empty.textContent = "暂无平铺内容：勾选工具行右侧复选框即可平铺到顶栏";
+      // 空平铺区也是拖放目标：拖入工具行平铺到开头（分组头不再拖入——平铺区与分组区分开，组按钮自动同步）
       empty.addEventListener("dragover", (e) => {
-        const src = e.dataTransfer?.getData("text/plain");
+        const src = this.dragData(e);
         if (src && isGroupMarker(src)) {
           return; // 分组头/分组按钮行禁止拖入平铺区（保持两区分开）
         }
@@ -880,7 +979,7 @@ export class SettingsDialog {
       empty.addEventListener("drop", (e) => {
         e.preventDefault();
         empty.classList.remove("drag-over");
-        const src = e.dataTransfer?.getData("text/plain");
+        const src = this.dragData(e);
         if (!src) {
           return;
         }
@@ -894,7 +993,7 @@ export class SettingsDialog {
       });
       pinnedSection.appendChild(empty);
     }
-    for (const item of this.toolbarVisible) {
+    for (const item of pinnedItems) {
       if (isGroupMarker(item)) {
         // 分组按钮行：顶栏该位置显示完整分组按钮（不拆开）
         const g = markerGroup(item) as ToolGroup;
@@ -902,7 +1001,8 @@ export class SettingsDialog {
           .list()
           .filter((t) => effectiveGroup(t, this.groupOverrides) === g);
         if (gTools.length || this.customGroups.some((d) => d.id === g)) {
-          pinnedSection.appendChild(this.makeGroupPinnedRow(g, gTools));
+          const auto = !this.toolbarVisible.includes(item); // 同步副本：未在显式序列中
+          pinnedSection.appendChild(this.makeGroupPinnedRow(g, gTools, auto));
         }
       } else {
         const t = this.registry.getTool(item);
@@ -924,19 +1024,16 @@ export class SettingsDialog {
       arr.push(t);
       groupTools.set(g, arr);
     }
-    // 分组区总标题 + 新建分组（自定义分组即使为空也显示，可拖入工具归组）
+    // 分组区新建分组按钮（自定义分组即使为空也显示，可拖入工具归组）
     const groupsTitle = document.createElement("div");
     groupsTitle.className = "tb-pane-title";
-    const gtText = document.createElement("span");
-    gtText.textContent =
-      "分组收纳区（顶栏下拉按钮）：拖拽分组头调序；工具行拖到分组头上收进该组";
     const addBtn = document.createElement("button");
     addBtn.type = "button";
     addBtn.className = "tb-add-group-btn";
     addBtn.title = "新建分组：创建后把工具行拖到分组头上即可归入";
     addBtn.innerHTML = iconHTML("plus", 12) + "新建分组";
     addBtn.addEventListener("click", () => this.createCustomGroup());
-    groupsTitle.append(gtText, addBtn);
+    groupsTitle.appendChild(addBtn);
     this.toolbarListEl.appendChild(groupsTitle);
     // 新建/重命名内联输入行（不依赖 window.prompt，Tauri WebView 不支持原生 prompt）
     if (this.groupEdit) {
@@ -955,8 +1052,8 @@ export class SettingsDialog {
       head.className = "tb-group-head" + (open ? " open" : "");
       head.draggable = true;
       head.title = isCustom
-        ? "点击展开/折叠组内工具；拖拽调整顺序；右侧可重命名/删除"
-        : "点击展开/折叠组内工具；拖拽调整分组在顶栏中的顺序";
+        ? "点击展开/折叠组内工具；＋从平铺区添加工具；拖拽调整顺序；右侧可重命名/删除"
+        : "点击展开/折叠组内工具；＋从平铺区添加工具；拖拽调整分组在顶栏中的顺序";
       // 拖拽手柄：提示该分组整体可拖拽（拖动后顶栏分组按钮顺序同步变化）
       const grip = document.createElement("span");
       grip.className = "tb-grip tb-group-grip";
@@ -976,6 +1073,17 @@ export class SettingsDialog {
       const caret = document.createElement("span");
       caret.className = "tb-group-caret";
       caret.textContent = open ? "▾" : "▸";
+      // “+”按钮：从平铺区添加工具到该组（加入后从平铺区收起；删除分组后自动还回）
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "tb-group-op tb-group-add";
+      addBtn.title =
+        "从平铺区添加工具到该组（加入后从平铺区收起，删除分组后自动还回）";
+      addBtn.innerHTML = iconHTML("plus", 11);
+      addBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleGroupAddPanel(g);
+      });
       // 自定义分组操作：重命名 / 删除（内置组无）
       const ops = document.createElement("span");
       ops.className = "tb-group-ops";
@@ -996,8 +1104,8 @@ export class SettingsDialog {
           (this.confirmDelete === g ? " tb-group-op-confirm" : "");
         const deleting = this.confirmDelete === g;
         del.title = deleting
-          ? "再次点击确认删除（组内工具回到原分组）"
-          : "删除分组（组内工具回到原分组）";
+          ? "再次点击确认删除（组内工具回到原分组，＋添加的还回平铺区）"
+          : "删除分组（组内工具回到原分组，＋添加的还回平铺区）";
         del.innerHTML = deleting
           ? iconHTML("trash", 11) + "确认删除"
           : iconHTML("trash", 11);
@@ -1007,7 +1115,7 @@ export class SettingsDialog {
         });
         ops.append(rename, del);
       }
-      head.append(grip, gicon, gname, gdesc, ops, caret);
+      head.append(grip, gicon, gname, gdesc, addBtn, ops, caret);
       head.addEventListener("click", () => {
         this.toolbarGroupOpen.set(g, !open);
         this.renderToolbarPane();
@@ -1015,11 +1123,13 @@ export class SettingsDialog {
       // 拖拽排序：把该分组移到目标分组前（同时作用于顶栏分组按钮顺序）；
       // 也可拖到上方平铺区：在该位置插入完整分组按钮（保持分组整体，不拆开）
       head.addEventListener("dragstart", (e) => {
+        this.dragSrc = groupMarker(g);
         e.dataTransfer?.setData("text/plain", groupMarker(g));
         head.classList.add("dragging");
       });
       head.addEventListener("dragend", () => {
         head.classList.remove("dragging", "drag-over");
+        this.dragSrc = null;
       });
       head.addEventListener("dragover", (e) => {
         e.preventDefault();
@@ -1031,7 +1141,7 @@ export class SettingsDialog {
       head.addEventListener("drop", (e) => {
         e.preventDefault();
         head.classList.remove("drag-over");
-        const raw = e.dataTransfer?.getData("text/plain");
+        const raw = this.dragData(e);
         if (!raw) {
           return;
         }
@@ -1067,6 +1177,9 @@ export class SettingsDialog {
         this.onToolbarChange(this.toolbarPref);
       });
       section.appendChild(head);
+      if (this.groupAddOpen === g) {
+        section.appendChild(this.makeGroupAddPanel(g));
+      }
       if (open) {
         const body = document.createElement("div");
         body.className = "tb-group-body";
@@ -1078,8 +1191,8 @@ export class SettingsDialog {
       this.toolbarListEl.appendChild(section);
     }
 
-    // ---- 隐藏区：无分组且未勾选（顶栏不可见） ----
-    const hidden = rest.filter((t) => !t.group);
+    // ---- 隐藏区：无有效分组且未勾选（顶栏不可见；含分组覆盖的工具不算隐藏） ----
+    const hidden = rest.filter((t) => !effectiveGroup(t, overrides));
     if (hidden.length) {
       const section = document.createElement("div");
       section.className = "tb-section";
@@ -1093,7 +1206,6 @@ export class SettingsDialog {
       this.toolbarListEl.appendChild(section);
     }
 
-    this.updateToolbarCount();
     this.renderToolbarPreview();
   }
 
@@ -1108,13 +1220,13 @@ export class SettingsDialog {
     row.draggable = true;
     row.title = pinnedRow
       ? "拖拽调整平铺顺序；拖到下方分组区可取消平铺"
-      : "拖到上方「平铺顶栏」区即可平铺到顶栏";
+      : "拖到上方平铺区即可平铺到顶栏";
     // 拖拽手柄（所有行可拖；分组/隐藏行拖到平铺区 = 平铺）
     const grip = document.createElement("span");
     grip.className = "tb-grip";
     grip.title = pinnedRow
       ? "拖拽排序；拖到下方分组区取消平铺"
-      : "拖到上方「平铺顶栏」区即可平铺";
+      : "拖到上方平铺区即可平铺";
     grip.innerHTML = iconHTML("grip", 12);
     row.appendChild(grip);
 
@@ -1128,7 +1240,8 @@ export class SettingsDialog {
     name.textContent = t.name;
     name.title = t.title;
     const grp = effectiveGroup(t, this.groupOverrides);
-    if (grp) {
+    // 分组徽章：仅分组区/隐藏区行显示（已平铺的行在顶栏，无需归属标签）
+    if (grp && !pinnedRow) {
       const g = document.createElement("span");
       g.className = "tb-badge";
       g.textContent = groupLabel(grp, this.customGroups);
@@ -1142,52 +1255,34 @@ export class SettingsDialog {
     }
     row.appendChild(name);
 
-    // 去向徽章：勾选=平铺顶栏；未勾选分组=收进对应下拉；未勾选其他=从顶栏隐藏
-    const dest = document.createElement("span");
-    const grp2 = effectiveGroup(t, this.groupOverrides);
-    dest.className = pinnedRow
-      ? "tb-badge tb-badge-bar"
-      : grp2
-        ? "tb-badge tb-badge-drop"
-        : "tb-badge tb-badge-hidden";
-    dest.textContent = pinnedRow
-      ? "顶栏"
-      : grp2
-        ? `收纳于 ${groupLabel(grp2, this.customGroups)}▾`
-        : "隐藏";
-    dest.title = pinnedRow
-      ? "平铺在顶部工具栏，可拖拽调整顺序"
-      : grp2
-        ? `未平铺：点击顶栏「${groupLabel(grp2, this.customGroups)}▾」下拉仍可使用`
-        : "未平铺且不在任何分组：顶栏不可见";
-    row.appendChild(dest);
-
     const checkRow = document.createElement("label");
     checkRow.className = "tb-check";
     // 勾选/取消平铺：勾选顶栏；取消勾选：分组工具收进对应下拉，其他隐藏
     checkRow.title = grp
-      ? `勾选：平铺顶栏；取消勾选：收进「${groupLabel(grp, this.customGroups)}▾」下拉`
-      : "勾选：平铺顶栏；取消勾选：从顶栏隐藏";
+      ? `勾选：显示在顶栏；取消勾选：收进「${groupLabel(grp, this.customGroups)}▾」下拉`
+      : "勾选：显示在顶栏；取消勾选：从顶栏隐藏";
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = pinnedRow;
     box.addEventListener("change", () =>
       this.toggleToolbarItem(t.id, box.checked),
     );
-    checkRow.append(document.createTextNode("平铺顶栏"), box);
+    checkRow.appendChild(box);
     row.appendChild(checkRow);
 
     // 拖拽：所有行可拖（平铺区 ⇄ 分组/隐藏区双向）
     row.addEventListener("dragstart", (e) => {
+      this.dragSrc = t.id;
       e.dataTransfer?.setData("text/plain", t.id);
       row.classList.add("dragging");
     });
     row.addEventListener("dragend", () => {
       row.classList.remove("dragging", "drag-over");
+      this.dragSrc = null;
     });
     row.addEventListener("dragover", (e) => {
       if (pinnedRow) {
-        const src = e.dataTransfer?.getData("text/plain");
+        const src = this.dragData(e);
         if (src && isGroupMarker(src)) {
           return; // 分组头/分组按钮行禁止拖入平铺区（保持平铺区与分组区分开）
         }
@@ -1199,7 +1294,7 @@ export class SettingsDialog {
     row.addEventListener("drop", (e) => {
       e.preventDefault();
       row.classList.remove("drag-over");
-      const src = e.dataTransfer?.getData("text/plain");
+      const src = this.dragData(e);
       if (!src) {
         return;
       }
@@ -1237,9 +1332,35 @@ export class SettingsDialog {
       list.splice(from < to ? to - 1 : to, 0, src);
     } else {
       list.splice(to, 0, src);
+      // 从收纳区/隐藏区取出：恢复默认归属（分组徽章随之消失，不再永久带标签）
+      if (!isGroupMarker(src)) {
+        this.releaseToolGroup(src);
+      }
     }
     this.toolbarVisible = list;
     this.applyToolbarLayout();
+  }
+
+  /** 工具从收纳区取出：清除分组覆盖与"＋"加入记录（恢复默认归属，去掉分组标签） */
+  private releaseToolGroup(id: string) {
+    if (this.groupOverrides[id]) {
+      const next = { ...this.groupOverrides };
+      delete next[id];
+      this.groupOverrides = next;
+      saveGroupOverrides(next);
+    }
+    let changed = false;
+    const joins = { ...this.groupJoins };
+    for (const [g, list] of Object.entries(joins)) {
+      if (list.includes(id)) {
+        joins[g] = list.filter((x) => x !== id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.groupJoins = joins;
+      saveGroupJoins(joins);
+    }
   }
 
   /** 设置工具归属分组（自定义组写入覆盖；内置组传 undefined 清除覆盖恢复默认），并同步顶栏 */
@@ -1357,20 +1478,92 @@ export class SettingsDialog {
     this.groupOverrides = next;
     saveGroupOverrides(next);
     this.toolbarGroupOpen.delete(id);
-    this.renderToolbarPane();
+    // 通过“+”从平铺区加入该组的工具还回平铺区（恢复加入前的平铺状态）
+    const joins = { ...this.groupJoins };
+    for (const tid of joins[id] ?? []) {
+      if (!this.toolbarVisible.includes(tid)) {
+        this.toolbarVisible.push(tid);
+      }
+    }
+    delete joins[id];
+    this.groupJoins = joins;
+    saveGroupJoins(joins);
+    this.applyToolbarLayout();
     this.onToolbarChange(this.toolbarPref, this.customGroups);
+  }
+
+  /** 切换分组“+”面板：列出平铺区中非本组成员，点击即加入该组并收起 */
+  private toggleGroupAddPanel(g: ToolGroup) {
+    this.groupAddOpen = this.groupAddOpen === g ? null : g;
+    this.renderToolbarPane();
+  }
+
+  /** “+”面板：平铺区中可加入该组的工具行（排除本组成员），点击即加入 */
+  private makeGroupAddPanel(g: ToolGroup): HTMLElement {
+    const panel = document.createElement("div");
+    panel.className = "tb-group-add-panel";
+    const candidates = this.toolbarVisible
+      .filter((x) => !isGroupMarker(x))
+      .map((id) => this.registry.getTool(id))
+      .filter(
+        (t): t is ToolDef =>
+          !!t && effectiveGroup(t, this.groupOverrides) !== g,
+      );
+    if (!candidates.length) {
+      const empty = document.createElement("div");
+      empty.className = "tb-group-add-empty";
+      empty.textContent = "平铺区没有可添加的工具：先勾选工具行右侧复选框再添加";
+      panel.appendChild(empty);
+      return panel;
+    }
+    for (const t of candidates) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "tb-group-add-item";
+      item.title = `把「${t.name}」加入「${groupLabel(g, this.customGroups)}」并收起（删除分组后自动还回平铺区）`;
+      const icon = document.createElement("span");
+      icon.className = "tb-row-icon";
+      renderToolIcon(icon, t.icon);
+      const name = document.createElement("span");
+      name.textContent = t.name;
+      item.append(icon, name);
+      item.addEventListener("click", () => this.addToolToGroup(t.id, g));
+      panel.appendChild(item);
+    }
+    return panel;
+  }
+
+  /** 加号添加：工具归入该组并取消平铺（从平铺区收起），记录入组来源供删除组时恢复 */
+  private addToolToGroup(id: string, g: ToolGroup) {
+    const joins = { ...this.groupJoins };
+    const list = joins[g] ?? [];
+    if (!list.includes(id)) {
+      joins[g] = [...list, id];
+    }
+    this.groupJoins = joins;
+    saveGroupJoins(joins);
+    this.setToolGroup(id, g);
+    this.toggleToolbarItem(id, false);
   }
 
   /**
    * 平铺区中的分组按钮行：表示顶栏该位置有一个完整分组按钮（收纳组内工具，不拆开）。
    * 可拖拽排序（平铺区内），可拖回分组区或取消勾选移除（组按钮回到末尾/偏好位置）。
+   * auto = 与分组收纳区同步的副本（分组区存在该组即自动显示）：复选框禁用不可移除，
+   * 拖拽到其他行可固定位置（写入显式序列）；取消收纳组内工具或删除分组后自动收起。
    */
-  private makeGroupPinnedRow(g: ToolGroup, tools: ToolDef[]): HTMLElement {
+  private makeGroupPinnedRow(
+    g: ToolGroup,
+    tools: ToolDef[],
+    auto = false,
+  ): HTMLElement {
     const row = document.createElement("div");
-    row.className = "tb-row tb-group-pinned";
+    row.className =
+      "tb-row tb-group-pinned" + (auto ? " tb-group-pinned-auto" : "");
     row.draggable = true;
-    row.title =
-      "顶栏分组按钮（整体）：拖拽调整位置；拖回下方分组区或取消勾选可移除";
+    row.title = auto
+      ? "顶栏分组按钮（与分组收纳区同步）：分组区存在该组即自动显示；拖拽可固定位置，移除需在分组区取消收纳工具或删除分组"
+      : "顶栏分组按钮（整体）：拖拽调整位置；拖回下方分组区或取消勾选可移除";
 
     const grip = document.createElement("span");
     grip.className = "tb-grip";
@@ -1380,7 +1573,7 @@ export class SettingsDialog {
 
     const icon = document.createElement("span");
     icon.className = "tb-row-icon";
-    renderToolIcon(icon, tools[0].icon);
+    renderToolIcon(icon, tools[0]?.icon ?? "folder");
     row.appendChild(icon);
 
     const name = document.createElement("span");
@@ -1389,33 +1582,32 @@ export class SettingsDialog {
     name.title = "顶栏该位置显示完整分组按钮，点击箭头展开组内工具";
     row.appendChild(name);
 
-    const dest = document.createElement("span");
-    dest.className = "tb-badge tb-badge-bar";
-    dest.textContent = "顶栏分组";
-    dest.title = `顶栏分组按钮：收纳 ${tools.length} 个工具，保持整体不拆开`;
-    row.appendChild(dest);
-
     const checkRow = document.createElement("label");
     checkRow.className = "tb-check";
-    checkRow.title = "取消勾选：顶栏移除该分组按钮（组内工具未平铺时按钮回到末尾）";
+    checkRow.title = auto
+      ? "与分组收纳区同步，自动显示：取消收纳组内工具或删除分组后自动收起"
+      : "取消勾选：顶栏移除该分组按钮（组内工具未平铺时按钮回到末尾）";
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = true;
+    box.disabled = auto;
     box.addEventListener("change", () => {
       this.toolbarVisible = this.toolbarVisible.filter(
         (x) => x !== groupMarker(g),
       );
       this.applyToolbarLayout();
     });
-    checkRow.append(document.createTextNode("平铺顶栏"), box);
+    checkRow.appendChild(box);
     row.appendChild(checkRow);
 
     row.addEventListener("dragstart", (e) => {
+      this.dragSrc = groupMarker(g);
       e.dataTransfer?.setData("text/plain", groupMarker(g));
       row.classList.add("dragging");
     });
     row.addEventListener("dragend", () => {
       row.classList.remove("dragging", "drag-over");
+      this.dragSrc = null;
     });
     row.addEventListener("dragover", (e) => {
       e.preventDefault();
@@ -1425,29 +1617,13 @@ export class SettingsDialog {
     row.addEventListener("drop", (e) => {
       e.preventDefault();
       row.classList.remove("drag-over");
-      const src = e.dataTransfer?.getData("text/plain");
+      const src = this.dragData(e);
       if (!src) {
         return;
       }
       this.dropIntoPinned(src, groupMarker(g));
     });
     return row;
-  }
-
-  /** 动态计数：已平铺工具/分组按钮数量与建议上限对比，超限标红警告 */
-  private updateToolbarCount() {
-    const total = this.toolbarVisible.length;
-    // 分组按钮也占顶栏位置（计入折叠预算），但与工具分开标注
-    const tools = this.toolbarVisible.filter((x) => !isGroupMarker(x)).length;
-    const groups = total - tools;
-    const warn = total > 8;
-    const detail = groups
-      ? `已平铺 ${tools} 个工具 + ${groups} 个分组按钮（共 ${total} 项）`
-      : `已平铺 ${tools} 个工具`;
-    this.toolbarCountEl.textContent = warn
-      ? `${detail}：超出 8 项，顶栏将自动折叠多余工具进“更多▾”`
-      : `${detail}（建议不超过 8 项；超出部分自动折叠进“更多▾”）`;
-    this.toolbarCountEl.classList.toggle("warn", warn);
   }
 
   /**
@@ -1552,9 +1728,11 @@ export class SettingsDialog {
     this.renderToolbarPane();
   }
 
-  /** 勾选/取消平铺：取消时移除，勾选时追加到末尾（保持顺序可控） */
+  /** 勾选/取消平铺：取消时移除；勾选时视为从收纳区取出，清除分组覆盖后追加到末尾 */
   private toggleToolbarItem(id: string, on: boolean) {
     if (on) {
+      // 勾选平铺 = 从分组/隐藏区取出：恢复默认归属（不再带分组标签）
+      this.releaseToolGroup(id);
       if (!this.toolbarVisible.includes(id)) {
         this.toolbarVisible.push(id);
       }
@@ -1586,6 +1764,227 @@ export class SettingsDialog {
     }
     for (const [t, pane] of this.panes) {
       pane.hidden = t !== tab;
+    }
+  }
+
+  // ---------- 数据存储 ----------
+
+  /** 数据页签回调注入（main.ts：storage.getDataDir + Rust set_data_dir + 重载） */
+  setDataDirHandlers(handlers: {
+    getDir: () => string | null;
+    change: (newDir: string) => Promise<void>;
+  }) {
+    this.dataHandlers = handlers;
+    this.refreshDataDir();
+  }
+
+  /** 刷新数据目录展示（打开设置弹窗与目录变更成功后调用） */
+  private refreshDataDir() {
+    if (!this.dataDirEl) {
+      return;
+    }
+    const dir = this.dataHandlers?.getDir() ?? null;
+    if (dir) {
+      this.dataDirEl.textContent = dir;
+      this.dataDirEl.title = dir;
+    } else {
+      this.dataDirEl.textContent = "浏览器环境：数据保存在 localStorage（不可更改目录）";
+    }
+  }
+
+  /** 更改数据目录：系统目录选择器 → Rust set_data_dir（创建/迁移/授权） → 成功提示 */
+  private async chooseDataDir() {
+    if (!isDesktop() || !this.dataHandlers) {
+      return;
+    }
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ directory: true, title: "选择数据存储目录" });
+    if (typeof picked !== "string" || !picked) {
+      return;
+    }
+    const cur = this.dataHandlers.getDir();
+    // 选择同一目录时无需迁移
+    if (cur && cur.replace(/[\\/]+$/, "") === picked.replace(/[\\/]+$/, "")) {
+      return;
+    }
+    this.dataStatusEl.textContent = "正在迁移数据…";
+    try {
+      await this.dataHandlers.change(picked);
+      this.refreshDataDir();
+      this.dataStatusEl.textContent = "迁移完成，数据已保存到新目录";
+    } catch (err) {
+      this.dataStatusEl.textContent = `迁移失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  // ---------- 快捷键 ----------
+
+  /** 快捷键配置中心注入（main.ts 创建，操作/内置工具键位自定义；AI 工具键仍由注册表维护） */
+  setShortcutSource(manager: ShortcutManager) {
+    this.shortcuts = manager;
+    this.renderShortcutsPane();
+  }
+
+  /** 重建「快捷键」页签：操作区 + 工具区（AI 工具行只读，指向 AI 工具页签） */
+  private renderShortcutsPane() {
+    if (!this.shortcutRoot) {
+      return;
+    }
+    const sm = this.shortcuts;
+    this.shortcutRoot.innerHTML = "";
+    const section = document.createElement("section");
+    section.className = "settings-section";
+    const label = document.createElement("h4");
+    label.className = "settings-label";
+    label.textContent = "快捷键";
+    const hint = document.createElement("p");
+    hint.className = "settings-hint";
+    hint.textContent =
+      "点击「修改」后按下新组合键立即生效；Esc 取消录制。AI 自定义工具快捷键请在「AI 工具」页签编辑。";
+    const head = document.createElement("div");
+    head.className = "sc-head";
+    const resetAll = document.createElement("button");
+    resetAll.type = "button";
+    resetAll.className = "data-dir-btn";
+    resetAll.textContent = "恢复全部默认";
+    resetAll.addEventListener("click", () => {
+      if (window.confirm("确定恢复全部默认快捷键？")) {
+        sm?.resetAll();
+        this.renderShortcutsPane();
+      }
+    });
+    head.appendChild(resetAll);
+    section.append(label, hint, head);
+    section.appendChild(this.shortcutGroupTitle("操作"));
+    if (!sm) {
+      section.appendChild(this.shortcutRow("", "快捷键配置不可用", [], false, false));
+    } else {
+      for (const a of SHORTCUT_ACTIONS) {
+        section.appendChild(
+          this.shortcutRow(a.id, a.label, sm.getKeys(a.id), true, this.recordingScId === a.id),
+        );
+      }
+      section.appendChild(this.shortcutGroupTitle("工具"));
+      for (const t of this.registry.list()) {
+        const custom = t.source === "custom";
+        section.appendChild(
+          this.shortcutRow(
+            `tool:${t.id}`,
+            `${t.name}${custom ? "（AI）" : ""}`,
+            sm.toolKeys(t),
+            !custom,
+            this.recordingScId === `tool:${t.id}`,
+          ),
+        );
+      }
+    }
+    this.shortcutRoot.appendChild(section);
+  }
+
+  /** 快捷键分组小标题 */
+  private shortcutGroupTitle(text: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "sc-group-title";
+    el.textContent = text;
+    return el;
+  }
+
+  /** 快捷键行：名称 + 当前键位（kbd）+ 修改/设置按钮；editable=false 时按钮禁用 */
+  private shortcutRow(
+    id: string,
+    name: string,
+    keys: string[],
+    editable: boolean,
+    editing: boolean,
+  ): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "sc-row";
+    const nameEl = document.createElement("span");
+    nameEl.className = "sc-name";
+    nameEl.textContent = name;
+    const keysEl = document.createElement("kbd");
+    keysEl.className = editing ? "sc-keys sc-recording" : "sc-keys";
+    keysEl.textContent = editing
+      ? "按下新快捷键…"
+      : keys.length
+        ? formatKeys(keys)
+        : "未设置";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "data-dir-btn sc-btn";
+    if (!editable) {
+      btn.disabled = true;
+      btn.textContent = "AI 页签编辑";
+    } else if (editing) {
+      btn.textContent = "取消";
+      btn.addEventListener("click", () => this.cancelRecord());
+    } else {
+      btn.textContent = keys.length ? "修改" : "设置";
+      btn.addEventListener("click", () => this.beginRecordShortcut(id));
+    }
+    row.append(nameEl, keysEl, btn);
+    return row;
+  }
+
+  /** 开始录制：捕获阶段监听 keydown（先于全局快捷键处理，阻止误触发） */
+  private beginRecordShortcut(id: string) {
+    if (this.recordingScId) {
+      this.cancelRecord();
+    }
+    this.recordingScId = id;
+    this.recordingHandler = (e) => this.onRecordKey(e);
+    window.addEventListener("keydown", this.recordingHandler, { capture: true });
+    this.renderShortcutsPane();
+  }
+
+  /** 取消录制（Esc 或点击取消按钮） */
+  private cancelRecord() {
+    if (this.recordingHandler) {
+      window.removeEventListener("keydown", this.recordingHandler, true);
+      this.recordingHandler = null;
+    }
+    this.recordingScId = null;
+    this.renderShortcutsPane();
+  }
+
+  /** 录制键位：捕获组合键 → 冲突检测 → 确认后写入配置并重建 keymap */
+  private onRecordKey(e: KeyboardEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const id = this.recordingScId;
+    const sm = this.shortcuts;
+    if (!id || !sm) {
+      this.cancelRecord();
+      return;
+    }
+    if (e.key === "Escape") {
+      this.cancelRecord();
+      return;
+    }
+    const combo = comboFromEvent(e);
+    if (!combo) {
+      return; // 纯修饰键：继续等待完整组合
+    }
+    const clash = sm.findConflict(combo, id, this.registry);
+    const apply = () => {
+      if (clash) {
+        // 被挤占的是配置项（操作/内置工具）时恢复其默认键；AI 工具键不在配置层，仅失效提示
+        const toolId = clash.id.startsWith("tool:") ? clash.id.slice(5) : null;
+        const isCustomTool =
+          toolId !== null && this.registry.getTool(toolId)?.source === "custom";
+        if (!isCustomTool) {
+          sm.restoreDefault(clash.id);
+        }
+      }
+      sm.setKeys(id, [combo]);
+      this.cancelRecord();
+    };
+    if (clash) {
+      if (window.confirm(`快捷键 ${formatCombo(combo)} 已被${clash.label}占用，确定覆盖？`)) {
+        apply();
+      }
+    } else {
+      apply();
     }
   }
 

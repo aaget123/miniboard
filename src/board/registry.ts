@@ -10,6 +10,33 @@ import { validateElementList } from "./validate";
 
 const LS_KEY = "miniboard:custom-tools";
 
+/** 自定义工具持久化适配器（桌面端文件 / 浏览器 localStorage） */
+export interface ToolStorage {
+  /** 读取已有工具列表；无数据返回 null（读取失败同样返回 null） */
+  read(): CustomToolDef[] | null;
+  /** 持久化工具列表 */
+  write(list: CustomToolDef[]): void;
+}
+
+/** 默认浏览器实现：localStorage（兼容测试与浏览器环境） */
+const localStorageStorage: ToolStorage = {
+  read() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      return raw ? (JSON.parse(raw) as CustomToolDef[]) : null;
+    } catch {
+      return null;
+    }
+  },
+  write(list) {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify(list));
+    } catch {
+      // 存储不可用时静默失败（不阻断绘制流程）
+    }
+  },
+};
+
 /** AI 自定义工具允许的行为类别（其余 kind 为内置工具专属） */
 export const CUSTOM_KINDS = ["drag", "click"] as const;
 
@@ -160,7 +187,7 @@ const BUILTIN: ToolDef[] = [
 // ================= 注册表 =================
 
 /**
- * 统一功能注册表：内置工具（只读）+ AI 生成工具（localStorage 持久化）。
+ * 统一功能注册表：内置工具（只读）+ AI 生成工具（自定义持久化适配器注入）。
  * 工具栏渲染、快捷键映射、绘制分发均以注册表为准。
  */
 export class ToolRegistry {
@@ -172,7 +199,7 @@ export class ToolRegistry {
   private generatorWarned = new Set<string>();
   private onChangeFn: () => void = () => {};
 
-  constructor() {
+  constructor(private storage: ToolStorage = localStorageStorage) {
     const { list, migrated } = this.load();
     this.custom = list;
     if (migrated) {
@@ -493,17 +520,16 @@ export class ToolRegistry {
   }
 
   /**
-   * 从 localStorage 读取自定义工具；对旧数据（无分组标记）按名称关键词
+   * 从持久化适配器读取自定义工具；对旧数据（无分组标记）按名称关键词
    * 迁移分组：名称含形状特征词的工具归入 shape（形状下拉）。
    */
   private load(): { list: CustomToolDef[]; migrated: boolean } {
     let migrated = false;
     try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) {
+      const parsed = this.storage.read();
+      if (!parsed) {
         return { list: [], migrated };
       }
-      const parsed = JSON.parse(raw) as CustomToolDef[];
       if (!Array.isArray(parsed)) {
         return { list: [], migrated };
       }
@@ -535,6 +561,6 @@ export class ToolRegistry {
   }
 
   private save() {
-    localStorage.setItem(LS_KEY, JSON.stringify(this.custom));
+    this.storage.write(this.custom);
   }
 }

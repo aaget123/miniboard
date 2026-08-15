@@ -1,4 +1,6 @@
 import { iconHTML, isIconName } from "./icons";
+import { SHORTCUT_ACTIONS, formatKeys } from "./shortcuts";
+import type { ShortcutManager } from "./shortcuts";
 
 /** 命令面板条目：工具（绘制工具）或操作（文件/AI/主题等全局动作） */
 export type PaletteCommand = {
@@ -183,24 +185,36 @@ export class CommandPalette {
 
 // ---------- 快捷键帮助 ----------
 
-/** 快捷键清单（帮助弹窗与 README 共用来源） */
-export const SHORTCUTS: { keys: string; desc: string }[] = [
-  { keys: "Ctrl+S / Ctrl+O", desc: "保存 / 打开文件" },
-  { keys: "Ctrl+Z / Ctrl+Shift+Z · Ctrl+Y", desc: "撤销 / 重做" },
-  { keys: "Ctrl+C / Ctrl+X / Ctrl+V", desc: "复制 / 剪切 / 粘贴" },
-  { keys: "Ctrl+A", desc: "全选" },
-  { keys: "Delete / Backspace", desc: "删除选中" },
-  { keys: "Ctrl+= / Ctrl+- / Ctrl+0", desc: "放大 / 缩小 / 重置缩放" },
-  { keys: "Ctrl+K", desc: "命令面板（搜索工具与操作）" },
-  { keys: "K", desc: "AI 助手面板开关" },
-  { keys: "V H M Q P E L A R O T", desc: "选择 / 画布移动 / 框选 / 套索 / 画笔 / 橡皮擦 / 直线 / 箭头 / 矩形 / 椭圆 / 文本" },
-  { keys: "Esc", desc: "逐层退出（点编辑 → 裁剪 → 取消编辑 → 收起浮层）" },
-];
+/** 帮助弹窗数据源：工具列表（内置 + AI，与注册表同构） */
+type ShortcutTool = {
+  id: string;
+  name: string;
+  shortcut?: string;
+  source?: string;
+};
+
+/**
+ * 当前生效的快捷键清单（帮助弹窗每次打开时动态生成，配置/注册表变化后自动反映）。
+ * 操作区在前（顺序同设置页），工具区在后（内置工具显示配置后的生效键，AI 工具显示注册表键）。
+ */
+export function getShortcutHelpRows(
+  registry: { list(): ShortcutTool[] },
+  shortcuts: ShortcutManager,
+): { keys: string; desc: string }[] {
+  const rows: { keys: string; desc: string }[] = [];
+  for (const a of SHORTCUT_ACTIONS) {
+    rows.push({ keys: formatKeys(shortcuts.getKeys(a.id)), desc: a.label });
+  }
+  for (const t of registry.list()) {
+    rows.push({ keys: formatKeys(shortcuts.toolKeys(t)), desc: `工具：${t.name}` });
+  }
+  return rows;
+}
 
 let helpMask: HTMLElement | null = null;
 
-/** 快捷键帮助弹窗（模块级单例，多次打开复用） */
-export function showShortcutHelp() {
+/** 快捷键帮助弹窗（模块级单例；rows 每次打开时重新生成传入，反映最新配置） */
+export function showShortcutHelp(rows: { keys: string; desc: string }[]) {
   if (!helpMask) {
     helpMask = document.createElement("div");
     helpMask.className = "ai-modal-mask";
@@ -234,18 +248,20 @@ export function showShortcutHelp() {
     });
     modal.appendChild(closeBtn);
 
-    for (const s of SHORTCUTS) {
-      const row = document.createElement("div");
-      row.className = "shortcut-row";
-      const keys = document.createElement("kbd");
-      keys.textContent = s.keys;
-      const desc = document.createElement("span");
-      desc.textContent = s.desc;
-      row.append(keys, desc);
-      modal.appendChild(row);
-    }
-
     document.body.appendChild(helpMask);
+  }
+  // 每次打开重建行内容（配置可能已变更）
+  const modal = helpMask.firstElementChild as HTMLElement;
+  modal.querySelectorAll(".shortcut-row").forEach((el) => el.remove());
+  for (const s of rows) {
+    const row = document.createElement("div");
+    row.className = "shortcut-row";
+    const keys = document.createElement("kbd");
+    keys.textContent = s.keys;
+    const desc = document.createElement("span");
+    desc.textContent = s.desc;
+    row.append(keys, desc);
+    modal.appendChild(row);
   }
   helpMask.hidden = false;
 }
