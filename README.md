@@ -3,10 +3,8 @@
 [English](./README.en.md) | **简体中文**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-<!-- TODO: 创建 GitHub 仓库后补充版本与 CI 徽章，如：
-[![Release](https://img.shields.io/github/v/release/aaget123/miniboard)](https://github.com/aaget123/miniboard/releases)
+[![Release](https://img.shields.io/badge/Release-v0.1.0-blue.svg)](https://github.com/aaget123/miniboard/releases)
 [![CI](https://github.com/aaget123/miniboard/actions/workflows/test.yml/badge.svg)](https://github.com/aaget123/miniboard/actions)
--->
 
 **本地优先、完全离线的手绘白板**。桌面端由 Tauri 2 承载，画布使用 leafer-ui 渲染；项目数据与 AI 自定义工具全部存在你自己的磁盘上（可自定义目录），不依赖任何云服务。
 
