@@ -1909,7 +1909,7 @@ body.theme-light #statusbar.docked {
 }
 
 /* 工具栏页签：拖拽（所有行可拖，拖动中半透明，可拖行显示抓手光标） */
-.tb-row[draggable="true"] {
+.tb-row {
   cursor: grab;
 }
 
@@ -1925,7 +1925,7 @@ body.theme-light #statusbar.docked {
 }
 
 /* 分组头（选择▾/形状▾/AI 工具▾）可拖拽调整分组顺序 */
-.tb-group-head[draggable="true"] {
+.tb-group-head {
   cursor: grab;
 }
 

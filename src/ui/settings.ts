@@ -236,8 +236,15 @@ export class SettingsDialog {
   private confirmDelete: string | null = null;
   private toolbarListEl!: HTMLElement;
   private toolbarPreviewEl!: HTMLElement;
-  /** 拖拽源暂存：WebView2 中 dataTransfer.getData 在拖拽过程不可靠，用实例字段传递 */
-  private dragSrc: string | null = null;
+  /** 指针拖拽状态：WebView2 中原生 DnD（dataTransfer/拖拽事件）不可靠，改用指针事件自行实现 */
+  private dragState: {
+    src: string;
+    kind: "tool" | "pinnedGroup" | "groupHead";
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null = null;
+  private dragSourceEl: HTMLElement | null = null;
   // 数据页签：目录路径展示 + 状态提示 + 更改回调（main.ts 注入）
   private dataDirEl!: HTMLElement;
   private dataStatusEl!: HTMLElement;
@@ -895,9 +902,191 @@ export class SettingsDialog {
 
   // ---------- 工具栏布局 ----------
 
-  /** 读取拖拽源：优先实例暂存（WebView2 中 dataTransfer 在 dragover/drop 时读不到），回退 dataTransfer */
-  private dragData(e: DragEvent): string {
-    return this.dragSrc ?? e.dataTransfer?.getData("text/plain") ?? "";
+  /** 开始拖拽候选：记录源数据与起点（指针移动超过阈值后激活，避免与点击/勾选冲突） */
+  private beginDrag(
+    e: PointerEvent,
+    src: string,
+    kind: "tool" | "pinnedGroup" | "groupHead",
+  ) {
+    if (e.button !== 0 || this.dragState) {
+      return;
+    }
+    this.dragState = {
+      src,
+      kind,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+    };
+    // 指针捕获：鼠标拖出窗口/弹窗边界时事件仍持续派发。
+    // WebView2 中拖出窗口松开会丢失 pointerup，拖拽状态残留会导致之后所有行无法再拖。
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // 捕获失败不影响拖拽（仍靠 document 级监听）
+    }
+    document.addEventListener("pointermove", this.onDragMove);
+    document.addEventListener("pointerup", this.onDragEnd);
+    document.addEventListener("pointercancel", this.onDragCancel);
+    window.addEventListener("blur", this.onDragCancel);
+  }
+
+  private onDragMove = (e: PointerEvent) => {
+    const st = this.dragState;
+    if (!st) {
+      return;
+    }
+    if (!st.active) {
+      if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < 4) {
+        return;
+      }
+      st.active = true;
+      this.dragSourceEl?.classList.add("dragging");
+    }
+    this.clearDragOver();
+    this.dragTargetAt(e.clientX, e.clientY)?.classList.add("drag-over");
+    // 指针贴近列表边缘时自动滚动，露出更多可放置行
+    const r = this.toolbarListEl.getBoundingClientRect();
+    if (e.clientY < r.top + 28) {
+      this.toolbarListEl.scrollTop -= 14;
+    } else if (e.clientY > r.bottom - 28) {
+      this.toolbarListEl.scrollTop += 14;
+    }
+  };
+
+  private onDragEnd = (e: PointerEvent) => {
+    const st = this.dragState;
+    this.dragState = null;
+    document.removeEventListener("pointermove", this.onDragMove);
+    document.removeEventListener("pointerup", this.onDragEnd);
+    document.removeEventListener("pointercancel", this.onDragCancel);
+    window.removeEventListener("blur", this.onDragCancel);
+    this.dragSourceEl?.classList.remove("dragging");
+    this.dragSourceEl = null;
+    this.clearDragOver();
+    if (!st?.active) {
+      return;
+    }
+    const target = this.dragTargetAt(e.clientX, e.clientY);
+    if (target) {
+      this.dropAt(target, st, e.clientY);
+    }
+  };
+
+  /** 拖拽被系统中断（pointercancel / 窗口失焦）：清理状态，不执行放置 */
+  private onDragCancel = () => {
+    this.dragState = null;
+    document.removeEventListener("pointermove", this.onDragMove);
+    document.removeEventListener("pointerup", this.onDragEnd);
+    document.removeEventListener("pointercancel", this.onDragCancel);
+    window.removeEventListener("blur", this.onDragCancel);
+    this.dragSourceEl?.classList.remove("dragging");
+    this.dragSourceEl = null;
+    this.clearDragOver();
+  };
+
+  /** 清除所有行/区的拖放高亮 */
+  private clearDragOver() {
+    for (const el of this.toolbarListEl.querySelectorAll(".drag-over")) {
+      el.classList.remove("drag-over");
+    }
+  }
+
+  /** 命中拖放目标：工具行 / 分组按钮行 / 分组头 / 空平铺区（未命中则取消放置） */
+  private dragTargetAt(x: number, y: number): HTMLElement | null {
+    const el = document.elementFromPoint(x, y);
+    return (
+      el?.closest<HTMLElement>(
+        ".tb-row, .tb-group-head, .tb-section-empty",
+      ) ?? null
+    );
+  }
+
+  /** 落点在目标行下半部分 = 插到目标之后（上半 = 插到目标之前） */
+  private dropAfter(y: number, target: HTMLElement): boolean {
+    const r = target.getBoundingClientRect();
+    return y > r.top + r.height / 2;
+  }
+
+  /** 放置落点分发（src = 工具 id 或分组标记，kind 区分源类型，语义与原 DnD 一致） */
+  private dropAt(
+    target: HTMLElement,
+    st: { src: string; kind: "tool" | "pinnedGroup" | "groupHead" },
+    y: number,
+  ) {
+    const { src, kind } = st;
+    // 空平铺区：未平铺工具拖入插到最前；分组头/分组按钮行禁止（保持平铺区与分组区分开）
+    if (target.classList.contains("tb-section-empty")) {
+      if (kind === "tool" && !this.toolbarVisible.includes(src)) {
+        this.toolbarVisible = [src, ...this.toolbarVisible];
+        this.applyToolbarLayout();
+      }
+      return;
+    }
+    // 分组收纳区头：工具拖入 = 归组并取消平铺；分组按钮行拖回 = 收起；分组头 = 排序（移到该组前/后）
+    const gid = target.dataset.groupHead;
+    if (gid !== undefined) {
+      if (kind === "groupHead") {
+        this.moveGroupBefore(src, gid, this.dropAfter(y, target));
+      } else if (kind === "pinnedGroup") {
+        this.toolbarVisible = this.toolbarVisible.filter((x) => x !== src);
+        this.applyToolbarLayout();
+      } else if (kind === "tool") {
+        const isCustom = this.customGroups.some((d) => d.id === gid);
+        this.setToolGroup(src, isCustom ? (gid as ToolGroup) : undefined);
+        this.toggleToolbarItem(src, false);
+      }
+      return;
+    }
+    // 工具行目标
+    const toolId = target.dataset.tool;
+    if (toolId !== undefined) {
+      if (target.dataset.pinned === "1") {
+        // 平铺区行：工具/分组按钮/分组头拖到该位置 = 插到该行前/后（分组保持整体）
+        this.dropIntoPinned(src, toolId, this.dropAfter(y, target));
+      } else if (kind === "tool") {
+        // 分组/隐藏区行：已平铺工具拖来 = 取消平铺（分组工具收进对应下拉，其他隐藏）
+        if (this.toolbarVisible.includes(src)) {
+          this.toggleToolbarItem(src, false);
+        }
+      } else {
+        // 分组按钮行/分组头拖回分组区 = 收起分组按钮（组工具回到对应下拉）
+        this.toolbarVisible = this.toolbarVisible.filter((x) => x !== src);
+        this.applyToolbarLayout();
+      }
+      return;
+    }
+    // 分组按钮行目标（平铺区内）：工具/分组按钮拖到该位置 = 插到该分组按钮前/后（分组保持整体）
+    const groupMark = target.dataset.group;
+    if (groupMark !== undefined) {
+      this.dropIntoPinned(src, groupMark, this.dropAfter(y, target));
+    }
+  }
+
+  /** 分组整体排序：把源分组移到目标分组前/后（分组区顺序 + 顶栏分组按钮顺序同步） */
+  private moveGroupBefore(src: string, targetG: string, after = false) {
+    const srcG = markerGroup(src) as ToolGroup;
+    if (srcG === targetG) {
+      return;
+    }
+    const list = [...this.toolbarGroupOrder];
+    const from = list.indexOf(srcG);
+    const to = list.indexOf(targetG as ToolGroup);
+    if (from < 0 || to < 0) {
+      return;
+    }
+    list.splice(from, 1);
+    // 源在目标前（向下移动）：删除后目标位置回退一位；落点在目标下半 = 移到目标后
+    let insertAt = from < to ? to - 1 : to;
+    if (after) {
+      insertAt++;
+    }
+    list.splice(insertAt, 0, srcG);
+    this.toolbarGroupOrder = list;
+    saveGroupOrderPref(list);
+    this.renderToolbarPane();
+    // 通知顶栏重渲染（分组按钮顺序变化）
+    this.onToolbarChange(this.toolbarPref);
   }
 
   /**
@@ -940,19 +1129,7 @@ export class SettingsDialog {
     pinnedTitle.className = "tb-section-title";
     // 平铺区实际项序列 = 显式平铺序列 + 分组收纳区自动同步的组副本：
     // 分组区里有什么组，这里就复制一份对应的分组按钮行（组删除/清空后自动收起）
-    const pinnedItems = [...this.toolbarVisible];
-    for (const g of this.toolbarGroupOrder) {
-      if (pinnedItems.some((x) => isGroupMarker(x) && markerGroup(x) === g)) {
-        continue;
-      }
-      const gTools = this.registry
-        .list()
-        .filter((t) => effectiveGroup(t, this.groupOverrides) === g);
-      if (!gTools.length && !this.customGroups.some((d) => d.id === g)) {
-        continue; // 与分组收纳区显示规则一致：内置空组不显示，自定义空组显示
-      }
-      pinnedItems.push(groupMarker(g));
-    }
+    const pinnedItems = this.toolbarVisual();
     // 计数只算工具，分组按钮单独标注（数字不虚高）
     const pinnedTools = pinnedItems.filter((x) => !isGroupMarker(x)).length;
     const pinnedGroups = pinnedItems.length - pinnedTools;
@@ -964,33 +1141,7 @@ export class SettingsDialog {
       const empty = document.createElement("div");
       empty.className = "tb-section-empty";
       empty.textContent = "暂无平铺内容：勾选工具行右侧复选框即可平铺到顶栏";
-      // 空平铺区也是拖放目标：拖入工具行平铺到开头（分组头不再拖入——平铺区与分组区分开，组按钮自动同步）
-      empty.addEventListener("dragover", (e) => {
-        const src = this.dragData(e);
-        if (src && isGroupMarker(src)) {
-          return; // 分组头/分组按钮行禁止拖入平铺区（保持两区分开）
-        }
-        e.preventDefault();
-        empty.classList.add("drag-over");
-      });
-      empty.addEventListener("dragleave", () =>
-        empty.classList.remove("drag-over"),
-      );
-      empty.addEventListener("drop", (e) => {
-        e.preventDefault();
-        empty.classList.remove("drag-over");
-        const src = this.dragData(e);
-        if (!src) {
-          return;
-        }
-        const list = [...this.toolbarVisible];
-        if (list.includes(src)) {
-          return;
-        }
-        list.unshift(src);
-        this.toolbarVisible = list;
-        this.applyToolbarLayout();
-      });
+      // 空平铺区也是拖放目标：拖入工具行平铺到开头（分组头/分组按钮行不拖入——平铺区与分组区分开，组按钮自动同步）
       pinnedSection.appendChild(empty);
     }
     for (const item of pinnedItems) {
@@ -1050,7 +1201,7 @@ export class SettingsDialog {
       const open = this.toolbarGroupOpen.get(g) ?? false;
       const head = document.createElement("div");
       head.className = "tb-group-head" + (open ? " open" : "");
-      head.draggable = true;
+      head.dataset.groupHead = g;
       head.title = isCustom
         ? "点击展开/折叠组内工具；＋从平铺区添加工具；拖拽调整顺序；右侧可重命名/删除"
         : "点击展开/折叠组内工具；＋从平铺区添加工具；拖拽调整分组在顶栏中的顺序";
@@ -1120,61 +1271,14 @@ export class SettingsDialog {
         this.toolbarGroupOpen.set(g, !open);
         this.renderToolbarPane();
       });
-      // 拖拽排序：把该分组移到目标分组前（同时作用于顶栏分组按钮顺序）；
-      // 也可拖到上方平铺区：在该位置插入完整分组按钮（保持分组整体，不拆开）
-      head.addEventListener("dragstart", (e) => {
-        this.dragSrc = groupMarker(g);
-        e.dataTransfer?.setData("text/plain", groupMarker(g));
-        head.classList.add("dragging");
-      });
-      head.addEventListener("dragend", () => {
-        head.classList.remove("dragging", "drag-over");
-        this.dragSrc = null;
-      });
-      head.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        head.classList.add("drag-over");
-      });
-      head.addEventListener("dragleave", () =>
-        head.classList.remove("drag-over"),
-      );
-      head.addEventListener("drop", (e) => {
-        e.preventDefault();
-        head.classList.remove("drag-over");
-        const raw = this.dragData(e);
-        if (!raw) {
-          return;
+      // 指针拖拽排序（WebView2 中原生 DnD 不可靠，自行实现）：拖到其他分组头 = 分组排序；
+      // 拖到平铺区工具行/分组按钮行 = 在该位置插入完整分组按钮（保持分组整体，不拆开）
+      head.addEventListener("pointerdown", (e) => {
+        if ((e.target as HTMLElement).closest("input, button")) {
+          return; // 分组操作按钮（＋/重命名/删除）不参与拖拽
         }
-        if (isGroupMarker(raw)) {
-          // 平铺区中的分组按钮行拖回分组区：移除标记（组按钮回到末尾/偏好位置）
-          this.toolbarVisible = this.toolbarVisible.filter((x) => x !== raw);
-          this.applyToolbarLayout();
-          return;
-        }
-        if (this.registry.getTool(raw)) {
-          // 平铺工具拖到分组头：归入该组并取消平铺
-          // 自定义组写入归属覆盖；内置组清除覆盖（恢复注册默认归属）
-          this.setToolGroup(raw, isCustom ? g : undefined);
-          this.toggleToolbarItem(raw, false);
-          return;
-        }
-        const src = raw as ToolGroup;
-        if (src === g) {
-          return;
-        }
-        const list = [...this.toolbarGroupOrder];
-        const from = list.indexOf(src);
-        const to = list.indexOf(g);
-        if (from < 0 || to < 0) {
-          return;
-        }
-        list.splice(from, 1);
-        list.splice(to, 0, src);
-        this.toolbarGroupOrder = list;
-        saveGroupOrderPref(list);
-        this.renderToolbarPane();
-        // 通知顶栏重渲染（分组按钮顺序变化）
-        this.onToolbarChange(this.toolbarPref);
+        this.dragSourceEl = head;
+        this.beginDrag(e, groupMarker(g), "groupHead");
       });
       section.appendChild(head);
       if (this.groupAddOpen === g) {
@@ -1217,7 +1321,8 @@ export class SettingsDialog {
   private makeToolbarRow(t: ToolDef, pinnedRow: boolean): HTMLElement {
     const row = document.createElement("div");
     row.className = "tb-row";
-    row.draggable = true;
+    row.dataset.tool = t.id;
+    row.dataset.pinned = pinnedRow ? "1" : "0";
     row.title = pinnedRow
       ? "拖拽调整平铺顺序；拖到下方分组区可取消平铺"
       : "拖到上方平铺区即可平铺到顶栏";
@@ -1270,74 +1375,85 @@ export class SettingsDialog {
     checkRow.appendChild(box);
     row.appendChild(checkRow);
 
-    // 拖拽：所有行可拖（平铺区 ⇄ 分组/隐藏区双向）
-    row.addEventListener("dragstart", (e) => {
-      this.dragSrc = t.id;
-      e.dataTransfer?.setData("text/plain", t.id);
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", () => {
-      row.classList.remove("dragging", "drag-over");
-      this.dragSrc = null;
-    });
-    row.addEventListener("dragover", (e) => {
-      if (pinnedRow) {
-        const src = this.dragData(e);
-        if (src && isGroupMarker(src)) {
-          return; // 分组头/分组按钮行禁止拖入平铺区（保持平铺区与分组区分开）
-        }
+    // 指针拖拽（WebView2 中原生 DnD 不可靠，自行实现）：所有行可拖（平铺区 ⇄ 分组/隐藏区双向）
+    row.addEventListener("pointerdown", (e) => {
+      if ((e.target as HTMLElement).closest("input, button")) {
+        return; // 复选框行不参与拖拽
       }
-      e.preventDefault();
-      row.classList.add("drag-over");
-    });
-    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
-    row.addEventListener("drop", (e) => {
-      e.preventDefault();
-      row.classList.remove("drag-over");
-      const src = this.dragData(e);
-      if (!src) {
-        return;
-      }
-      if (pinnedRow) {
-        // 目标在平铺区：工具行/分组按钮行 → 排序或插入该位置（分组保持整体，不拆开）
-        this.dropIntoPinned(src, t.id);
-      } else if (isGroupMarker(src)) {
-        // 平铺区中的分组按钮行拖回分组/隐藏区：移除标记（组按钮回到末尾/偏好位置）
-        this.toolbarVisible = this.toolbarVisible.filter((x) => x !== src);
-        this.applyToolbarLayout();
-      } else if (this.toolbarVisible.includes(src)) {
-        // 目标在分组/隐藏区：源已平铺 → 取消勾选（分组工具收进对应下拉，其他隐藏）
-        this.toggleToolbarItem(src, false);
-      }
+      this.dragSourceEl = row;
+      this.beginDrag(e, t.id, "tool");
     });
     return row;
   }
 
   /**
-   * 平铺区插入/排序：src 可为工具 id 或分组标记（"g:xxx"），插入到目标序列项位置。
-   * 分组标记整体移动（分组按钮保持完整，不拆开）；from < to 时先删后插需回退一位。
+   * 完整平铺视觉序列 = 显式平铺序列 + 按分组顺序自动同步的组按钮副本（与渲染同构）。
+   * 副本仅用于定位视觉位置与作为拖放落点，不改变显式序列本身。
    */
-  private dropIntoPinned(src: string, targetItem: string) {
+  private toolbarVisual(): string[] {
+    const list = [...this.toolbarVisible];
+    for (const g of this.toolbarGroupOrder) {
+      if (list.some((x) => isGroupMarker(x) && markerGroup(x) === g)) {
+        continue;
+      }
+      const gTools = this.registry
+        .list()
+        .filter((t) => effectiveGroup(t, this.groupOverrides) === g);
+      if (!gTools.length && !this.customGroups.some((d) => d.id === g)) {
+        continue; // 与分组收纳区显示规则一致：内置空组不显示，自定义空组显示
+      }
+      list.push(groupMarker(g));
+    }
+    return list;
+  }
+
+  /**
+   * 平铺区插入/排序：src 可为工具 id 或分组标记（"g:xxx"），插到目标项前/后（after）。
+   * 在完整视觉序列上操作（含自动同步的组按钮副本，拖到副本上会将其显式固定）；
+   * 写回时保留原显式项顺序，仅把被拖动的组标记显式化（其余副本保持同步状态）。
+   * 分组标记整体移动（分组按钮保持完整，不拆开）；源在目标前时删除后插入位需回退一位。
+   */
+  private dropIntoPinned(src: string, targetItem: string, after = false) {
     if (!src || src === targetItem) {
       return;
     }
-    const list = [...this.toolbarVisible];
-    const to = list.indexOf(targetItem);
+    const visual = this.toolbarVisual();
+    const to = visual.indexOf(targetItem);
     if (to < 0) {
       return;
     }
-    const from = list.indexOf(src);
+    const from = visual.indexOf(src);
+    let insertAt = to + (after ? 1 : 0);
     if (from >= 0) {
-      list.splice(from, 1);
-      list.splice(from < to ? to - 1 : to, 0, src);
+      visual.splice(from, 1);
+      if (from < insertAt) {
+        insertAt--;
+      }
+      visual.splice(insertAt, 0, src);
     } else {
-      list.splice(to, 0, src);
+      visual.splice(insertAt, 0, src);
       // 从收纳区/隐藏区取出：恢复默认归属（分组徽章随之消失，不再永久带标签）
       if (!isGroupMarker(src)) {
         this.releaseToolGroup(src);
       }
     }
-    this.toolbarVisible = list;
+    // 写回：原显式项保持原顺序，仅显式化被拖动的组标记（auto 副本拖拽后固定位置）
+    const result: string[] = [];
+    const promote = new Set<string>();
+    if (isGroupMarker(src)) {
+      promote.add(src);
+    }
+    if (isGroupMarker(targetItem)) {
+      promote.add(targetItem);
+    }
+    for (const item of visual) {
+      if (this.toolbarVisible.includes(item) || promote.has(item)) {
+        if (!result.includes(item)) {
+          result.push(item);
+        }
+      }
+    }
+    this.toolbarVisible = result;
     this.applyToolbarLayout();
   }
 
@@ -1560,7 +1676,8 @@ export class SettingsDialog {
     const row = document.createElement("div");
     row.className =
       "tb-row tb-group-pinned" + (auto ? " tb-group-pinned-auto" : "");
-    row.draggable = true;
+    row.dataset.group = groupMarker(g);
+    row.dataset.pinned = "1";
     row.title = auto
       ? "顶栏分组按钮（与分组收纳区同步）：分组区存在该组即自动显示；拖拽可固定位置，移除需在分组区取消收纳工具或删除分组"
       : "顶栏分组按钮（整体）：拖拽调整位置；拖回下方分组区或取消勾选可移除";
@@ -1600,28 +1717,12 @@ export class SettingsDialog {
     checkRow.appendChild(box);
     row.appendChild(checkRow);
 
-    row.addEventListener("dragstart", (e) => {
-      this.dragSrc = groupMarker(g);
-      e.dataTransfer?.setData("text/plain", groupMarker(g));
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", () => {
-      row.classList.remove("dragging", "drag-over");
-      this.dragSrc = null;
-    });
-    row.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      row.classList.add("drag-over");
-    });
-    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
-    row.addEventListener("drop", (e) => {
-      e.preventDefault();
-      row.classList.remove("drag-over");
-      const src = this.dragData(e);
-      if (!src) {
-        return;
+    row.addEventListener("pointerdown", (e) => {
+      if ((e.target as HTMLElement).closest("input, button")) {
+        return; // 复选框不参与拖拽
       }
-      this.dropIntoPinned(src, groupMarker(g));
+      this.dragSourceEl = row;
+      this.beginDrag(e, groupMarker(g), "pinnedGroup");
     });
     return row;
   }
