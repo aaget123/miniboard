@@ -361,10 +361,27 @@ function getCanvasTool(): AiTool {
   };
 }
 
+/** 读图工具：按 id 读取画布图片的实际内容（压缩 dataURL，视觉模型可看图） */
+function readImageTool(): AiTool {
+  return {
+    name: "read_image",
+    description:
+      "读取画布中一张图片的实际内容（返回压缩后的图片数据，视觉模型可直接看到图里的内容，如照片、截图、标志等）。get_canvas 对图片只返回尺寸、看不到内容；当你需要评价、识别或针对图片内容给出建议时调用。参数 id 为图片元素的稳定 id（来自 get_canvas 或 @选区）；一次只读一张，多张请多次调用；返回的图片已压缩，分辨率可能低于原图",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "图片元素的稳定 id" },
+      },
+      required: ["id"],
+    },
+  };
+}
+
 /** 交流模式：理解画布 + 可视化流程 */
 function chatTools(): AiTool[] {
   return [
     getCanvasTool(),
+    readImageTool(),
     {
       name: "draw_flowchart",
       description:
@@ -460,6 +477,7 @@ function chatTools(): AiTool[] {
 function editTools(): AiTool[] {
   return [
     getCanvasTool(),
+    readImageTool(),
     {
       name: "list_tools",
       description:
@@ -469,7 +487,7 @@ function editTools(): AiTool[] {
     {
       name: "add_tool",
       description:
-        "按统一功能规则添加一个新绘制工具：提供名称、图标、可选快捷键与生成器代码（生成器接收拖拽上下文 ctx 返回元素数据，详见系统提示中的规则与示例）。id 由系统自动分配",
+        "按统一功能规则添加一个新绘制工具：提供名称、图标、可选快捷键、行为类别与生成器代码（生成器接收拖拽上下文 ctx 返回元素数据或元素数据数组，详见系统提示中的规则与示例）。添加前系统会验证生成器（危险代码/超时/返回值格式），未通过会返回具体原因，请修正后重试；通过后会自动在画布右侧试画示例供查看。id 由系统自动分配",
       parameters: {
         type: "object",
         properties: {
@@ -479,6 +497,11 @@ function editTools(): AiTool[] {
             type: "string",
             description: "可选单字母快捷键（不能与现有工具冲突）",
           },
+          kind: {
+            type: "string",
+            enum: ["drag", "click"],
+            description: "行为类别：drag 拖拽生成（默认，根据拖拽范围动态计算形状）；click 点击即生成固定大小元素（如印章、便利贴）",
+          },
           group: {
             type: "string",
             enum: ["shape"],
@@ -486,7 +509,7 @@ function editTools(): AiTool[] {
           },
           generator: {
             type: "string",
-            description: "生成器函数体源码：(ctx) => ElementData，ctx={x0,y0,x1,y1,style}",
+            description: "生成器函数体源码：(ctx) => ElementData 或 ElementData[]（组合工具），ctx={x0,y0,x1,y1,style}",
           },
           description: { type: "string", description: "工具用途说明" },
         },
@@ -496,7 +519,7 @@ function editTools(): AiTool[] {
     },
     {
       name: "update_tool",
-      description: "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明/分组）；内置工具只读不可修改",
+      description: "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明/分组/行为类别）；内置工具只读不可修改。修改生成器时同样会验证（危险代码/超时/返回值格式），未通过不会生效",
       parameters: {
         type: "object",
         properties: {
@@ -507,6 +530,7 @@ function editTools(): AiTool[] {
               name: { type: "string" },
               icon: { type: "string" },
               shortcut: { type: "string" },
+              kind: { type: "string", enum: ["drag", "click"] },
               group: { type: "string", enum: ["shape"] },
               generator: { type: "string" },
               description: { type: "string" },
@@ -550,6 +574,47 @@ export function toOpenAiTools(tools: AiTool[]) {
 }
 
 // ================= 工具执行器 =================
+
+/** read_image 工具返回图片的最长边（px）：压缩控制 token 与网络流量 */
+const IMAGE_READ_MAX_SIDE = 1024;
+
+/**
+ * 把图片 url（dataURL 或允许跨域的远程 url）等比压缩为 JPEG dataURL，
+ * 供视觉模型读图：原图 dataURL 体积大，直接发送浪费 token/流量；失败返回 null。
+ */
+export async function compressImageDataURL(
+  url: string,
+  maxSide: number,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const scale = Math.min(
+          1,
+          maxSide / Math.max(img.naturalWidth, img.naturalHeight),
+        );
+        const w = Math.max(1, Math.round(img.naturalWidth * scale));
+        const h = Math.max(1, Math.round(img.naturalHeight * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/jpeg", 0.8));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
 
 export type AiToolContext = {
   board: Board;
@@ -713,12 +778,47 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
   return `已生成流程图：${validNodes.length} 个节点、${edges.length} 条连线，起点位于画布 (${Math.round(originX)}, ${Math.round(originY)})。节点 id 映射：${mapping}（后续可用这些 id 引用）`;
 }
 
-/** 执行工具调用，返回给模型的文本结果与是否修改了画布/功能区 */
-export function executeTool(
+/**
+ * 把冒烟测试得到的示例元素整体平移到画布内容区右下角，创建并返回 id 列表。
+ * 生成器的 x/y 基于测试基准 (0,0)，平移后避免与已有内容重叠；供用户立即查看工具效果。
+ */
+function previewToolElements(
+  board: Board,
+  elements: ElementData[],
+): { ids: string[]; x: number; y: number } {
+  const els = board.serialize();
+  let originX = 0;
+  let originY = 0;
+  if (els.length) {
+    const maxX = Math.max(...els.map((e) => e.x + (e.width ?? 0)));
+    const maxY = Math.max(...els.map((e) => e.y + (e.height ?? 0)));
+    originX = maxX + 120;
+    originY = maxY + 120;
+  } else {
+    // 空画布：放在视口中心附近（与 draw_flowchart 同基准）
+    const view = board.app.canvas.view as HTMLElement;
+    const w = board.app.width ?? view.clientWidth;
+    const h = board.app.height ?? view.clientHeight;
+    const inner = board.app.tree.getInnerPoint({ x: w / 2, y: h / 2 });
+    originX = inner.x - 100;
+    originY = inner.y - 60;
+  }
+  const ids: string[] = [];
+  for (const d of elements) {
+    const id = board.addElement({ ...d, x: d.x + originX, y: d.y + originY });
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return { ids, x: originX, y: originY };
+}
+
+/** 执行工具调用，返回给模型的文本结果与是否修改了画布/功能区（add_tool/update_tool 含异步冒烟测试） */
+export async function executeTool(
   tool: AiTool,
   rawArgs: string,
   ctx: AiToolContext,
-): AiToolExecution {
+): Promise<AiToolExecution> {
   const { board, registry, mode } = ctx;
   let args: Record<string, unknown> = {};
   try {
@@ -741,6 +841,53 @@ export function executeTool(
         name: tool.name,
         args,
         result: `当前画布元素数据：\n${describeCanvas(board, ids)}`,
+        changed: false,
+      };
+    }
+
+    case "read_image": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：id 不能为空（一次只读一张图片）",
+          changed: false,
+        };
+      }
+      const el = board.serialize().find((e) => e.id === id);
+      if (!el || el.type !== "image") {
+        return {
+          name: tool.name,
+          args,
+          result: `错误：id=${id} 不是画布中的图片元素（可用 get_canvas 查看元素 id 与类型）`,
+          changed: false,
+        };
+      }
+      if (!el.url) {
+        return {
+          name: tool.name,
+          args,
+          result: `错误：图片 id=${id} 没有可读取的图像数据（url 为空）`,
+          changed: false,
+        };
+      }
+      const shot = await compressImageDataURL(el.url, IMAGE_READ_MAX_SIDE);
+      if (!shot) {
+        return {
+          name: tool.name,
+          args,
+          result: `错误：图片 id=${id} 读取失败（数据可能损坏或远程图片跨域不可访问）`,
+          changed: false,
+        };
+      }
+      const rot = el.rotation
+        ? `（画布上旋转 ${Math.round(el.rotation)}°）`
+        : "";
+      return {
+        name: tool.name,
+        args,
+        result: `图片 id=${id}：原 ${Math.round(el.width ?? 0)}x${Math.round(el.height ?? 0)}px，已压缩至最长边 ${IMAGE_READ_MAX_SIDE}px${rot}：\n${shot}`,
         changed: false,
       };
     }
@@ -891,14 +1038,42 @@ export function executeTool(
           changed: false,
         };
       }
-      try {
-        const toolDef = registry.addCustom(args as unknown as CustomToolInput);
-        ctx.toolbar?.refresh();
+      const input = args as unknown as CustomToolInput;
+      // 冒烟测试：隔离执行 + 返回值强校验；未通过时把具体原因反馈给模型，让其修正后重试
+      const smoke = await registry.smokeTest(input.generator, input.kind);
+      if (!smoke.ok) {
         return {
           name: tool.name,
           args,
-          result: `已添加工具「${toolDef.name}」，id=${toolDef.id}，图标「${toolDef.icon}」${toolDef.shortcut ? `，快捷键 ${toolDef.shortcut}` : ""}${toolDef.group ? `，已归入「${toolDef.group === "shape" ? "形状" : toolDef.group}▾」下拉` : ""}，已出现在工具栏绘制区并可立即拖拽使用`,
+          result: `错误：生成器验证未通过——${smoke.error}（工具未添加，请修正生成器后重试）`,
+          changed: false,
+        };
+      }
+      try {
+        const toolDef = registry.addCustom(input);
+        ctx.toolbar?.refresh();
+        // 试画预览：把验证通过的示例元素放到画布内容区右侧，用户可立即看到效果（可撤销）
+        let previewText = "";
+        try {
+          const preview = previewToolElements(board, smoke.elements);
+          if (preview.ids.length) {
+            previewText = `，并已在画布 (${Math.round(preview.x)}, ${Math.round(preview.y)}) 处试画 ${preview.ids.length} 个示例元素（id：${preview.ids.join("、")}），可直接查看效果，不需要可按 Delete 删除或 Ctrl+Z 撤销`;
+          }
+        } catch {
+          // 试画失败不影响工具注册
+        }
+        return {
+          name: tool.name,
+          args,
+          result: `已添加${toolDef.kind === "click" ? "点击" : "拖拽"}工具「${toolDef.name}」，id=${toolDef.id}，图标「${toolDef.icon}」${toolDef.shortcut ? `，快捷键 ${toolDef.shortcut}` : ""}${toolDef.group ? `，已归入「${toolDef.group === "shape" ? "形状" : toolDef.group}▾」下拉` : ""}，已出现在工具栏绘制区并可立即使用${previewText}`,
           changed: true,
+          tool: {
+            name: toolDef.name,
+            icon: toolDef.icon,
+            shortcut: toolDef.shortcut,
+            group: toolDef.group,
+            kind: toolDef.kind,
+          },
         };
       } catch (err) {
         return {
@@ -920,7 +1095,6 @@ export function executeTool(
         };
       }
       const id = typeof args.id === "string" ? args.id : "";
-      const patch = (args.patch ?? {}) as Partial<CustomToolInput>;
       const def = registry.getTool(id);
       if (!def) {
         return {
@@ -938,6 +1112,19 @@ export function executeTool(
           changed: false,
         };
       }
+      const patch = (args.patch ?? {}) as Partial<CustomToolInput>;
+      // 生成器变更时同样过冒烟测试（kind 随 patch 或原工具传递），未通过则不改动工具
+      if (typeof patch.generator === "string") {
+        const smoke = await registry.smokeTest(patch.generator, patch.kind ?? def.kind);
+        if (!smoke.ok) {
+          return {
+            name: tool.name,
+            args,
+            result: `错误：生成器验证未通过——${smoke.error}（工具未修改，请修正生成器后重试）`,
+            changed: false,
+          };
+        }
+      }
       try {
         const updated = registry.updateCustom(id, patch);
         ctx.toolbar?.refresh();
@@ -946,6 +1133,15 @@ export function executeTool(
           args,
           result: `已更新工具「${updated?.name}」（id=${id}）`,
           changed: true,
+          tool: updated
+            ? {
+                name: updated.name,
+                icon: updated.icon,
+                shortcut: updated.shortcut,
+                group: updated.group,
+                kind: updated.kind,
+              }
+            : undefined,
         };
       } catch (err) {
         return {
@@ -991,6 +1187,12 @@ export function executeTool(
         args,
         result: `已删除工具「${def.name}」（id=${id}），工具栏已刷新`,
         changed: true,
+        tool: {
+          name: def.name,
+          icon: def.icon,
+          shortcut: def.shortcut,
+          group: def.group,
+        },
       };
     }
 

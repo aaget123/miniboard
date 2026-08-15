@@ -68,4 +68,6 @@ export type AiToolExecution = {
   result: string;
   /** 是否实际修改了画布 */
   changed: boolean;
+  /** 功能区工具快照（add/update/remove_tool 成功时附带，面板渲染工具卡片用） */
+  tool?: { name: string; icon: string; shortcut?: string; group?: string; kind?: string };
 };

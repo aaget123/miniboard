@@ -1,6 +1,9 @@
-// 右键上下文菜单：复制/粘贴/剪切/删除/全选/置顶/置底/锁定/解锁
+// 右键上下文菜单：整理/手绘/复制/粘贴/剪切/删除/全选/置顶/置底/锁定/解锁
+import { iconHTML, type IconName } from "./icons";
 
 export type ContextMenuAction =
+  | "beautify"
+  | "sketchify"
   | "copy"
   | "paste"
   | "cut"
@@ -15,17 +18,35 @@ export type ContextMenuState = {
   hasSelection: boolean;
   anyLocked: boolean;
   canPaste: boolean;
+  /** 选中含手绘笔迹（✨ 整理项显隐） */
+  hasFreehand: boolean;
+  /** 选中含可手绘化的标准图形（✎ 手绘项显隐） */
+  hasSketchable: boolean;
 };
 
 type MenuItem = {
   action?: ContextMenuAction;
   label?: string;
+  icon?: IconName;
   shortcut?: string;
   divider?: boolean;
   enabled: (s: ContextMenuState) => boolean;
 };
 
 const ITEMS: MenuItem[] = [
+  {
+    action: "beautify",
+    label: "整理",
+    icon: "sparkle",
+    enabled: (s) => s.hasSelection && s.hasFreehand,
+  },
+  {
+    action: "sketchify",
+    label: "手绘",
+    icon: "scribble",
+    enabled: (s) => s.hasSelection && s.hasSketchable,
+  },
+  { divider: true, enabled: (s) => s.hasFreehand || s.hasSketchable },
   {
     action: "copy",
     label: "复制",
@@ -88,6 +109,8 @@ const ITEMS: MenuItem[] = [
 export class ContextMenu {
   private el: HTMLDivElement;
   private actionEls = new Map<ContextMenuAction, HTMLDivElement>();
+  /** 菜单元素（含分隔线，open 时统一按条件显隐） */
+  private menuEls: { item: MenuItem; el: HTMLElement }[] = [];
   private onActionFn: (action: ContextMenuAction) => void = () => {};
 
   constructor(container: HTMLElement) {
@@ -101,11 +124,18 @@ export class ContextMenu {
         const d = document.createElement("div");
         d.className = "ctx-divider";
         this.el.appendChild(d);
+        this.menuEls.push({ item, el: d });
         continue;
       }
       const row = document.createElement("div");
       row.className = "ctx-item";
       row.dataset.action = item.action;
+      if (item.icon) {
+        const ic = document.createElement("span");
+        ic.className = "ctx-icon";
+        ic.innerHTML = iconHTML(item.icon, 14);
+        row.appendChild(ic);
+      }
       const label = document.createElement("span");
       label.className = "ctx-label";
       label.textContent = item.label ?? "";
@@ -117,6 +147,7 @@ export class ContextMenu {
         row.appendChild(sc);
       }
       this.el.appendChild(row);
+      this.menuEls.push({ item, el: row });
       this.actionEls.set(item.action!, row);
     }
 
@@ -160,13 +191,20 @@ export class ContextMenu {
   open(clientX: number, clientY: number, state: ContextMenuState) {
     // 锁定/解锁互斥：全部未锁显示"锁定"，否则显示"解锁"
     const showLock = !state.anyLocked;
-    for (const [action, row] of this.actionEls) {
-      if (action === "unlock" || action === "lock") {
-        row.style.display = (action === "lock") === showLock ? "" : "none";
+    for (const { item, el } of this.menuEls) {
+      if (item.divider) {
+        // 分隔线随相邻项显隐（整理/手绘均无资格时整段隐藏）
+        el.style.display = item.enabled(state) ? "" : "none";
+        continue;
       }
-      const item = ITEMS.find((i) => i.action === action);
-      const enabled = item ? item.enabled(state) : true;
-      row.classList.toggle("disabled", !enabled);
+      if (item.action === "unlock" || item.action === "lock") {
+        el.style.display = (item.action === "lock") === showLock ? "" : "none";
+      } else if (item.action === "beautify" || item.action === "sketchify") {
+        // 整理/手绘：无资格时隐藏（与左侧选中栏显隐语义一致）
+        el.style.display = item.enabled(state) ? "" : "none";
+        continue;
+      }
+      el.classList.toggle("disabled", !item.enabled(state));
     }
     this.el.style.display = "block";
     // 贴边修正：菜单不超出视口

@@ -1,9 +1,11 @@
+import { iconHTML, type IconName } from "./icons";
+
 export type ToolsFloatHandlers = {
   onOpen: () => void;
   onSave: () => void;
   onInsertImage: () => void;
+  /** 打开统一导出弹窗（PNG / SVG 二选一） */
   onExport: () => void;
-  onExportSVG: () => void;
   onToggleAI: () => void;
   onClear: () => void;
   onSettings: () => void;
@@ -16,17 +18,25 @@ const DRAG_THRESHOLD = 4;
 /** 鼠标移出后延迟收起时长（ms）：主按钮与面板间有间隙，避免路过即误收 */
 const COLLAPSE_DELAY = 300;
 
-function makeItem(icon: string, title: string, onClick: () => void): HTMLButtonElement {
+function makeItem(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = "tf-item";
   btn.title = title;
-  btn.textContent = icon;
+  btn.innerHTML = iconHTML(icon, 16);
   btn.addEventListener("click", onClick);
   return btn;
 }
 
+/** 面板内横向分隔线（按功能类别分组：文件 / AI / 画布与设置） */
+function makeDivider(): HTMLDivElement {
+  const d = document.createElement("div");
+  d.className = "tf-divider";
+  return d;
+}
+
 /**
- * 右侧圆形悬浮工具栏：文件操作（打开/保存/插入图片/导出 PNG/SVG）+ AI + 清空 + 设置。
+ * 右侧圆形悬浮工具栏：文件操作（打开/保存/插入图片/导出）+ AI + 清空 + 设置。
+ * 导出为统一入口（弹窗内选 PNG / SVG 格式）；项目管理入口在状态栏左下角项目名；
  * 常驻可见（无需选中），主按钮点击展开/收起，鼠标移开自动收起；
  * 主按钮可自由拖拽移动（位置记忆在 localStorage）。
  */
@@ -57,24 +67,25 @@ export class ToolsFloat {
     this.panel.className = "tf-panel";
     this.panel.hidden = true;
     this.panel.append(
-      makeItem("📂", "打开文件 (Ctrl+O)", () => handlers.onOpen()),
-      makeItem("💾", "保存文件 (Ctrl+S)", () => handlers.onSave()),
-      makeItem("🖼", "插入图片", () => handlers.onInsertImage()),
-      makeItem("📷", "导出 PNG 图片", () => handlers.onExport()),
-      makeItem("📄", "导出 SVG 矢量图", () => handlers.onExportSVG()),
+      makeItem("folder", "打开文件 (Ctrl+O)", () => handlers.onOpen()),
+      makeItem("save", "保存文件 (Ctrl+S)", () => handlers.onSave()),
+      makeItem("image", "插入图片", () => handlers.onInsertImage()),
+      makeItem("download", "导出画布（PNG / SVG）", () => handlers.onExport()),
+      makeDivider(),
     );
-    this.aiBtn = makeItem("🤖", "AI 助手 (K)", () => handlers.onToggleAI());
+    this.aiBtn = makeItem("bot", "AI 助手 (K)", () => handlers.onToggleAI());
     this.panel.appendChild(this.aiBtn);
-    this.panel.appendChild(makeItem("🗑", "清空画布", () => handlers.onClear()));
+    this.panel.appendChild(makeDivider());
+    this.panel.appendChild(makeItem("trash", "清空画布", () => handlers.onClear()));
     this.panel.appendChild(
-      makeItem("⚙", "设置（主题 / AI 模型）", () => handlers.onSettings()),
+      makeItem("settings", "设置（外观 / AI 模型 / AI 工具 / 系统提示词）", () => handlers.onSettings()),
     );
     this.root.appendChild(this.panel);
 
     this.mainBtn = document.createElement("button");
     this.mainBtn.className = "tf-main";
     this.mainBtn.title = "文件与工具（可拖动位置）";
-    this.mainBtn.textContent = "☰";
+    this.mainBtn.innerHTML = iconHTML("menu", 18);
     this.root.appendChild(this.mainBtn);
 
     container.appendChild(this.root);

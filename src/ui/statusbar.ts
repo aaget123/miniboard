@@ -1,4 +1,8 @@
+import { iconHTML, isIconName, type IconName } from "./icons";
+
 export type StatusBarHandlers = {
+  /** 点击左下角项目名：打开项目管理弹窗（新建/切换/重命名/删除） */
+  onProjectClick: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onZoomIn: () => void;
@@ -7,14 +11,19 @@ export type StatusBarHandlers = {
 };
 
 function makeBtn(
-  icon: string,
+  icon: IconName | string,
   title: string,
   onClick: () => void,
 ): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = "tool-btn sb-btn";
   btn.title = title;
-  btn.textContent = icon;
+  // 图标名渲染 SVG；非图标名（如缩放百分比文本）按文本渲染
+  if (isIconName(icon)) {
+    btn.innerHTML = iconHTML(icon, 14);
+  } else {
+    btn.textContent = icon;
+  }
   btn.addEventListener("click", onClick);
   return btn;
 }
@@ -29,7 +38,7 @@ export class StatusBar {
   private redoBtn!: HTMLButtonElement;
   private zoomBtn!: HTMLButtonElement;
   private infoEl!: HTMLElement;
-  private projectEl!: HTMLElement;
+  private projectBtn!: HTMLButtonElement;
 
   constructor(
     container: HTMLElement,
@@ -41,32 +50,45 @@ export class StatusBar {
     this.infoEl = document.createElement("span");
     this.infoEl.id = "sb-info";
 
-    // 当前项目名（多项目）：切换项目后由宿主更新
-    this.projectEl = document.createElement("span");
-    this.projectEl.id = "sb-project";
+    // 当前项目名（多项目）：点击打开项目管理；切换项目后由宿主更新文本
+    this.projectBtn = document.createElement("button");
+    this.projectBtn.type = "button";
+    this.projectBtn.id = "sb-project";
+    this.projectBtn.className = "sb-project";
+    this.projectBtn.title = "项目管理（新建 / 切换 / 重命名 / 删除）";
+    this.projectBtn.addEventListener("click", () => handlers.onProjectClick());
 
     const right = document.createElement("div");
     right.className = "sb-right";
-    this.undoBtn = makeBtn("↩", "撤销 (Ctrl+Z)", () => handlers.onUndo());
-    this.redoBtn = makeBtn("↪", "重做 (Ctrl+Y)", () => handlers.onRedo());
+    this.undoBtn = makeBtn("undo", "撤销 (Ctrl+Z)", () => handlers.onUndo());
+    this.redoBtn = makeBtn("redo", "重做 (Ctrl+Y)", () => handlers.onRedo());
     right.append(
       this.undoBtn,
       this.redoBtn,
-      makeBtn("−", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
+      makeBtn("zoomOut", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
     );
     this.zoomBtn = makeBtn("100%", "重置为 100% (Ctrl+0)", () =>
       handlers.onZoomReset(),
     );
     this.zoomBtn.classList.add("sb-zoom");
     right.append(this.zoomBtn);
-    right.append(makeBtn("＋", "放大 (Ctrl+＋)", () => handlers.onZoomIn()));
+    right.append(makeBtn("zoomIn", "放大 (Ctrl+＋)", () => handlers.onZoomIn()));
 
-    this.el.append(this.projectEl, this.infoEl, right);
+    this.el.append(this.projectBtn, this.infoEl, right);
   }
 
-  /** 左侧项目名（空串隐藏），与元素信息同栏展示 */
+  /** 左下角项目名按钮（空串隐藏），与元素信息同栏展示；名称经文本节点渲染防注入 */
   setProject(name: string) {
-    this.projectEl.textContent = name ? `📁 ${name} · ` : "";
+    this.projectBtn.textContent = "";
+    if (name) {
+      const icon = document.createElement("span");
+      icon.className = "sb-project-icon";
+      icon.innerHTML = iconHTML("folder", 12);
+      const label = document.createElement("span");
+      label.textContent = name;
+      this.projectBtn.append(icon, label);
+    }
+    this.projectBtn.hidden = !name;
   }
 
   setUndoRedo(canUndo: boolean, canRedo: boolean) {

@@ -41,21 +41,24 @@ export type GeneratorContext = {
 /**
  * 工具行为类别：
  * - drag：拖拽生成元素，走统一管线（内置 rect/ellipse/line/arrow 与 AI 工具同）；
+ * - click：点击即生成固定大小元素（AI 自定义工具可选用，如印章/标注）；
  * - freehand：自由笔迹（pen，保留 canvas 专有实现）；
  * - interaction：特殊交互（select/hand/marquee/lasso/eraser/text，保留 canvas 专有实现）。
  */
-export type ToolKind = "drag" | "freehand" | "interaction";
+export type ToolKind = "drag" | "click" | "freehand" | "interaction";
 
 /**
  * 工具栏分组：shape = 收进“形状”下拉按钮（矩形/椭圆等基础形状），
- * select = 收进“选择”下拉按钮（框选/套索等选中类工具）。
+ * select = 收进“选择”下拉按钮（框选/套索等选中类工具），
+ * ai = 收进“AI 工具”下拉按钮（AI 生成的自定义工具默认归入）。
  */
-export type ToolGroup = "shape" | "select";
+export type ToolGroup = "shape" | "select" | "ai";
 
 /** 统一功能定义：内置工具与 AI 生成工具共用 */
 export type ToolDef = {
   id: string;
   name: string;
+  /** 按钮图标：内置工具为图标名（src/ui/icons.ts 的 IconName），AI 工具为 1-2 字符符号 */
   icon: string;
   title: string;
   shortcut?: string;
@@ -65,11 +68,11 @@ export type ToolDef = {
   group?: ToolGroup;
 };
 
-/** AI 生成工具：行为固定为 drag，generator 为代码函数体源码 */
+/** AI 生成工具：行为为 drag/click，generator 为代码函数体源码 */
 export type CustomToolDef = ToolDef & {
-  kind: "drag";
+  kind: "drag" | "click";
   source: "custom";
-  /** 函数体源码：(ctx: GeneratorContext) => ElementData */
+  /** 函数体源码：(ctx: GeneratorContext) => ElementData 或 ElementData[] */
   generator: string;
   description?: string;
   createdAt: number;
@@ -80,6 +83,8 @@ export type CustomToolInput = {
   name: string;
   icon: string;
   shortcut?: string;
+  /** 行为类别：drag 拖拽生成（默认）；click 点击即生成固定大小元素 */
+  kind?: "drag" | "click";
   generator: string;
   description?: string;
   /** 与已有同类型工具归入同一分组（如形状类工具归入 shape 形状下拉） */

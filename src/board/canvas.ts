@@ -18,6 +18,8 @@ import type { BoardStyle, ElementData } from "../types";
 import type { CoordBox } from "./coords";
 import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
+import { translatePath } from "./path";
+import { offsetElementData } from "./offset";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
@@ -237,6 +239,8 @@ export type BoardOptions = {
   onSelectionChange?: (info: SelectionInfo) => void;
   /** 文本内联编辑开合变化：编辑中隐藏左侧选中栏（避免遮挡输入框） */
   onTextEditChange?: (editing: boolean) => void;
+  /** 画布内自动切换工具（双击文本/线元素切到选择工具）时同步外部 UI（顶栏激活态） */
+  onToolChange?: (tool: string) => void;
 };
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -351,8 +355,10 @@ export class Board {
   private tool: string = "select";
   private drawing = false;
   private draft: UI | null = null;
-  /** 拖拽统一管线：最近一次生成器输出的元素数据（用于实时刷新草稿与微小判定） */
-  private draftData: ElementData | null = null;
+  /** 组合工具草稿的其余元素（拖拽中与主草稿同步实时预览，松手时无需再补齐） */
+  private draftExtras: UI[] = [];
+  /** 拖拽统一管线：最近一次生成器输出的元素数据列表（首个为主元素，用于实时刷新草稿与微小判定；组合工具其余元素随草稿实时预览） */
+  private draftData: ElementData[] | null = null;
   private startX = 0;
   private startY = 0;
   private penPoints: number[][] = [];
@@ -380,6 +386,8 @@ export class Board {
   private movedAny = false;
   // 内部剪贴板（复制/剪切/粘贴）
   private clipboard: ElementData[] = [];
+  /** 剪贴板内容原始包围盒（复制时从选中元素实际渲染 bounds 记录，含 path/points 坐标语义，粘贴时用于中心对齐） */
+  private clipboardBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
   // 元素稳定 id 分配器（AI 编辑模式按 id 引用元素）
   private nextElId = 1;
   /** 鼠标最后位置（画布坐标，粘贴跟随鼠标用）；null 表示鼠标从未进入画布 */
@@ -460,6 +468,10 @@ export class Board {
       ) {
         moved.x = this.snapGrid(moved.x ?? 0);
         moved.y = this.snapGrid(moved.y ?? 0);
+      }
+      // 契约元素（line/arrow/path）拖动时 leafer 改 x/y，把位移并入 points/path 并归零
+      if (moved) {
+        this.normalizeContractEl(moved);
       }
       // 移动元素后刷新绑定箭头端点（被绑元素移动时端点跟随）
       this.updateBindings(e);
@@ -700,6 +712,11 @@ export class Board {
   // ================= 绘制交互 =================
 
   private onDown(e: IPointerEvent) {
+    // 右键（button=2）不参与绘制/选择交互：选择变更仅由 contextmenu 流程决定，
+    // 避免多选后右键时 leafer 的 DOWN 事件把选择取消/替换
+    if (e.right) {
+      return;
+    }
     // 内联文本编辑中：交互交由 TextEditor 处理
     // （点击输入框内定位光标，点击外部由它负责关闭编辑）
     if (this.editor.innerEditor) {
@@ -833,6 +850,22 @@ export class Board {
       }
       return;
     }
+    // 点击工具：点击点即生成位置（x0=x1=点击点），生成器返回固定大小元素，一次性提交
+    if (kind === "click") {
+      const sx = this.snapGrid(px);
+      const sy = this.snapGrid(py);
+      const list = this.runGenerator(sx, sy, sx, sy);
+      if (list?.length) {
+        for (const d of list) {
+          const el = this.dataToElement(d);
+          if (el) {
+            this.app.tree.add(el);
+          }
+        }
+        this.commitHistory();
+      }
+      return;
+    }
     // 统一拖拽管线：内置 rect/ellipse/line/arrow 与 AI 生成工具同一条路径
     if (kind !== "drag") {
       return;
@@ -845,25 +878,42 @@ export class Board {
       this.drawing = false;
       return;
     }
-    this.draft = this.dataToElement(this.draftData);
+    this.draft = this.dataToElement(this.draftData[0]);
     if (this.draft) {
       this.app.tree.add(this.draft);
     }
+    // 组合工具：其余元素同步建草稿（拖拽中实时预览全貌，松手时无需再补齐）
+    for (const d of this.draftData.slice(1)) {
+      const el = this.dataToElement(d);
+      if (el) {
+        this.app.tree.add(el);
+        this.draftExtras.push(el);
+      }
+    }
   }
 
-  /** 调用当前工具的生成器（统一拖拽管线），异常时安全返回 null */
+  /** 调用当前工具的生成器（统一拖拽管线），异常时安全返回 null；返回值统一为元素列表 */
   private runGenerator(
     x0: number,
     y0: number,
     x1: number,
     y1: number,
-  ): ElementData | null {
+  ): ElementData[] | null {
     const gen = this.opts.registry.getGenerator(this.tool);
     if (!gen) {
       return null;
     }
     try {
-      return gen({ x0, y0, x1, y1, style: this.opts.getStyle() });
+      const out = gen({ x0, y0, x1, y1, style: this.opts.getStyle() });
+      const list = Array.isArray(out) ? out : [out];
+      // 轻量校验：高频调用不做全量 schema 校验，只拦明显非法输出
+      if (
+        !list.length ||
+        !list.every((d) => d && typeof d === "object" && typeof d.type === "string")
+      ) {
+        return null;
+      }
+      return list;
     } catch (err) {
       console.error("[board] 生成器执行失败", err);
       return null;
@@ -927,6 +977,8 @@ export class Board {
       for (const item of this.dragEls) {
         item.el.x = this.snapGrid(item.x + dx);
         item.el.y = this.snapGrid(item.y + dy);
+        // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
+        this.normalizeContractEl(item.el);
       }
       this.scheduleHistory();
       return;
@@ -995,7 +1047,14 @@ export class Board {
       );
       if (data) {
         this.draftData = data;
-        this.applyDataToDraft(this.draft, data);
+        this.applyDataToDraft(this.draft, data[0]);
+        // 组合工具其余草稿元素同步刷新
+        for (let i = 0; i < this.draftExtras.length; i++) {
+          const d = data[i + 1];
+          if (d) {
+            this.applyDataToDraft(this.draftExtras[i], d);
+          }
+        }
       }
     }
   }
@@ -1064,13 +1123,18 @@ export class Board {
     if (this.draft) {
       if (this.isTinyDraft()) {
         this.draft.remove();
+        for (const el of this.draftExtras) {
+          el.remove();
+        }
       } else if (this.opts.registry.getKind(this.tool) === "freehand") {
         // 笔迹转正：挂载采样点元数据，序列化时输出 freehand 元素（供整理识别/重绘）
         const t = this.draft as unknown as Record<string, unknown>;
         t.__freehandPoints = this.penPoints.map((p) => [...p]);
         t.__penSize = this.penSize;
       }
+      // 组合工具草稿其余元素已在画布上（拖拽中实时预览），无需补齐
       this.draft = null;
+      this.draftExtras = [];
       this.draftData = null;
       this.commitHistory();
     }
@@ -1081,20 +1145,23 @@ export class Board {
     if (this.opts.registry.getKind(this.tool) === "freehand") {
       return this.penPoints.length < 2;
     }
-    const d = this.draftData;
-    if (!d) {
+    const list = this.draftData;
+    if (!list?.length) {
       return true;
     }
-    if (d.type === "line" || d.type === "arrow") {
-      const pts = d.points ?? [];
-      const p0 = pts[0];
-      const p1 = pts[pts.length - 1];
-      if (!p0 || !p1) {
-        return true;
+    // 组合工具：任一元素达到有效尺寸即非微小（避免首元素是短文本时误删整个组合）
+    return list.every((d) => {
+      if (d.type === "line" || d.type === "arrow") {
+        const pts = d.points ?? [];
+        const p0 = pts[0];
+        const p1 = pts[pts.length - 1];
+        if (!p0 || !p1) {
+          return true;
+        }
+        return Math.hypot(p1.x - p0.x, p1.y - p0.y) < 4;
       }
-      return Math.hypot(p1.x - p0.x, p1.y - p0.y) < 4;
-    }
-    return (d.width ?? 0) < 4 || (d.height ?? 0) < 4;
+      return (d.width ?? 0) < 4 || (d.height ?? 0) < 4;
+    });
   }
 
   // ================= 文本编辑 =================
@@ -1110,17 +1177,26 @@ export class Board {
     this.lastTapTime = now;
     this.lastTapTarget = e.target;
 
-    if (!isDouble || this.tool !== "select") {
+    if (!isDouble) {
       return;
     }
     // 双击：文本就地编辑；线性元素进入点编辑（再次双击线段则插入新点）
-    if (e.target instanceof Text) {
-      this.openTextEdit(e.target);
-    } else if (e.target instanceof Line) {
-      if (this.pointEditEl === e.target) {
+    // 当前工具不是选择工具时自动切换（组合工具画完即可直接双击修改标题，无需手动切回选择）
+    const target = e.target;
+    if (target instanceof Text || target instanceof Line) {
+      if (this.tool !== "select") {
+        this.setTool("select");
+        this.opts.onToolChange?.(this.tool);
+      }
+      this.editor.select(target);
+    }
+    if (target instanceof Text) {
+      this.openTextEdit(target);
+    } else if (target instanceof Line) {
+      if (this.pointEditEl === target) {
         this.addPointAt(e.x ?? 0, e.y ?? 0);
       } else {
-        this.enterPointEdit(e.target);
+        this.enterPointEdit(target);
       }
     }
   }
@@ -1547,6 +1623,18 @@ export class Board {
         }
       }
       if (partial.strokeWidth !== undefined) {
+        if (isFreehandEl(el)) {
+          // 画笔笔迹视觉粗细由轮廓（penSize）决定：按新粗细重算轮廓并更新元数据，
+          // 否则仅改 strokeWidth 数据透传，画面粗细不变
+          const pts = (el as unknown as { __freehandPoints?: number[][] })
+            .__freehandPoints;
+          const pen = penSizeOf(partial.strokeWidth);
+          const path = strokeOutlinePath(pts ?? [], { size: pen });
+          if (path) {
+            (el as Path).path = path;
+            (el as unknown as { __penSize?: number }).__penSize = pen;
+          }
+        }
         el.strokeWidth = partial.strokeWidth;
       }
       if (partial.fontSize !== undefined && el instanceof Text) {
@@ -1671,7 +1759,9 @@ export class Board {
       y: e.clientY - rect.top,
     });
     if (hit && !this.editor.hasItem(hit)) {
-      this.editor.target = hit;
+      // 右键未选中元素：追加进当前选择（多选不取消），无选择时直接选中
+      const cur = this.selectedList;
+      this.editor.target = cur.length ? [...cur, hit] : hit;
     }
     this.opts.onContextMenu?.(e.clientX, e.clientY);
   };
@@ -1705,9 +1795,30 @@ export class Board {
   }
 
   copy(): boolean {
-    this.clipboard = this.selectedList
+    const list = this.selectedList;
+    this.clipboard = list
       .map((el) => this.elementToData(el))
       .filter((d): d is ElementData => d !== null);
+    // 记录选中元素实际渲染包围盒（本地坐标 = 画布世界坐标，与 lastPointer 的 tree.getInnerPoint 同基准；
+    // 不能用默认 world 基准——tree 承载缩放/平移时 world 是视口坐标，粘贴定位会错乱）
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const el of list) {
+      try {
+        const b = el.getBounds("box", "local");
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.width);
+        maxY = Math.max(maxY, b.y + b.height);
+      } catch {
+        // bounds 不可用时跳过（clipboardBox 为 null 时粘贴回退为原位置偏移）
+      }
+    }
+    this.clipboardBox = Number.isFinite(minX)
+      ? { minX, minY, maxX, maxY }
+      : null;
     return this.clipboard.length > 0;
   }
 
@@ -1718,7 +1829,7 @@ export class Board {
     }
   }
 
-  /** 粘贴剪贴板内容：优先跟随鼠标最后位置（剪贴板包围盒中心对齐），
+  /** 粘贴剪贴板内容：优先跟随鼠标最后位置（剪贴板实际渲染包围盒中心对齐），
    * 鼠标未进入过画布时回退为原位置偏移 12px；粘贴后选中新元素 */
   paste() {
     if (!this.clipboard.length) {
@@ -1726,47 +1837,22 @@ export class Board {
     }
     let dx = 12;
     let dy = 12;
-    if (this.lastPointer) {
-      // 包围盒：覆盖 rect/ellipse（x/y/w/h）、line/arrow（points）、freehand（penPoints）
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const d of this.clipboard) {
-        const x = d.x ?? 0;
-        const y = d.y ?? 0;
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x + (d.width ?? 0));
-        maxY = Math.max(maxY, y + (d.height ?? 0));
-        if (d.points) {
-          for (const p of d.points) {
-            minX = Math.min(minX, p.x);
-            minY = Math.min(minY, p.y);
-            maxX = Math.max(maxX, p.x);
-            maxY = Math.max(maxY, p.y);
-          }
-        }
-        if (d.penPoints) {
-          for (const p of d.penPoints) {
-            minX = Math.min(minX, p[0]);
-            minY = Math.min(minY, p[1]);
-            maxX = Math.max(maxX, p[0]);
-            maxY = Math.max(maxY, p[1]);
-          }
-        }
-      }
-      dx = this.lastPointer.x - (minX + maxX) / 2;
-      dy = this.lastPointer.y - (minY + maxY) / 2;
+    if (this.lastPointer && this.clipboardBox) {
+      // 跟随鼠标：剪贴板原始包围盒中心对齐（复制时从元素实际渲染 bounds 记录）
+      dx =
+        this.lastPointer.x -
+        (this.clipboardBox.minX + this.clipboardBox.maxX) / 2;
+      dy =
+        this.lastPointer.y -
+        (this.clipboardBox.minY + this.clipboardBox.maxY) / 2;
     }
     const pasted: UI[] = [];
     for (const d of this.clipboard) {
-      // id 不随粘贴复制：粘贴出的元素应分配全新 id（避免与原件冲突）
+      // 整体平移按元素坐标语义区分（line/arrow/path 平移 points/path、其余平移 x/y），
+      // 避免绝对坐标契约元素双重偏移；id 不随粘贴复制（粘贴出的元素分配全新 id）
       const el = this.dataToElement({
-        ...d,
+        ...offsetElementData(d, dx, dy),
         id: undefined,
-        x: (d.x ?? 0) + dx,
-        y: (d.y ?? 0) + dy,
       });
       if (el) {
         this.app.tree.add(el);
@@ -1776,6 +1862,42 @@ export class Board {
     if (pasted.length) {
       this.editor.target = pasted.length === 1 ? pasted[0] : pasted;
       this.commitHistory();
+    }
+  }
+
+  /**
+   * 契约元素归一化：line/arrow/path（非 freehand）的数据契约是“points/path 画布绝对坐标 + x/y 置 0”，
+   * leafer 拖动/吸附这类元素时改的是 x/y，需把位移并入 points/path 并归零，避免双重偏移。
+   */
+  private normalizeContractEl(el: UI) {
+    if (el instanceof Line) {
+      const dx = el.x ?? 0;
+      const dy = el.y ?? 0;
+      if (dx || dy) {
+        // 画布内 line 的 points 均为对象数组（扁平 number[] 仅存在于类型定义中）
+        const pts = (el.points ?? []).filter(
+          (p): p is { x: number; y: number } =>
+            typeof p === "object" && p !== null,
+        );
+        el.points = pts.map((p) => ({
+          x: p.x + dx,
+          y: p.y + dy,
+        }));
+        el.x = 0;
+        el.y = 0;
+      }
+    } else if (el instanceof Path) {
+      const t = el as unknown as { __freehandPoints?: number[][] };
+      // freehand 的 x/y + 局部轮廓 path 语义自洽，不归一化
+      if (!t.__freehandPoints) {
+        const dx = el.x ?? 0;
+        const dy = el.y ?? 0;
+        if (dx || dy) {
+          el.path = translatePath(el.path as string, dx, dy);
+          el.x = 0;
+          el.y = 0;
+        }
+      }
     }
   }
 
@@ -2441,6 +2563,9 @@ export class Board {
         __penSize?: number;
         __rough?: { seed: number; original?: string };
       };
+      // 元素位移（leafer 移动 Path 时改 x/y、path 不变），导出时并入 path
+      const dx = el.x ?? 0;
+      const dy = el.y ?? 0;
       if (t.__freehandPoints) {
         // freehand 笔迹：颜色走 stroke 通道（渲染通道是 fill），采样点用于整理识别/重绘
         return {
@@ -2460,7 +2585,11 @@ export class Board {
         type: "path",
         width: el.width ?? 0,
         height: el.height ?? 0,
-        path: el.path as string,
+        // 归一化：leafer Path 渲染 = (x, y) + path 坐标，数据契约统一为
+        // “path 画布绝对坐标 + x/y 置 0”，导出时把元素位移并入 path，避免双重偏移
+        x: 0,
+        y: 0,
+        path: dx || dy ? translatePath(el.path as string, dx, dy) : (el.path as string),
         fill: colorOf(el.fill),
         rough: t.__rough,
       };

@@ -4,7 +4,14 @@ import type { Toolbar } from "../ui/toolbar";
 import { loadConfig, isConfigReady } from "./config";
 import { chatTurn } from "./client";
 import { buildSystemPrompt } from "./prompts";
-import { describeCanvas, executeTool, toOpenAiTools, toolsForMode } from "./tools";
+import {
+  compressImageDataURL,
+  describeCanvas,
+  executeTool,
+  toOpenAiTools,
+  toolsForMode,
+} from "./tools";
+import { iconHTML } from "../ui/icons";
 import type { ElementData } from "../types";
 import type {
   AiContentPart,
@@ -20,10 +27,14 @@ const MAX_HISTORY_TOKENS = 8000;
 const MAX_MSG_TOKENS = 4000;
 /** 图片片段的固定 token 估算（1280px JPEG 视觉 token 的保守值，因模型而异） */
 const IMAGE_TOKENS = 1200;
+/** @ 选区附带单图：图片数量上限与压缩后最长边（px），控制 token 与流量 */
+const MAX_AT_IMAGES = 3;
+const IMAGE_SEND_MAX_SIDE = 1024;
 
 /** 工具名 → 面板回执显示名 */
 const TOOL_LABELS: Record<string, string> = {
   get_canvas: "查看画布",
+  read_image: "读取图片",
   draw_flowchart: "画流程图",
   update_elements: "优化元素",
   list_tools: "查看功能区",
@@ -49,6 +60,10 @@ function estimateTokens(content: string | AiContentPart[] | null): number {
   if (content === null) {
     return 0;
   }
+  if (typeof content === "string" && content.startsWith("data:image/")) {
+    // 图片 dataURL 按固定值估算（按字符数会虚高数十倍）
+    return IMAGE_TOKENS;
+  }
   if (Array.isArray(content)) {
     return content.reduce(
       (n, part) => n + (part.type === "text" ? estimateTokens(part.text) : IMAGE_TOKENS),
@@ -72,6 +87,10 @@ function estimateTokens(content: string | AiContentPart[] | null): number {
  * 避免画布数据被拦腰截断成非法 JSON，造成模型理解混乱。
  */
 function trimLongString(s: string, maxTokens: number): string {
+  if (s.includes("data:image/")) {
+    // 图片 dataURL 不可截断（截断会破坏图片），token 已按固定值估算
+    return s;
+  }
   const tokens = estimateTokens(s);
   if (tokens <= maxTokens) {
     return s;
@@ -170,6 +189,8 @@ export class AiPanel {
   private modeTabs = new Map<AiMode, HTMLButtonElement>();
   /** @ 选区：当前已选区（发送时注入对话上下文），null 表示未 @ */
   private pendingAt: ElementData[] | null = null;
+  /** 清除对话按钮 */
+  private clearBtn!: HTMLButtonElement;
 
   constructor(
     private board: Board,
@@ -183,6 +204,9 @@ export class AiPanel {
     this.inputEl = document.getElementById("ai-input") as HTMLTextAreaElement;
     this.sendBtn = document.getElementById("ai-send-btn") as HTMLButtonElement;
     this.atBtn = document.getElementById("ai-at-btn") as HTMLButtonElement;
+    this.clearBtn = document.getElementById("ai-clear-btn") as HTMLButtonElement;
+    this.clearBtn.innerHTML = iconHTML("trash", 13);
+    this.clearBtn.addEventListener("click", () => this.clearConversation());
     this.bindEvents();
     this.appendSystem(this.modeHint(this.mode));
   }
@@ -246,19 +270,25 @@ export class AiPanel {
     for (const [m, btn] of this.modeTabs) {
       btn.classList.toggle("active", m === mode);
     }
-    this.history = [];
-    this.historyTokens = 0;
-    this.systemTokens = 0;
-    this.compressNotified = false;
-    this.clearAt();
-    this.messagesEl.innerHTML = "";
-    this.appendSystem(this.modeHint(mode));
+    this.clearConversation();
   }
 
   private modeHint(mode: AiMode): string {
     return mode === "chat"
       ? "交流模式：我能通过画布数据看到画布上的内容，可以评价、给建议，并把你的想法画成流程图。"
-      : "编辑模式：告诉我你想添加/修改的绘制工具（如五角星、云朵、高亮笔），我会按统一功能规则直接加到工具栏。";
+      : "编辑模式：告诉我你想添加/修改的绘制工具（如五角星、云朵、高亮笔、点击即生成的印章），我会按统一功能规则直接加到工具栏，并自动验证、试画效果。";
+  }
+
+  /** 清除当前对话：清空历史与消息列表，仅保留模式引导（不影响画布内容） */
+  private clearConversation() {
+    this.history = [];
+    this.historyTokens = 0;
+    this.systemTokens = 0;
+    this.compressNotified = false;
+    this.clearAt();
+    this.inputEl.value = "";
+    this.messagesEl.innerHTML = "";
+    this.appendSystem(this.modeHint(this.mode));
   }
 
   // ---------- 消息渲染 ----------
@@ -310,12 +340,57 @@ export class AiPanel {
     this.scrollBottom();
   }
 
-  /** 工具执行回执：居中灰条（显示给用户的操作记录） */
+  /** 工具执行回执：功能区工具操作显示工具卡片（图标+名称+分组/快捷键徽章），其余保持居中灰条 */
   private renderToolReceipt(exec: AiToolExecution) {
     const el = document.createElement("div");
     el.className = "ai-msg ai-receipt";
-    const label = TOOL_LABELS[exec.name] ?? exec.name;
-    el.textContent = `${label}：${exec.result}`;
+    const isToolCard =
+      exec.tool && !exec.result.startsWith("错误：") && exec.name !== "list_tools";
+    if (isToolCard) {
+      el.classList.add("tool-card");
+      const titleMap: Record<string, string> = {
+        add_tool: "已添加工具",
+        update_tool: "已修改工具",
+        remove_tool: "已删除工具",
+      };
+      const icon = document.createElement("span");
+      icon.className = "tool-card-icon";
+      icon.textContent = exec.tool!.icon;
+      const info = document.createElement("span");
+      info.className = "tool-card-info";
+      const title = document.createElement("span");
+      title.className = "tool-card-title";
+      title.textContent = `${titleMap[exec.name] ?? TOOL_LABELS[exec.name] ?? exec.name}：${exec.tool!.name}`;
+      const badges = document.createElement("span");
+      badges.className = "tool-card-badges";
+      if (exec.tool!.group) {
+        const g = document.createElement("span");
+        g.className = "tool-badge";
+        g.textContent =
+          exec.tool!.group === "shape"
+            ? "形状▾"
+            : exec.tool!.group === "ai"
+              ? "AI 工具▾"
+              : exec.tool!.group;
+        badges.appendChild(g);
+      }
+      if (exec.tool!.shortcut) {
+        const s = document.createElement("span");
+        s.className = "tool-badge key-badge";
+        s.textContent = `快捷键 ${exec.tool!.shortcut.toUpperCase()}`;
+        badges.appendChild(s);
+      }
+      info.append(title, badges);
+      el.append(icon, info);
+    } else {
+      const label = TOOL_LABELS[exec.name] ?? exec.name;
+      // 读图结果含图片 dataURL：面板不展示 base64，仅保留说明前缀
+      const shown = exec.result.includes("data:image/")
+        ? exec.result.slice(0, exec.result.indexOf("data:image/")) +
+          "[图片数据已发送给模型]"
+        : exec.result;
+      el.textContent = `${label}：${shown}`;
+    }
     this.messagesEl.appendChild(el);
     this.scrollBottom();
   }
@@ -402,6 +477,17 @@ export class AiPanel {
       if (m.role !== "tool" || typeof m.content !== "string") {
         continue;
       }
+      // 图片型工具结果（read_image 的 dataURL）：替换为占位释放 token
+      if (m.content.includes("data:image/")) {
+        const before = estimateTokens(m.content);
+        m.content = "（图片数据已省略，如需再次查看请重新调用 read_image）";
+        this.historyTokens -= before - estimateTokens(m.content);
+        changed = true;
+        if (this.historyTokens + this.systemTokens <= MAX_HISTORY_TOKENS) {
+          break;
+        }
+        continue;
+      }
       if (!m.content.startsWith("当前画布元素数据")) {
         continue;
       }
@@ -473,19 +559,56 @@ export class AiPanel {
     }
     this.pushHistory({ role: "user", content: userContent });
 
-    // 多模态：交流模式开启视觉时，随消息附带画布截图（发送时快照；失败静默降级纯文本）
-    if (this.mode === "chat" && cfg.multimodal === true) {
-      try {
-        const shot = await this.board.exportImage();
-        if (shot) {
-          this.history[this.history.length - 1].content = [
-            { type: "text", text: userContent },
-            { type: "image_url", image_url: { url: shot } },
-          ];
-          this.historyTokens += IMAGE_TOKENS;
+    // 多模态：开启视觉时随消息附带图像（发送时快照；失败静默降级纯文本）。
+    // 优先级：@ 选区含图片 → 附带压缩后的单图（比整画布截图清晰、省 token，两种模式可用）；
+    // 否则交流模式附带整画布截图供理解整体布局
+    if (cfg.multimodal === true) {
+      const atImages = (atData ?? []).filter(
+        (d): d is ElementData & { url: string } =>
+          d.type === "image" && !!d.url,
+      );
+      if (atImages.length) {
+        const parts: AiContentPart[] = [{ type: "text", text: userContent }];
+        const attached: string[] = [];
+        for (const img of atImages.slice(0, MAX_AT_IMAGES)) {
+          const shot = await compressImageDataURL(img.url, IMAGE_SEND_MAX_SIDE);
+          if (!shot) {
+            continue;
+          }
+          parts.push({ type: "image_url", image_url: { url: shot } });
+          attached.push(
+            `- id=${img.id}：${Math.round(img.width ?? 0)}x${Math.round(img.height ?? 0)}px${img.rotation ? `（画布上旋转 ${Math.round(img.rotation)}°）` : ""}`,
+          );
         }
-      } catch {
-        // 截图失败：降级为纯文本
+        // 至少一张图压缩成功才切换为多模态消息；图片清单写入文本供模型建立 id↔图映射
+        if (attached.length) {
+          const extra =
+            atImages.length > MAX_AT_IMAGES
+              ? `\n（其余 ${atImages.length - MAX_AT_IMAGES} 张未附带，可用 read_image 工具按 id 查看）`
+              : "";
+          parts[0] = {
+            type: "text",
+            text: userContent +
+              `\n\n随本消息附带画布中以下图片的实际内容（请直接看图）：\n${attached.join("\n")}${extra}`,
+          };
+          const msg = this.history[this.history.length - 1];
+          this.historyTokens +=
+            estimateTokens(parts) - estimateTokens(msg.content as string);
+          msg.content = parts;
+        }
+      } else if (this.mode === "chat") {
+        try {
+          const shot = await this.board.exportImage();
+          if (shot) {
+            this.history[this.history.length - 1].content = [
+              { type: "text", text: userContent },
+              { type: "image_url", image_url: { url: shot } },
+            ];
+            this.historyTokens += IMAGE_TOKENS;
+          }
+        } catch {
+          // 截图失败：降级为纯文本
+        }
       }
     }
 
@@ -541,7 +664,7 @@ export class AiPanel {
             (t) => t.name === call.function.name,
           );
           const exec = tool
-            ? executeTool(tool, call.function.arguments, {
+            ? await executeTool(tool, call.function.arguments, {
                 board: this.board,
                 registry: this.registry,
                 toolbar: this.toolbar,
