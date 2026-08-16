@@ -14,6 +14,7 @@ export type IconName =
   | "arrow"
   | "rect"
   | "ellipse"
+  | "frame"
   | "text"
   | "shapes"
   | "sparkle"
@@ -70,7 +71,18 @@ export type IconName =
   | "dash"
   | "dottedLine"
   | "opacity"
-  | "cornerRadius";
+  | "cornerRadius"
+  // 文本排版扩展（对齐/粗体）
+  | "textAlignLeft"
+  | "textAlignCenter"
+  | "textAlignRight"
+  | "bold"
+  // 箭头端点（起点/终点样式）
+  | "arrowHeadNone"
+  | "arrowHeadArrow"
+  | "arrowHeadTriangle"
+  | "arrowHeadCircle"
+  | "arrowHeadDot";
 
 type IconDef = {
   /** 内部元素（path/circle/rect 等），stroke 风格统一由外层 svg 属性控制 */
@@ -102,6 +114,12 @@ const DEFS: Record<IconName, IconDef> = {
   arrow: { body: `<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>` },
   rect: { body: `<rect x="4" y="4" width="16" height="16" rx="2"/>` },
   ellipse: { body: `<circle cx="12" cy="12" r="8"/>` },
+  frame: {
+    body:
+      `<rect x="4" y="4" width="16" height="16" rx="1"/>` +
+      `<path d="M4 10h7"/>`,
+    dash: true,
+  },
   text: { body: `<path d="M4 7V4h16v3"/><path d="M12 4v16"/><path d="M8 20h8"/>` },
   shapes: {
     body:
@@ -280,6 +298,35 @@ const DEFS: Record<IconName, IconDef> = {
     body:
       `<path d="M21 11a8 8 0 0 0-8-8"/>` +
       `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>`,
+  },
+  textAlignLeft: {
+    body: `<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/>`,
+  },
+  textAlignCenter: {
+    body: `<path d="M4 6h16"/><path d="M7 12h10"/><path d="M5 18h14"/>`,
+  },
+  textAlignRight: {
+    body: `<path d="M4 6h16"/><path d="M10 12h10"/><path d="M7 18h13"/>`,
+  },
+  bold: {
+    body:
+      `<path d="M6 12h9a4 4 0 1 0 0-8H7a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h10a4 4 0 0 0 0-8"/>`,
+  },
+  arrowHeadNone: {
+    body: `<path d="M4 12h16"/>`,
+  },
+  arrowHeadArrow: {
+    body: `<path d="M4 12h12"/><path d="m13 6 6 6-6 6"/>`,
+  },
+  arrowHeadTriangle: {
+    body: `<path d="M4 12h11"/><path d="m12 6 7 6-7 6"/>`,
+  },
+  arrowHeadCircle: {
+    body: `<path d="M4 12h12"/><circle cx="18" cy="12" r="2.4"/>`,
+  },
+  arrowHeadDot: {
+    body:
+      `<path d="M4 12h13"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>`,
   },
 };
 

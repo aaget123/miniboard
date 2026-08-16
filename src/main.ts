@@ -1,7 +1,7 @@
 import { Board } from "./board/canvas";
 import { ToolRegistry } from "./board/registry";
 import { ProjectStore, resolveDataDir } from "./storage";
-import type { CustomToolDef } from "./types";
+import type { CustomToolDef, FontWeight } from "./types";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
 import { ToolsFloat } from "./ui/toolsfloat";
@@ -289,6 +289,22 @@ async function main() {
       // 仅对选中文字即时生效（新文字字号固定默认值，不进默认样式）
       board.applyStyleToSelection({ fontSize: size });
     },
+    // ---- 文本排版扩展：对齐/字重/字体（仅作用于选中文字，不进默认样式） ----
+    onTextAlignChange: (align) => {
+      board.applyStyleToSelection({ textAlign: align });
+    },
+    onFontWeightChange: (weight) => {
+      board.applyStyleToSelection({ fontWeight: weight as FontWeight });
+    },
+    onFontFamilyChange: (family) => {
+      board.applyStyleToSelection({ fontFamily: family || undefined });
+    },
+    // ---- 箭头端点：起点/终点样式（仅作用于选中 line/arrow） ----
+    onArrowHeadChange: (end, head) => {
+      board.applyStyleToSelection(
+        end === "start" ? { startArrow: head } : { endArrow: head },
+      );
+    },
     // ---- P3 样式扩展：线型/透明度/圆角（仅作用于选中，不进默认样式） ----
     onStrokeDashChange: (dash) => {
       board.applyStyleToSelection({ strokeDash: dash });
@@ -299,35 +315,9 @@ async function main() {
     onCornerRadiusChange: (radius) => {
       board.applyStyleToSelection({ cornerRadius: radius });
     },
-    // ---- 排列面板：对齐/分布/翻转/层序/成组（Board 内部合并快照） ----
-    onAlign: (mode) => board.alignSelection(mode),
-    onDistribute: (mode) => board.distributeSelection(mode),
-    onFlip: (axis) => board.flipSelection(axis),
-    onReorder: (mode) => {
-      switch (mode) {
-        case "front":
-          board.toFront();
-          break;
-        case "back":
-          board.toBack();
-          break;
-        case "forward":
-          board.bringForward();
-          break;
-        case "backward":
-          board.sendBackward();
-          break;
-      }
-    },
-    onGroup: () => {
-      if (!board.groupSelected()) {
-        toast("至少选中 2 个未锁定元素才能成组");
-      }
-    },
-    onUngroup: () => {
-      if (!board.ungroupSelected()) {
-        toast("选中元素不在任何组中");
-      }
+    // 粗糙度：已手绘元素同一 seed 重绘（抖动态不变仅幅度变）
+    onRoughnessChange: (roughness) => {
+      board.setRoughness(roughness);
     },
     onCrop: () => {
       const ok = board.startCrop();
@@ -510,6 +500,7 @@ async function main() {
     copy: () => board.copy(),
     cut: () => board.cut(),
     paste: () => board.paste(),
+    bold: () => board.toggleBold(),
     selectAll: () => board.selectAll(),
     delete: () => board.deleteSelected(),
     duplicate: () => {

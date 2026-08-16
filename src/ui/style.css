@@ -593,6 +593,49 @@ input[type="color"] {
   gap: 6px;
 }
 
+/* 文本排版扩展：对齐/粗体按钮激活态（复用 .arrange-btn 基础样式） */
+.align-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 字体下拉（文本排版扩展） */
+.font-family-select {
+  background: var(--bg-3);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 12px;
+  max-width: 150px;
+  cursor: pointer;
+}
+
+.font-family-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 箭头端点：起点/终点两组按钮（复用 .align-btn 激活态） */
+.arrow-head-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.arrow-head-group {
+  display: flex;
+  gap: 4px;
+}
+
+.arrow-end-label {
+  width: 14px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex-shrink: 0;
+}
+
 /* ---------- 右侧圆形悬浮工具栏（常驻，可拖拽） ---------- */
 #tools-float {
   position: fixed;

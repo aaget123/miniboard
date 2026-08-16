@@ -62,9 +62,8 @@ export class StatusBar {
     right.className = "sb-right";
     this.undoBtn = makeBtn("undo", "撤销 (Ctrl+Z)", () => handlers.onUndo());
     this.redoBtn = makeBtn("redo", "重做 (Ctrl+Y)", () => handlers.onRedo());
+    right.append(this.undoBtn, this.redoBtn);
     right.append(
-      this.undoBtn,
-      this.redoBtn,
       makeBtn("zoomOut", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
     );
     this.zoomBtn = makeBtn("100%", "重置为 100% (Ctrl+0)", () =>

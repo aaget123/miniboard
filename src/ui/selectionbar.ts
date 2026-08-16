@@ -2,12 +2,7 @@ import { SWATCHES, renderToolIcon } from "./toolbar";
 import { iconHTML } from "./icons";
 import type { IconName } from "./icons";
 import type { SelectionInfo } from "../board/canvas";
-import type {
-  AlignMode,
-  DistributeMode,
-  FlipAxis,
-  ReorderMode,
-} from "../board/arrange";
+import type { ArrowHead } from "../types";
 
 /** 最近使用颜色（本地记忆，最多 4 个，追加在色板尾部） */
 const RECENT_KEY = "miniboard:recent-colors";
@@ -25,6 +20,16 @@ export type SelectionBarHandlers = {
   onWidthChange: (width: number) => void;
   /** 字号变化（仅选中文字时） */
   onFontSizeChange: (size: number) => void;
+  // ---- 文本排版扩展：对齐/字重/字体（仅选中文字时生效） ----
+  /** 水平对齐变化 */
+  onTextAlignChange: (align: "left" | "center" | "right") => void;
+  /** 字重变化（100-900） */
+  onFontWeightChange: (weight: number) => void;
+  /** 字体族变化（空串 = 默认字体） */
+  onFontFamilyChange: (family: string) => void;
+  // ---- 箭头端点：起点/终点样式（仅单选 line/arrow 时生效） ----
+  /** 端点样式变化（end 为 "start" 起点 / "end" 终点） */
+  onArrowHeadChange: (end: "start" | "end", head: ArrowHead) => void;
   // ---- P3 样式扩展：线型/透明度/圆角（仅作用于选中，不进默认样式） ----
   /** 线型变化（undefined = 实线；虚线/点线为 leafer dashPattern 参数） */
   onStrokeDashChange: (dash: number[] | undefined) => void;
@@ -32,13 +37,8 @@ export type SelectionBarHandlers = {
   onOpacityChange: (opacity: number) => void;
   /** 圆角变化（0-100，仅单选 rect） */
   onCornerRadiusChange: (radius: number) => void;
-  // ---- 排列面板（对齐/分布/翻转/层序/成组） ----
-  onAlign: (mode: AlignMode) => void;
-  onDistribute: (mode: DistributeMode) => void;
-  onFlip: (axis: FlipAxis) => void;
-  onReorder: (mode: ReorderMode) => void;
-  onGroup: () => void;
-  onUngroup: () => void;
+  /** 粗糙度变化（0-2，仅作用于已手绘元素，同一 seed 重绘） */
+  onRoughnessChange: (roughness: number) => void;
 };
 
 function makeButton(
@@ -79,6 +79,8 @@ export class SelectionBar {
   // 最近使用颜色（追加在基础色板之后）
   private recentSwatches = new Map<string, HTMLDivElement>();
   private recentRow!: HTMLElement;
+  // 描边粗细行（纯文字选中时隐藏：文字粗细走字重，描边粗细对文字无效）
+  private widthRow!: HTMLElement;
   private colorInput!: HTMLInputElement;
   private widthInput!: HTMLInputElement;
   private widthValue!: HTMLSpanElement;
@@ -87,16 +89,23 @@ export class SelectionBar {
   private sketchifyBtn!: HTMLButtonElement;
   private cropBtn!: HTMLButtonElement;
   private styleBtn!: HTMLButtonElement;
-  private arrangeBtn!: HTMLButtonElement;
   private sep!: HTMLElement;
-  // 排列面板（对齐/分布/翻转/层序）与成组/取消成组按钮
-  private arrangePopover!: HTMLElement;
-  private groupBtn!: HTMLButtonElement;
-  private ungroupBtn!: HTMLButtonElement;
   // 字号行（仅选中文字时显示）
   private fontRow!: HTMLElement;
   private fontSizeInput!: HTMLInputElement;
   private fontSizeLabel!: HTMLSpanElement;
+  // 文本排版扩展行：对齐（左/中/右）、字重滑条、字体下拉
+  private alignRow!: HTMLElement;
+  private alignBtns: HTMLButtonElement[] = [];
+  private weightRow!: HTMLElement;
+  private weightInput!: HTMLInputElement;
+  private weightValue!: HTMLSpanElement;
+  private fontFamilyRow!: HTMLElement;
+  private fontFamilySelect!: HTMLSelectElement;
+  // 箭头端点行：起点/终点两组按钮（仅单选 line/arrow 时显示）
+  private arrowRow!: HTMLElement;
+  private startArrowBtns: HTMLButtonElement[] = [];
+  private endArrowBtns: HTMLButtonElement[] = [];
   // P3 样式扩展行：线型（实线/虚线/点线）与透明度/圆角滑条
   private dashRow!: HTMLElement;
   private dashBtns: HTMLButtonElement[] = [];
@@ -106,6 +115,10 @@ export class SelectionBar {
   private cornerRow!: HTMLElement;
   private cornerInput!: HTMLInputElement;
   private cornerValue!: HTMLSpanElement;
+  // 粗糙度行（选中含已手绘元素时显示，0-2 滑条）
+  private roughRow!: HTMLElement;
+  private roughInput!: HTMLInputElement;
+  private roughValue!: HTMLSpanElement;
   // 两段式显隐：先切 hidden 保证 transition 播放，延时后再真正隐藏
   private hideTimer = 0;
   private popoverHideTimer = 0;
@@ -133,11 +146,6 @@ export class SelectionBar {
       "裁剪图片：拖动手柄调整区域，松手即应用",
       () => handlers.onCrop(),
     );
-    this.arrangeBtn = makeButton(
-      "align",
-      "排列：对齐/分布/翻转/层序/成组",
-      () => this.toggleArrange(this.arrangeBtn.getBoundingClientRect()),
-    );
     this.sep = document.createElement("div");
     this.sep.className = "tool-sep";
     this.styleBtn = makeButton("sliders", "样式：描边/填充颜色与粗细", () =>
@@ -147,64 +155,10 @@ export class SelectionBar {
       this.beautifyBtn,
       this.sketchifyBtn,
       this.cropBtn,
-      this.arrangeBtn,
       this.sep,
       this.styleBtn,
     );
     container.appendChild(this.bar);
-
-    // ---- 排列面板（对齐/分布/翻转/层序 + 成组行） ----
-    this.arrangePopover = document.createElement("div");
-    this.arrangePopover.id = "arrange-popover";
-    this.arrangePopover.hidden = true;
-    this.arrangePopover.append(
-      this.makeArrangeSection("对齐", [
-        ["alignLeft", "左对齐", () => handlers.onAlign("left")],
-        ["alignCenterH", "水平居中", () => handlers.onAlign("centerX")],
-        ["alignRight", "右对齐", () => handlers.onAlign("right")],
-        ["alignTop", "顶对齐", () => handlers.onAlign("top")],
-        ["alignCenterV", "垂直居中", () => handlers.onAlign("centerY")],
-        ["alignBottom", "底对齐", () => handlers.onAlign("bottom")],
-      ]),
-      this.makeArrangeSection("分布", [
-        [
-          "distributeH",
-          "水平均匀分布",
-          () => handlers.onDistribute("horizontal"),
-        ],
-        [
-          "distributeV",
-          "垂直均匀分布",
-          () => handlers.onDistribute("vertical"),
-        ],
-      ]),
-      this.makeArrangeSection("翻转", [
-        ["flipH", "水平翻转", () => handlers.onFlip("h")],
-        ["flipV", "垂直翻转", () => handlers.onFlip("v")],
-      ]),
-      this.makeArrangeSection("层序", [
-        ["front", "置于顶层", () => handlers.onReorder("front")],
-        ["forward", "上移一层", () => handlers.onReorder("forward")],
-        ["backward", "下移一层", () => handlers.onReorder("backward")],
-        ["back", "置于底层", () => handlers.onReorder("back")],
-      ]),
-    );
-    // 成组/取消成组：多选显示成组；选中含组成员时显示取消成组
-    const groupRow = document.createElement("div");
-    groupRow.className = "arrange-grid";
-    this.groupBtn = this.makeArrangeBtn(
-      "group",
-      "成组：同组元素联动移动/排列/删除",
-      () => handlers.onGroup(),
-    );
-    this.ungroupBtn = this.makeArrangeBtn(
-      "ungroup",
-      "取消成组：解散选中元素所在组",
-      () => handlers.onUngroup(),
-    );
-    groupRow.append(this.groupBtn, this.ungroupBtn);
-    this.arrangePopover.appendChild(groupRow);
-    document.body.appendChild(this.arrangePopover);
 
     // ---- 样式浮层（色板 + 取色器 + 粗细）----
     this.popover = document.createElement("div");
@@ -256,6 +210,7 @@ export class SelectionBar {
 
     const row = document.createElement("div");
     row.className = "style-row";
+    this.widthRow = row;
     this.colorInput = document.createElement("input");
     this.colorInput.type = "color";
     this.colorInput.value = "#4f8cff";
@@ -315,6 +270,127 @@ export class SelectionBar {
     this.fontRow.append(fontLabel, this.fontSizeInput, this.fontSizeLabel);
     this.popover.appendChild(this.fontRow);
 
+    // 文本排版扩展：对齐（左/中/右）
+    this.alignRow = document.createElement("div");
+    this.alignRow.className = "style-row";
+    this.alignRow.hidden = true;
+    const alignLabel = document.createElement("span");
+    alignLabel.className = "panel-label";
+    alignLabel.textContent = "对齐";
+    const alignGroup = document.createElement("div");
+    alignGroup.className = "dash-group";
+    const alignOptions: [IconName, string, "left" | "center" | "right"][] = [
+      ["textAlignLeft", "左对齐", "left"],
+      ["textAlignCenter", "居中", "center"],
+      ["textAlignRight", "右对齐", "right"],
+    ];
+    for (const [icon, tip, align] of alignOptions) {
+      const b = this.makeIconBtn(icon, tip, () =>
+        handlers.onTextAlignChange(align),
+      );
+      b.classList.add("align-btn");
+      this.alignBtns.push(b);
+      alignGroup.appendChild(b);
+    }
+    this.alignRow.append(alignLabel, alignGroup);
+    this.popover.appendChild(this.alignRow);
+
+    // 字重行：滑条 100-900（step 100），拖动即改选中文字字重；Ctrl+B 快捷切换 400↔700
+    this.weightRow = document.createElement("div");
+    this.weightRow.className = "style-row";
+    this.weightRow.hidden = true;
+    const weightLabel = document.createElement("span");
+    weightLabel.className = "panel-label";
+    weightLabel.textContent = "字重";
+    this.weightInput = document.createElement("input");
+    this.weightInput.type = "range";
+    this.weightInput.min = "100";
+    this.weightInput.max = "900";
+    this.weightInput.step = "100";
+    this.weightInput.value = "400";
+    this.weightInput.addEventListener("input", () => {
+      const v = Number(this.weightInput.value);
+      this.weightValue.textContent = String(v);
+      handlers.onFontWeightChange(v);
+    });
+    this.weightValue = document.createElement("span");
+    this.weightValue.className = "font-size-value";
+    this.weightValue.textContent = "400";
+    this.weightRow.append(weightLabel, this.weightInput, this.weightValue);
+    this.popover.appendChild(this.weightRow);
+
+    // 字体行：下拉（默认/常用中文字体/西文字体）
+    this.fontFamilyRow = document.createElement("div");
+    this.fontFamilyRow.className = "style-row";
+    this.fontFamilyRow.hidden = true;
+    const fontFamilyLabel = document.createElement("span");
+    fontFamilyLabel.className = "panel-label";
+    fontFamilyLabel.textContent = "字体";
+    this.fontFamilySelect = document.createElement("select");
+    this.fontFamilySelect.className = "font-family-select";
+    const fontOptions: [string, string][] = [
+      ["", "默认"],
+      ["SimSun", "宋体"],
+      ["SimHei", "黑体"],
+      ["Microsoft YaHei", "微软雅黑"],
+      ["KaiTi", "楷体"],
+      ["FangSong", "仿宋"],
+      ["Arial", "Arial"],
+      ["Times New Roman", "Times New Roman"],
+      ["Courier New", "Courier New"],
+    ];
+    for (const [value, label] of fontOptions) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      this.fontFamilySelect.appendChild(opt);
+    }
+    this.fontFamilySelect.addEventListener("change", () => {
+      handlers.onFontFamilyChange(this.fontFamilySelect.value);
+    });
+    this.fontFamilyRow.append(fontFamilyLabel, this.fontFamilySelect);
+    this.popover.appendChild(this.fontFamilyRow);
+
+    // 箭头端点行：起点/终点各 5 档（无/箭头/三角/圆/点），仅单选 line/arrow 时显示
+    this.arrowRow = document.createElement("div");
+    this.arrowRow.className = "arrow-head-row";
+    this.arrowRow.hidden = true;
+    const headOptions: [IconName, string, ArrowHead][] = [
+      ["arrowHeadNone", "无", "none"],
+      ["arrowHeadArrow", "箭头", "arrow"],
+      ["arrowHeadTriangle", "三角", "triangle"],
+      ["arrowHeadCircle", "圆", "circle"],
+      ["arrowHeadDot", "点", "dot"],
+    ];
+    const makeEndRow = (
+      end: "start" | "end",
+      labelText: string,
+      btns: HTMLButtonElement[],
+    ) => {
+      const row = document.createElement("div");
+      row.className = "style-row";
+      const label = document.createElement("span");
+      label.className = "arrow-end-label";
+      label.textContent = labelText;
+      const group = document.createElement("div");
+      group.className = "arrow-head-group";
+      for (const [icon, tip, head] of headOptions) {
+        const b = this.makeIconBtn(icon, `${labelText}点：${tip}`, () =>
+          handlers.onArrowHeadChange(end, head),
+        );
+        b.classList.add("align-btn");
+        btns.push(b);
+        group.appendChild(b);
+      }
+      row.append(label, group);
+      return row;
+    };
+    this.arrowRow.append(
+      makeEndRow("start", "起", this.startArrowBtns),
+      makeEndRow("end", "终", this.endArrowBtns),
+    );
+    this.popover.appendChild(this.arrowRow);
+
     // P3 线型行：实线/虚线/点线（选中含可描边形状时显示）
     this.dashRow = document.createElement("div");
     this.dashRow.className = "style-row";
@@ -331,7 +407,7 @@ export class SelectionBar {
       ["dottedLine", "点线", [2, 4]],
     ];
     for (const [icon, tip, dash] of dashOptions) {
-      const b = this.makeArrangeBtn(icon, tip, () =>
+      const b = this.makeIconBtn(icon, tip, () =>
         handlers.onStrokeDashChange(dash),
       );
       b.classList.add("dash-btn");
@@ -396,20 +472,44 @@ export class SelectionBar {
       this.cornerValue,
     );
     this.popover.appendChild(this.cornerRow);
+
+    // 粗糙度行：滑条 0-2（rough.js roughness，0 平滑 / 2 重度抖动），
+    // 选中含已手绘元素时显示；同一 seed 重绘，仅幅度变化不改变抖动形态
+    this.roughRow = document.createElement("div");
+    this.roughRow.className = "style-row";
+    this.roughRow.hidden = true;
+    const roughLabel = document.createElement("span");
+    roughLabel.className = "panel-label";
+    roughLabel.textContent = "粗糙";
+    this.roughInput = document.createElement("input");
+    this.roughInput.type = "range";
+    this.roughInput.min = "0";
+    this.roughInput.max = "2";
+    this.roughInput.step = "0.1";
+    this.roughInput.value = "1";
+    this.roughInput.addEventListener("input", () => {
+      const v = Number(this.roughInput.value);
+      this.roughValue.textContent = v.toFixed(1);
+      handlers.onRoughnessChange(v);
+    });
+    this.roughValue = document.createElement("span");
+    this.roughValue.className = "font-size-value";
+    this.roughValue.textContent = "1.0";
+    this.roughRow.append(
+      roughLabel,
+      this.roughInput,
+      this.roughValue,
+    );
+    this.popover.appendChild(this.roughRow);
     document.body.appendChild(this.popover);
 
     // 点击浮层外部关闭（ESC/失焦由 main.ts 互斥管理统一兜底，此处补充失焦）
     document.addEventListener("pointerdown", (e) => {
-      if (this.popover.hidden && this.arrangePopover.hidden) {
+      if (this.popover.hidden) {
         return;
       }
       const t = e.target as Node;
-      if (
-        !this.popover.contains(t) &&
-        t !== this.styleBtn &&
-        !this.arrangePopover.contains(t) &&
-        t !== this.arrangeBtn
-      ) {
+      if (!this.popover.contains(t) && t !== this.styleBtn) {
         this.hidePopover();
       }
     });
@@ -438,15 +538,18 @@ export class SelectionBar {
       this.beautifyBtn.style.display = "none";
       this.sketchifyBtn.style.display = "none";
       this.cropBtn.style.display = "none";
-      this.arrangeBtn.style.display = "none";
-      this.groupBtn.style.display = "none";
-      this.ungroupBtn.style.display = "none";
       this.sep.style.display = "";
       this.styleBtn.style.display = "";
       this.fontRow.hidden = true;
+      this.alignRow.hidden = true;
+      this.weightRow.hidden = true;
+      this.fontFamilyRow.hidden = true;
+      this.widthRow.hidden = false;
       this.dashRow.hidden = true;
       this.opacityRow.hidden = true;
       this.cornerRow.hidden = true;
+      this.roughRow.hidden = true;
+      this.arrowRow.hidden = true;
       return;
     }
     const info2 = info!;
@@ -457,26 +560,29 @@ export class SelectionBar {
     this.beautifyBtn.style.display = info2.hasFreehand ? "" : "none";
     this.sketchifyBtn.style.display = info2.hasSketchable ? "" : "none";
     this.cropBtn.style.display = singleImage ? "" : "none";
-    // 排列面板：多选显示（对齐需 ≥2、分布需 ≥3，数量不足由操作层忽略）；
-    // 成组按钮多选显示；取消成组在选中含组成员时显示（单选组内元素也可解散整组）
-    const multi = info2.ids.length >= 2;
-    this.arrangeBtn.style.display = multi ? "" : "none";
-    this.groupBtn.style.display = multi ? "" : "none";
-    this.ungroupBtn.style.display = info2.hasGroup ? "" : "none";
-    // 排列面板适用性跟随选中变化：既非多选又无组成员时收起已打开的面板
-    //（仅收排列面板，不影响样式浮层；单选组成员时保留以支持取消成组）
-    if (!multi && !info2.hasGroup && !this.arrangePopover.hidden) {
-      this.arrangePopover.classList.remove("visible");
-      clearTimeout(this.popoverHideTimer);
-      this.popoverHideTimer = window.setTimeout(() => {
-        this.arrangePopover.hidden = true;
-      }, FADE_MS);
-    }
     this.styleBtn.style.display = hasEditable ? "" : "none";
     this.sep.style.display = hasEditable ? "" : "none";
     this.fontRow.hidden = !info2.hasText;
-    if (info2.hasText && info2.fontSize !== undefined) {
-      this.setFontSize(info2.fontSize);
+    this.alignRow.hidden = !info2.hasText;
+    this.weightRow.hidden = !info2.hasText;
+    this.fontFamilyRow.hidden = !info2.hasText;
+    // 纯文字选中：描边“粗细”对文字无效（文字渲染走 fill），隐藏避免误操作；字重行已提供文字粗细
+    const pureText = info2.hasText && info2.types.every((t) => t === "text");
+    this.widthRow.hidden = pureText;
+    if (info2.hasText) {
+      if (info2.fontSize !== undefined) {
+        this.setFontSize(info2.fontSize);
+      }
+      // 文本排版回显（单选未锁定文字时）：对齐高亮/字重滑条/字体下拉
+      if (info2.textAlign !== undefined) {
+        this.setTextAlign(info2.textAlign);
+      }
+      if (info2.fontWeight !== undefined) {
+        this.setWeight(info2.fontWeight);
+      }
+      if (info2.fontFamily !== undefined) {
+        this.setFontFamily(info2.fontFamily);
+      }
     }
     // P3 样式扩展行：线型（含可描边形状）、透明度（可编辑元素）、圆角（仅单选 rect）；
     // 单选未锁定元素时滑条跟随当前值（多选/锁定值混杂不跟随）
@@ -492,6 +598,22 @@ export class SelectionBar {
     this.opacityRow.hidden = !hasEditable;
     const singleRect = info2.ids.length === 1 && info2.types[0] === "rect";
     this.cornerRow.hidden = !singleRect;
+    // 粗糙度：选中含已手绘元素时显示；单选未锁定时滑条跟随当前值
+    this.roughRow.hidden = !info2.hasRough;
+    if (info2.roughness !== undefined) {
+      this.setRoughness(info2.roughness);
+    }
+    // 箭头端点：仅单选 line/arrow 时显示，端点按钮高亮跟随当前值
+    const singleLine =
+      info2.ids.length === 1 &&
+      (info2.types[0] === "line" || info2.types[0] === "arrow");
+    this.arrowRow.hidden = !singleLine;
+    if (info2.startArrow !== undefined) {
+      this.setArrowHead("start", info2.startArrow);
+    }
+    if (info2.endArrow !== undefined) {
+      this.setArrowHead("end", info2.endArrow);
+    }
     if (info2.opacity !== undefined) {
       this.setOpacity(info2.opacity);
     }
@@ -521,8 +643,7 @@ export class SelectionBar {
    * 开关样式浮层（左侧栏 🎨 与顶栏默认样式入口共用）。
    * 锚点在上半屏（顶栏）时显示在锚点下方居中；否则（左侧栏）显示在锚点右侧。
    */
-  toggleStyle(anchor: DOMRect) {
-    if (this.popover.classList.contains("visible")) {
+  toggleStyle(anchor: DOMRect) {    if (this.popover.classList.contains("visible")) {
       this.hidePopover();
       return;
     }
@@ -532,20 +653,6 @@ export class SelectionBar {
     this.positionPopover(this.popover, anchor);
     requestAnimationFrame(() =>
       requestAnimationFrame(() => this.popover.classList.add("visible")),
-    );
-  }
-
-  /** 开关排列面板（与样式浮层互斥：打开一个时先收起另一个） */
-  toggleArrange(anchor: DOMRect) {
-    if (this.arrangePopover.classList.contains("visible")) {
-      this.hidePopover();
-      return;
-    }
-    this.hidePopover(false);
-    this.arrangePopover.hidden = false;
-    this.positionPopover(this.arrangePopover, anchor);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => this.arrangePopover.classList.add("visible")),
     );
   }
 
@@ -574,16 +681,14 @@ export class SelectionBar {
     popover.style.top = `${top}px`;
   }
 
-  /** 收起样式浮层/排列面板（main.ts 互斥管理 closeAllFloating 调用；
-   *  scheduleHide=false 供面板互斥切换复用：只收起不调度隐藏定时器，避免误伤刚打开的面板） */
+  /** 收起样式浮层（main.ts 互斥管理 closeAllFloating 调用；
+   * scheduleHide=false 供面板互斥切换复用：只收起不调度隐藏定时器，避免误伤刚打开的面板） */
   hidePopover(scheduleHide = true) {
     this.popover.classList.remove("visible");
-    this.arrangePopover.classList.remove("visible");
     clearTimeout(this.popoverHideTimer);
     if (scheduleHide) {
       this.popoverHideTimer = window.setTimeout(() => {
         this.popover.hidden = true;
-        this.arrangePopover.hidden = true;
       }, FADE_MS);
     }
   }
@@ -615,6 +720,35 @@ export class SelectionBar {
     this.fontSizeLabel.textContent = String(size);
   }
 
+  /** 对齐按钮高亮跟随（单选未锁定文字时） */
+  setTextAlign(align: "left" | "center" | "right") {
+    const idx = align === "left" ? 0 : align === "center" ? 1 : 2;
+    this.alignBtns.forEach((b, i) => b.classList.toggle("active", i === idx));
+  }
+
+  /** 字重滑条跟随（单选未锁定文字时；100 取整到档位） */
+  setWeight(weight: number) {
+    const v = Math.min(900, Math.max(100, Math.round(weight / 100) * 100));
+    this.weightInput.value = String(v);
+    this.weightValue.textContent = String(v);
+  }
+
+  /** 字体下拉跟随（当前字体不在选项列表时回退默认项） */
+  setFontFamily(family: string) {
+    this.fontFamilySelect.value = family;
+    if (this.fontFamilySelect.value !== family) {
+      this.fontFamilySelect.value = "";
+    }
+  }
+
+  /** 端点按钮高亮跟随（单选 line/arrow 时） */
+  setArrowHead(end: "start" | "end", head: ArrowHead) {
+    const btns = end === "start" ? this.startArrowBtns : this.endArrowBtns;
+    const order = ["none", "arrow", "triangle", "circle", "dot"];
+    const idx = order.indexOf(head);
+    btns.forEach((b, i) => b.classList.toggle("active", i === idx));
+  }
+
   /** 透明度滑条跟随（单选未锁定元素时由 SelectionInfo 驱动） */
   setOpacity(opacity: number) {
     const v = Math.round(opacity * 100);
@@ -626,6 +760,13 @@ export class SelectionBar {
   setCornerRadius(radius: number) {
     this.cornerInput.value = String(radius);
     this.cornerValue.textContent = String(radius);
+  }
+
+  /** 粗糙度滑条跟随（单选已手绘元素时） */
+  setRoughness(roughness: number) {
+    const v = Math.min(2, Math.max(0, roughness));
+    this.roughInput.value = String(v);
+    this.roughValue.textContent = v.toFixed(1);
   }
 
   private setChannel(channel: "stroke" | "fill") {
@@ -712,9 +853,8 @@ export class SelectionBar {
     return btn;
   }
 
-  // ---------- 排列面板 ----------
-
-  private makeArrangeBtn(
+  /** 通用图标小按钮（样式浮层内各选项按钮组共用） */
+  private makeIconBtn(
     icon: IconName,
     title: string,
     onClick: () => void,
@@ -725,24 +865,5 @@ export class SelectionBar {
     btn.innerHTML = iconHTML(icon, 14);
     btn.addEventListener("click", onClick);
     return btn;
-  }
-
-  /** 排列面板分组：小标题 + 图标按钮网格 */
-  private makeArrangeSection(
-    label: string,
-    items: [IconName, string, () => void][],
-  ): HTMLElement {
-    const section = document.createElement("div");
-    section.className = "arrange-section";
-    const title = document.createElement("span");
-    title.className = "panel-label";
-    title.textContent = label;
-    const grid = document.createElement("div");
-    grid.className = "arrange-grid";
-    for (const [icon, tip, fn] of items) {
-      grid.appendChild(this.makeArrangeBtn(icon, tip, fn));
-    }
-    section.append(title, grid);
-    return section;
   }
 }

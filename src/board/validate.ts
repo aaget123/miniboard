@@ -1,7 +1,7 @@
 // AI 工具生成器输出校验：返回值必须满足 ElementData 契约，
 // 非法数据在冒烟测试阶段拦截（拖拽管线的高频调用不做此校验）。
 
-import type { ElementData } from "../types";
+import type { ElementData, FontWeight } from "../types";
 
 /** AI 自定义工具可生成的元素类型（图片需 url 数据源，交互类不走生成器，均不支持） */
 const GENERATABLE_TYPES = new Set([
@@ -136,6 +136,38 @@ export function validateElementData(
         return { ok: false, error: "fontSize 必须是大于 0 的数字" };
       }
       data.fontSize = obj.fontSize as number;
+    }
+    // 文本排版扩展：对齐/字体/粗细（枚举与类型校验）
+    if (
+      obj.textAlign !== undefined &&
+      obj.textAlign !== "left" &&
+      obj.textAlign !== "center" &&
+      obj.textAlign !== "right"
+    ) {
+      return { ok: false, error: "textAlign 必须是 left/center/right" };
+    }
+    if (obj.textAlign !== undefined) {
+      data.textAlign = obj.textAlign as "left" | "center" | "right";
+    }
+    if (obj.fontFamily !== undefined && typeof obj.fontFamily !== "string") {
+      return { ok: false, error: "fontFamily 必须是字符串（字体族）" };
+    }
+    if (obj.fontFamily !== undefined) data.fontFamily = obj.fontFamily as string;
+    // 字重：100-900 数字档位（字重滑条/快捷键），兼容旧数据 "normal"/"bold" 字符串
+    if (obj.fontWeight !== undefined) {
+      const fw = obj.fontWeight;
+      const numericOk =
+        typeof fw === "number" && fw >= 100 && fw <= 900 && fw % 100 === 0;
+      if (!numericOk && fw !== "normal" && fw !== "bold") {
+        return {
+          ok: false,
+          error: "fontWeight 必须是 100-900（100 的倍数）或旧格式 normal/bold",
+        };
+      }
+      // 旧格式归一化为数字档位（normal→400，bold→700）
+      data.fontWeight = (
+        typeof fw === "number" ? fw : fw === "bold" ? 700 : 400
+      ) as FontWeight;
     }
   }
   return { ok: true, data };

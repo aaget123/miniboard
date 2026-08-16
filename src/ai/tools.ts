@@ -23,6 +23,7 @@ const TYPE_LABELS: Record<string, string> = {
   freehand: "手绘笔迹",
   text: "文字",
   image: "图片",
+  frame: "框架",
 };
 
 /** rough 手绘元素的原几何类型中文映射 */

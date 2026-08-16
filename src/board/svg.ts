@@ -95,11 +95,11 @@ function elementToSvg(e: ElementData): string {
     case "ellipse": {
       const w = e.width ?? 0;
       const h = e.height ?? 0;
-      const shape =
+      return `<g transform="${wrapTransform(e)}">${
         e.type === "rect"
           ? `<rect width="${w}" height="${h}" ${paintAttrs(e)}/>`
-          : `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${w / 2}" ry="${h / 2}" ${paintAttrs(e)}/>`;
-      return `<g transform="${wrapTransform(e)}">${shape}</g>`;
+          : `<ellipse cx="${w / 2}" cy="${h / 2}" rx="${w / 2}" ry="${h / 2}" ${paintAttrs(e)}/>`
+      }</g>`;
     }
     case "line":
     case "arrow": {
@@ -117,6 +117,12 @@ function elementToSvg(e: ElementData): string {
     }
     case "path":
       return `<g transform="${wrapTransform(e)}"><path d="${e.path ?? ""}" ${paintAttrs(e)}/></g>`;
+    case "frame": {
+      // 框架：虚线矩形 + 淡填充（与画布渲染风格一致）
+      const w = e.width ?? 0;
+      const h = e.height ?? 0;
+      return `<g transform="${wrapTransform(e)}"><rect width="${w}" height="${h}" ${paintAttrs(e)} stroke-dasharray="8 5"/></g>`;
+    }
     case "freehand": {
       // 笔迹渲染通道是 fill（轮廓），颜色走 stroke 字段
       const fill = e.stroke ? ` fill="${e.stroke}"` : "";

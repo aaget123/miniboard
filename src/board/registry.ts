@@ -131,6 +131,20 @@ const builtinGenerators: Record<
         : undefined,
     };
   },
+  frame(c) {
+    const { x0, y0, x1, y1, style } = c;
+    return {
+      type: "frame",
+      x: Math.min(x0, x1),
+      y: Math.min(y0, y1),
+      width: Math.abs(x1 - x0),
+      height: Math.abs(y1 - y0),
+      stroke: style.stroke,
+      strokeWidth: style.strokeWidth,
+      // 框架淡填充固定 10% 透明度（区别于普通图形的 15%，突出容器感）
+      fill: hexToRgba(style.fillColor || style.stroke, 0.1),
+    };
+  },
   line(c) {
     const { x0, y0, x1, y1, style } = c;
     return {
@@ -181,6 +195,7 @@ const BUILTIN: ToolDef[] = [
   { id: "arrow", name: "箭头", icon: "arrow", title: "箭头 (A)", shortcut: "a", kind: "drag", source: "builtin" },
   { id: "rect", name: "矩形", icon: "rect", title: "矩形 (R)", shortcut: "r", kind: "drag", group: "shape", source: "builtin" },
   { id: "ellipse", name: "椭圆", icon: "ellipse", title: "椭圆 (O)", shortcut: "o", kind: "drag", group: "shape", source: "builtin" },
+  { id: "frame", name: "框架", icon: "frame", title: "框架 (F)", shortcut: "f", kind: "drag", group: "shape", source: "builtin" },
   { id: "text", name: "文本", icon: "text", title: "文本 (T)", shortcut: "t", kind: "interaction", source: "builtin" },
 ];
 

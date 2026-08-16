@@ -14,7 +14,8 @@ import "@leafer-in/arrow";
 // 注册文本内联编辑器（新建/双击文字后就地 WYSIWYG 编辑），须在创建 App 前导入
 import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
-import type { BoardStyle, ElementData } from "../types";
+import type { IArrowStyle } from "@leafer-ui/interface";
+import type { ArrowHead, BoardStyle, ElementData, FontWeight } from "../types";
 import type { CoordBox } from "./coords";
 import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
@@ -27,17 +28,11 @@ import {
   flipElements,
   reorderElements,
 } from "./arrange";
-import type {
-  AlignMode,
-  ArrangeAction,
-  DistributeMode,
-  FlipAxis,
-  ReorderMode,
-} from "./arrange";
-import { unionBounds } from "./bounds";
+import type { ArrangeAction, ReorderMode } from "./arrange";
+import { elementBounds, unionBounds } from "./bounds";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
-import { isSketchable, sketchifyData } from "./rough";
+import { isSketchable, redrawRough, sketchifyData } from "./rough";
 import { penSizeOf, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
 import { elementsToSVG } from "./svg";
@@ -60,6 +55,61 @@ const POINT_HANDLE_SIZE = 10;
 const SNAP_BIND_PX = 10;
 // 图片裁剪框的最小尺寸（元素局部坐标）
 const CROP_MIN = 8;
+
+// ================= 箭头端点 =================
+
+/**
+ * 箭头端点：元素数据 → leafer 渲染值。
+ * "none"/undefined → 无端点；"dot" → 小号实心圆（leafer 无独立圆点形状）。
+ */
+export function toLeaferArrow(
+  head: ArrowHead | undefined,
+): IArrowStyle | undefined {
+  if (!head || head === "none") {
+    return undefined;
+  }
+  if (head === "dot") {
+    return { type: "circle", scale: 0.5 };
+  }
+  return head;
+}
+
+/**
+ * 箭头端点：leafer 渲染值 → 元素数据（反向映射）。
+ * 字符串形状直接透传（arrow/triangle/circle）；小号实心圆对象还原为 "dot"；
+ * 其他形状/非法值按无端点处理（数据契约只允许 ArrowHead 五档）。
+ */
+export function arrowHeadOf(v: unknown): ArrowHead | undefined {
+  if (typeof v === "string" && v !== "none") {
+    if (v === "arrow" || v === "triangle" || v === "circle") {
+      return v;
+    }
+    return undefined;
+  }
+  if (v && typeof v === "object") {
+    const t = (v as { type?: unknown }).type;
+    if (t === "circle") {
+      return "dot"; // 小号实心圆（scale 0.5）= 圆点
+    }
+  }
+  return undefined;
+}
+
+/** line/arrow 是否带任意端点（两端都无端点时序列化为 line） */
+function hasArrowHead(el: Line): boolean {
+  return (
+    (el.startArrow !== undefined && el.startArrow !== "none") ||
+    (el.endArrow !== undefined && el.endArrow !== "none")
+  );
+}
+
+/** frame 框架元素标记：渲染为 Rect 实例（虚线描边 + 淡填充） */
+const FRAME_FLAG = "__isFrame";
+
+/** 元素是否为 frame 框架（类型感知/序列化/框内跟随共用） */
+function isFrameEl(el: UI): boolean {
+  return (el as unknown as Record<string, unknown>)[FRAME_FLAG] === true;
+}
 
 // ================= 几何工具 =================
 
@@ -308,7 +358,7 @@ function typeOf(el: UI): ElementData["type"] | null {
     return "image";
   }
   if (el instanceof Rect) {
-    return "rect";
+    return isFrameEl(el) ? "frame" : "rect";
   }
   if (el instanceof Ellipse) {
     return "ellipse";
@@ -375,7 +425,7 @@ export type SelectionInfo = {
   hasImage: boolean;
   anyLocked: boolean;
   allLocked: boolean;
-  /** 选中元素是否含组成员（取消成组按钮显隐） */
+  /** 选中元素是否含组成员（组感知拖动/删除联动） */
   hasGroup: boolean;
   /** 单选未锁定文字时的字号（字号控件跟随） */
   fontSize?: number;
@@ -383,6 +433,20 @@ export type SelectionInfo = {
   opacity?: number;
   /** 单选未锁定 rect 的圆角半径（圆角滑条跟随） */
   cornerRadius?: number;
+  /** 单选未锁定文字的对齐（对齐按钮跟随） */
+  textAlign?: "left" | "center" | "right";
+  /** 单选未锁定文字的字体（字体下拉跟随） */
+  fontFamily?: string;
+  /** 单选未锁定文字的字重（字重滑条跟随，100-900） */
+  fontWeight?: FontWeight;
+  /** 单选未锁定 line/arrow 的起点端点样式（端点按钮组跟随） */
+  startArrow?: ArrowHead;
+  /** 单选未锁定 line/arrow 的终点端点样式（端点按钮组跟随） */
+  endArrow?: ArrowHead;
+  /** 是否含已手绘元素（粗糙度滑条显隐） */
+  hasRough: boolean;
+  /** 单选未锁定已手绘元素的粗糙度（滑条跟随；默认 1） */
+  roughness?: number;
 };
 
 export class Board {
@@ -517,6 +581,10 @@ export class Board {
           }
         }
       }
+      // frame 框架移动：框内元素（完全包含于框架 bbox）跟随位移
+      if (moved && isFrameEl(moved) && (ev.moveX || ev.moveY)) {
+        this.moveFrameContents(moved, ev.moveX, ev.moveY);
+      }
       if (
         this.grid.snap &&
         moved &&
@@ -537,78 +605,134 @@ export class Board {
     this.editor.on(EditorRotateEvent.ROTATE, () => this.scheduleHistory());
     // 文本缩放语义：记录缩放前的原始字号/宽度（横向拉伸换行、纵向/对角改字号）
     this.editor.on(EditorScaleEvent.BEFORE_SCALE, () => this.onBeforeScale());
-    this.editor.on(EditorScaleEvent.SCALE, (e) => this.onScaleText(e));
-    // 选中变化（选中/多选/取消）：左侧浮动工具栏显隐依赖此事件
-    this.editor.on(EditorEvent.AFTER_SELECT, () => {
-      const list = this.selectedList;
-      const ids: string[] = [];
-      const types: (ElementData["type"] | null)[] = [];
-      let hasText = false;
-      let hasFreehand = false;
-      let hasSketchable = false;
-      let hasImage = false;
-      let anyLocked = false;
-      let hasGroup = false;
-      const texts: Text[] = [];
-      for (const el of list) {
-        const id = this.aiIdOf(el);
-        if (id) {
-          ids.push(id);
-        }
-        if ((el as unknown as { __groupId?: string }).__groupId) {
-          hasGroup = true;
-        }
-        const t = typeOf(el);
-        types.push(t);
-        if (t === "text") {
-          hasText = true;
-          if (!el.locked) {
-            texts.push(el as Text);
-          }
-        } else if (t === "freehand") {
-          hasFreehand = true;
-        } else if (t === "image") {
-          hasImage = true;
-        }
-        if (isSketchableEl(el)) {
-          hasSketchable = true;
-        }
-        if (el.locked) {
-          anyLocked = true;
-        }
-      }
-      // 字号信息：供左侧栏字号控件显隐/跟随（仅单选未锁定文字时给出）
-      const fontSize =
-        texts.length === 1 && list.length === 1
-          ? (texts[0].fontSize ?? TEXT_FONT_SIZE)
-          : undefined;
-      // 单选未锁定元素：不透明度/圆角供样式浮层滑条跟随（多选时值混杂不给）
-      let opacity: number | undefined;
-      let cornerRadius: number | undefined;
-      if (list.length === 1 && !list[0].locked) {
-        const single = list[0];
-        opacity = numOf(single.opacity);
-        if (typeOf(single) === "rect") {
-          cornerRadius = numOf((single as Rect).cornerRadius);
-        }
-      }
-      this.opts.onSelectionChange?.({
-        ids,
-        types,
-        hasText,
-        hasFreehand,
-        hasSketchable,
-        hasImage,
-        anyLocked,
-        allLocked: list.length > 0 && anyLocked,
-        hasGroup,
-        fontSize,
-        opacity,
-        cornerRadius,
-      });
+    this.editor.on(EditorScaleEvent.SCALE, (e) => {
+      this.onScaleText(e);
     });
+    // 选中变化（选中/多选/取消）：左侧浮动工具栏显隐依赖此事件
+    this.editor.on(EditorEvent.AFTER_SELECT, () => this.emitSelectionInfo());
     // 文本内联编辑关闭：空文本即删；内容变化才入历史（对齐 fabric object:modified 时机）
     this.editor.on(InnerEditorEvent.CLOSE, (e) => this.onInnerEditorClose(e));
+  }
+
+  /**
+   * 汇总选中信息并通知左侧浮动栏（选中变化/内嵌文本编辑结束等时机触发）。
+   * 单值字段（字号/对齐/端点等）仅在单选未锁定时给出，保证控件跟随不混乱。
+   */
+  private emitSelectionInfo() {
+    const list = this.selectedList;
+    const ids: string[] = [];
+    const types: (ElementData["type"] | null)[] = [];
+    let hasText = false;
+    let hasFreehand = false;
+    let hasSketchable = false;
+    let hasImage = false;
+    let anyLocked = false;
+    let hasGroup = false;
+    let hasRough = false;
+    const texts: Text[] = [];
+    for (const el of list) {
+      const id = this.aiIdOf(el);
+      if (id) {
+        ids.push(id);
+      }
+      if ((el as unknown as { __groupId?: string }).__groupId) {
+        hasGroup = true;
+      }
+      const t = typeOf(el);
+      types.push(t);
+      if (t === "text") {
+        hasText = true;
+        if (!el.locked) {
+          texts.push(el as Text);
+        }
+      } else if (t === "freehand") {
+        hasFreehand = true;
+      } else if (t === "image") {
+        hasImage = true;
+      }
+      if (isSketchableEl(el)) {
+        hasSketchable = true;
+      }
+      if ((el as unknown as { __rough?: unknown }).__rough) {
+        hasRough = true;
+      }
+      if (el.locked) {
+        anyLocked = true;
+      }
+    }
+    // 字号信息：供左侧栏字号控件显隐/跟随（仅单选未锁定文字时给出）
+    const fontSize =
+      texts.length === 1 && list.length === 1
+        ? (texts[0].fontSize ?? TEXT_FONT_SIZE)
+        : undefined;
+    // 文本排版信息：仅单选未锁定文字时给出（供对齐/字重/字体控件跟随）
+    const textAlign =
+      texts.length === 1 && list.length === 1
+        ? ((texts[0].textAlign as "left" | "center" | "right" | undefined) ??
+          undefined)
+        : undefined;
+    const fontFamily =
+      texts.length === 1 && list.length === 1
+        ? (typeof texts[0].fontFamily === "string"
+            ? texts[0].fontFamily
+            : undefined)
+        : undefined;
+    // 字重数值化：leafer 支持 100-900 数字（旧数据/旧代码可能存 "normal"/"bold" 字符串）
+    const fontWeight =
+      texts.length === 1 && list.length === 1
+        ? (typeof texts[0].fontWeight === "number"
+            ? (texts[0].fontWeight as FontWeight)
+            : texts[0].fontWeight === "bold"
+              ? 700
+              : undefined)
+        : undefined;
+    // 端点信息：仅单选未锁定 line/arrow 时给出（端点按钮组高亮跟随）
+    let startArrow: ArrowHead | undefined;
+    let endArrow: ArrowHead | undefined;
+    if (list.length === 1 && !list[0].locked) {
+      const single = list[0];
+      if (single instanceof Line) {
+        startArrow = arrowHeadOf(single.startArrow);
+        endArrow = arrowHeadOf(single.endArrow);
+      }
+    }
+    // 单选未锁定元素：不透明度/圆角供样式浮层滑条跟随（多选时值混杂不给）
+    let opacity: number | undefined;
+    let cornerRadius: number | undefined;
+    let roughness: number | undefined;
+    if (list.length === 1 && !list[0].locked) {
+      const single = list[0];
+      opacity = numOf(single.opacity);
+      if (typeOf(single) === "rect") {
+        cornerRadius = numOf((single as Rect).cornerRadius);
+      }
+      const meta = (single as unknown as { __rough?: { roughness?: number } })
+        .__rough;
+      if (meta) {
+        roughness = meta.roughness ?? 1;
+      }
+    }
+    this.opts.onSelectionChange?.({
+      ids,
+      types,
+      hasText,
+      hasFreehand,
+      hasSketchable,
+      hasImage,
+      anyLocked,
+      allLocked: list.length > 0 && anyLocked,
+      hasGroup,
+      fontSize,
+      textAlign,
+      fontFamily,
+      fontWeight,
+      startArrow,
+      endArrow,
+      hasRough,
+      roughness,
+      opacity,
+      cornerRadius,
+    });
   }
 
   // ================= 工具 =================
@@ -796,8 +920,10 @@ export class Board {
       }
       if (isHorizontal && sx > TH) {
         // 横向拉伸：开启按宽度换行，字号不变
+        const oldW = el.width ?? 0;
         el.textWrap = "break";
-        el.width = Math.max(1, orig.width * sx);
+        el.width = Math.max(1, oldW * sx);
+        this.fixAlignAfterWrap(el, oldW);
       } else if (isVertical && sy > TH) {
         // 纵向拉伸：字号变大，换行宽度不变
         el.fontSize = Math.max(4, Math.round(orig.fontSize * sy));
@@ -805,8 +931,10 @@ export class Board {
         // 对角拉伸：字号按缩放面积开方等比放大
         el.fontSize = Math.max(4, Math.round(orig.fontSize * Math.sqrt(sx * sy)));
       } else if (sx > TH) {
+        const oldW = el.width ?? 0;
         el.textWrap = "break";
-        el.width = Math.max(1, orig.width * sx);
+        el.width = Math.max(1, oldW * sx);
+        this.fixAlignAfterWrap(el, oldW);
       } else if (sy > TH) {
         el.fontSize = Math.max(4, Math.round(orig.fontSize * sy));
       }
@@ -814,6 +942,20 @@ export class Board {
       el.scaleY = 1;
     }
     this.scheduleHistory();
+  }
+
+  /**
+   * 横向拉伸换行后固定宽度：居中/右对齐的自动宽度文本（autoSizeAlign 基准失效）
+   * 视觉位置会向右跳变，补正 x 让文本保持原位（居中左移半宽差、右对齐左移整宽差）。
+   */
+  private fixAlignAfterWrap(el: Text, oldW: number) {
+    const align = el.textAlign;
+    const newW = el.width ?? oldW;
+    if (align === "center") {
+      el.x = (el.x ?? 0) - (newW - oldW) / 2;
+    } else if (align === "right") {
+      el.x = (el.x ?? 0) - (newW - oldW);
+    }
   }
 
   // ================= 绘制交互 =================
@@ -1796,8 +1938,29 @@ export class Board {
       if (partial.fontSize !== undefined && el instanceof Text) {
         el.fontSize = partial.fontSize;
       }
-      // P3 样式扩展：线型/透明度/圆角（图片跳过圆角——内部填充为图像数据）
-      if (partial.strokeDash !== undefined) {
+      // 文本排版扩展：对齐/字体/粗细（仅文字）
+      if (partial.textAlign !== undefined && el instanceof Text) {
+        el.textAlign = partial.textAlign;
+        // 自动宽度下居中/右对齐需 autoSizeAlign 才以 x 为基准生效（leafer 布局规则）；
+        // 已固定宽度（拉伸换行）时 textAlign 在框内生效，autoSizeAlign 无副作用
+        el.autoSizeAlign = partial.textAlign === "left" ? undefined : true;
+      }
+      if (partial.fontFamily !== undefined && el instanceof Text) {
+        el.fontFamily = partial.fontFamily;
+      }
+      if (partial.fontWeight !== undefined && el instanceof Text) {
+        el.fontWeight = partial.fontWeight;
+      }
+      // 箭头端点样式（仅 line/arrow，两端可独立设置）
+      if (partial.startArrow !== undefined && el instanceof Line) {
+        el.startArrow = toLeaferArrow(partial.startArrow);
+      }
+      if (partial.endArrow !== undefined && el instanceof Line) {
+        el.endArrow = toLeaferArrow(partial.endArrow);
+      }
+      // P3 样式扩展：线型/透明度/圆角（图片跳过圆角——内部填充为图像数据）；
+      // 线型用 in 判断：实线的 strokeDash 恰为 undefined，!== undefined 会漏掉“改回实线”
+      if ("strokeDash" in partial) {
         (el as unknown as { dashPattern?: number[] }).dashPattern =
           partial.strokeDash;
       }
@@ -1821,6 +1984,32 @@ export class Board {
       }
     }
     // 防抖合并：连续调色/调粗细合并为一步撤销
+    this.scheduleHistory();
+    this.opts.onMutated();
+    return true;
+  }
+
+  /**
+   * 切换选中文字字重（Ctrl+B）：全部 ≥700 则改常规 400，否则加粗 700。
+   * 整元素切换（TextEditor 纯文本机制不支持局部粗体）；返回是否有文字被切换。
+   */
+  toggleBold(): boolean {
+    const texts = this.selectedList.filter(
+      (el): el is Text => el instanceof Text && !el.locked,
+    );
+    if (!texts.length) {
+      return false;
+    }
+    const weightOf = (t: Text) =>
+      typeof t.fontWeight === "number"
+        ? t.fontWeight
+        : t.fontWeight === "bold"
+          ? 700
+          : 400;
+    const allBold = texts.every((t) => weightOf(t) >= 700);
+    for (const t of texts) {
+      t.fontWeight = allBold ? 400 : 700;
+    }
     this.scheduleHistory();
     this.opts.onMutated();
     return true;
@@ -1857,7 +2046,18 @@ export class Board {
         ...d,
         type: "path",
         path: sketched.path,
-        rough: { seed: sketched.seed, original: d.type },
+        rough: {
+          seed: sketched.seed,
+          original: d.type,
+          roughness: 1,
+          // 改粗糙度重绘需要原始几何：多边形记原始顶点 path，
+          // rect/ellipse 记原始宽高、line/arrow 记原始端点（手绘化后原数据已丢失，
+          // 且不能用含抖动的渲染尺寸，否则每次重绘逐次放大）
+          originalPath: d.type === "path" ? d.path : undefined,
+          originalWidth: sketched.originalWidth,
+          originalHeight: sketched.originalHeight,
+          originalPoints: sketched.originalPoints,
+        },
       });
       if (!replaced) {
         continue;
@@ -1873,6 +2073,77 @@ export class Board {
       this.opts.onMutated();
     }
     return changed > 0;
+  }
+
+  /**
+   * 粗糙度：调整选中已手绘元素的抖动强度（0~2，同一 seed 重绘，抖动形态不变仅幅度变化）。
+   * 不可重绘（元数据缺失/几何丢失）的元素跳过；返回是否发生了调整。
+   */
+  setRoughness(value: number): boolean {
+    const list = this.selectedList.filter((el) => !el.locked);
+    let changed = 0;
+    for (const el of list) {
+      const t = el as unknown as {
+        __rough?: {
+          seed: number;
+          original?: string;
+          originalPath?: string;
+          roughness?: number;
+        };
+      };
+      const meta = t.__rough;
+      if (!meta) {
+        continue;
+      }
+      const d = this.elementToData(el);
+      if (!d) {
+        continue;
+      }
+      const redrawn = redrawRough(d, meta, value);
+      if (!redrawn) {
+        continue;
+      }
+      (el as Path).path = redrawn.path;
+      t.__rough = { ...meta, roughness: value };
+      changed++;
+    }
+    if (changed) {
+      this.scheduleHistory();
+      this.opts.onMutated();
+    }
+    return changed > 0;
+  }
+
+  /**
+   * frame 框架移动：框内元素（世界 bbox 完全包含于框架 bbox）跟随位移。
+   * 与组联动的语义差异：仅框架驱动框内（反向不成立，框内元素移动不带动框架）；
+   * 其他框架与锁定元素不跟随（嵌套框架由各层自行驱动其框内元素）。
+   */
+  private moveFrameContents(frame: UI, dx: number, dy: number) {
+    const fd = this.elementToData(frame);
+    if (!fd) {
+      return;
+    }
+    const fb = elementBounds(fd);
+    for (const el of this.app.tree.children as UI[]) {
+      if (el === frame || el.locked || isFrameEl(el)) {
+        continue;
+      }
+      const ed = this.elementToData(el);
+      if (!ed) {
+        continue;
+      }
+      const eb = elementBounds(ed);
+      if (
+        eb.minX >= fb.minX &&
+        eb.minY >= fb.minY &&
+        eb.maxX <= fb.maxX &&
+        eb.maxY <= fb.maxY
+      ) {
+        el.moveWorld(dx, dy);
+        this.normalizeContractEl(el);
+      }
+    }
   }
 
   /**
@@ -2094,16 +2365,6 @@ export class Board {
     this.reorderSelection("back");
   }
 
-  /** 上移一层：与相邻非选中元素交换（块整体移动，保持组内相对顺序） */
-  bringForward() {
-    this.reorderSelection("forward");
-  }
-
-  /** 下移一层：与相邻非选中元素交换 */
-  sendBackward() {
-    this.reorderSelection("backward");
-  }
-
   /**
    * 层序重排通用管线：序列化 → 锁定过滤 + 组归一化 → reorderElements →
    * 全量重建 → 恢复选中 → 前后快照合并。顺序无变化时（已在目标层）不重建不写历史。
@@ -2125,66 +2386,7 @@ export class Board {
     this.pushSnapshot(next);
   }
 
-  // ================= 排列（对齐/分布/翻转，SelectionBar 与 AI 工具共用） =================
-
-  /** 对齐选中：以选区 AABB 为基准（left/centerX/right/top/centerY/bottom），返回是否执行 */
-  alignSelection(mode: AlignMode): boolean {
-    return this.applyArrange((targets) => alignElements(targets, mode), 2);
-  }
-
-  /** 分布选中：按中心排序首尾保持、中间均分（horizontal/vertical），少于 3 个不执行 */
-  distributeSelection(mode: DistributeMode): boolean {
-    return this.applyArrange((targets) => distributeElements(targets, mode), 3);
-  }
-
-  /** 翻转选中：绕选区 AABB 中心镜像（h 水平 / v 垂直），单元素也可执行 */
-  flipSelection(axis: FlipAxis): boolean {
-    return this.applyArrange((targets) => {
-      const b = unionBounds(targets);
-      return flipElements(
-        targets,
-        axis,
-        (b.minX + b.maxX) / 2,
-        (b.minY + b.maxY) / 2,
-      );
-    }, 1);
-  }
-
-  /**
-   * 批量几何变换通用管线：序列化 → 锁定过滤 + 组归一化 → 纯函数变换 →
-   * 全量重建 → 恢复选中（含组）→ 前后快照合并为一步撤销。
-   * 返回是否实际执行（无可用选中或目标数量不足返回 false）。
-   */
-  private applyArrange(
-    fn: (targets: ElementData[]) => ElementData[],
-    minCount: number,
-  ): boolean {
-    const before = this.serialize();
-    const selIds = this.selectedUnlockedIds();
-    if (!selIds.length) {
-      return false;
-    }
-    const ids = expandGroupMembers(before, selIds);
-    const targets = before.filter((d) => ids.has(d.id ?? ""));
-    if (targets.length < minCount) {
-      return false;
-    }
-    const changed = fn(targets);
-    const byId = new Map(changed.map((d) => [d.id, d]));
-    const next = before.map((d) => byId.get(d.id) ?? d);
-    this.loadElements(next);
-    this.restoreSelectionByIds([...ids]);
-    this.pushSnapshot(before);
-    this.pushSnapshot(next);
-    return true;
-  }
-
-  /**
-   * AI 编排入口：按 id 列表执行排列操作（对齐/分布/翻转/层序），与 UI 路径共用
-   * arrange.ts 纯函数。锁定元素跳过；组内任一成员命中则整组参与；目标不足或
-   * 已在目标层（无实际变化）时不重建不写历史。不做选中恢复（AI 操作与当前选区无关）。
-   * 返回 { done: 实际参与（含组展开）的元素数, skipped: 跳过的锁定元素数 }。
-   */
+  // ================= AI 排列（对齐/分布/翻转/层序，供 arrange_elements 工具） =================
   arrangeByIds(
     ids: string[],
     action: ArrangeAction,
@@ -2309,58 +2511,8 @@ export class Board {
     return false;
   }
 
-  // ================= 成组 / 取消成组 =================
-
-  /**
-   * 成组：给选中元素分配同一 groupId（选中已含组成员时并入其组）。
-   * 组内元素对齐/分布/翻转/层序/删除按整组参与；锁定元素不参与成组。
-   */
-  groupSelected(): boolean {
-    const list = this.selectedList.filter(
-      (el) => !el.locked && !this.isEditorInternal(el),
-    );
-    if (list.length < 2) {
-      return false;
-    }
-    const existing = list
-      .map((el) => (el as unknown as { __groupId?: string }).__groupId)
-      .find(Boolean);
-    const gid = existing ?? this.newGroupId();
-    for (const el of list) {
-      (el as unknown as { __groupId?: string }).__groupId = gid;
-    }
-    this.commitHistory();
-    return true;
-  }
-
-  /** 取消成组：解散选中元素所属的组（组内任一成员被选中即整组解散） */
-  ungroupSelected(): boolean {
-    const list = this.selectedList.filter(
-      (el) => !el.locked && !this.isEditorInternal(el),
-    );
-    const gids = new Set(
-      list
-        .map((el) => (el as unknown as { __groupId?: string }).__groupId)
-        .filter((g): g is string => !!g),
-    );
-    if (!gids.size) {
-      return false;
-    }
-    for (const el of this.app.tree.children as UI[]) {
-      const g = (el as unknown as { __groupId?: string }).__groupId;
-      if (g && gids.has(g)) {
-        (el as unknown as { __groupId?: string }).__groupId = undefined;
-      }
-    }
-    this.commitHistory();
-    return true;
-  }
-
-  /** 生成会话内唯一的组 id（随机后缀避免跨文件导入冲突） */
-  private newGroupId(): string {
-    return `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  }
-
+  // ================= 锁定 / 解锁 =================
+  
   lock() {
     this.editor.lock();
     this.commitHistory();
@@ -2435,6 +2587,12 @@ export class Board {
             height: draft.height ?? 0,
           });
     this.applySelection(hits);
+    // 框选/套索本质是选择操作：松手后自动切回选择工具，
+    // 选中元素可直接拖动移动、左侧选中栏随即出现（与 Excalidraw 行为一致）
+    if (this.tool === "marquee" || this.tool === "lasso") {
+      this.setTool("select");
+      this.opts.onToolChange?.(this.tool);
+    }
   }
 
   /** 矩形框选：命中与选框相交的元素（世界包围盒，与 app 坐标同一体系） */
@@ -2558,6 +2716,7 @@ export class Board {
         return targets.includes(el) || (g !== undefined && gids.has(g));
       });
     }
+    // 删除：从画布直接移除（无回收站），组内任一成员被删时整组删除
     targets.forEach((el) => el.remove());
     this.editor.cancel();
     // 删除可能命中点编辑/裁剪中的元素：一并退出对应模式
@@ -2639,6 +2798,22 @@ export class Board {
     if (patch.fontSize !== undefined && el instanceof Text) {
       el.fontSize = patch.fontSize;
     }
+    if (patch.textAlign !== undefined && el instanceof Text) {
+      el.textAlign = patch.textAlign;
+      el.autoSizeAlign = patch.textAlign === "left" ? undefined : true;
+    }
+    if (patch.fontFamily !== undefined && el instanceof Text) {
+      el.fontFamily = patch.fontFamily;
+    }
+    if (patch.fontWeight !== undefined && el instanceof Text) {
+      el.fontWeight = patch.fontWeight;
+    }
+    if (patch.startArrow !== undefined && el instanceof Line) {
+      el.startArrow = toLeaferArrow(patch.startArrow);
+    }
+    if (patch.endArrow !== undefined && el instanceof Line) {
+      el.endArrow = toLeaferArrow(patch.endArrow);
+    }
     if (patch.points !== undefined && el instanceof Line) {
       // AI 传入画布绝对坐标（describeCanvas 输出基准），换算回元素局部坐标
       el.points = (patch.points as { x: number; y: number }[]).map((p) =>
@@ -2648,7 +2823,7 @@ export class Board {
     if (patch.path !== undefined && el instanceof Path) {
       el.path = patch.path;
     }
-    if (patch.strokeDash !== undefined) {
+    if ("strokeDash" in patch) {
       (el as unknown as { dashPattern?: number[] }).dashPattern =
         patch.strokeDash;
     }
@@ -2665,7 +2840,12 @@ export class Board {
   clearAll() {
     this.exitPointEdit();
     this.cancelCrop();
-    this.app.tree.clear();
+    const els = (this.app.tree.children as UI[]).filter(
+      (el) => !this.isEditorInternal(el),
+    );
+    if (els.length) {
+      this.app.tree.clear();
+    }
     this.editor.cancel();
     this.commitHistory();
   }
@@ -2992,6 +3172,17 @@ export class Board {
         url: (el as unknown as { url?: unknown }).url as string | undefined,
       };
     }
+    if (el instanceof Rect && isFrameEl(el)) {
+      return {
+        ...base,
+        type: "frame",
+        width: el.width ?? 0,
+        height: el.height ?? 0,
+        fill: colorOf(el.fill),
+        // 虚线为 frame 固定风格，不序列化（恢复时兑底）
+        strokeDash: undefined,
+      };
+    }
     if (el instanceof Rect) {
       return {
         ...base,
@@ -3015,22 +3206,28 @@ export class Board {
       const t = el as unknown as { __bindStart?: string; __bindEnd?: string };
       return {
         ...base,
-        // leafer 2.x 的 endArrow 默认值是字符串 "none"（truthy），需排除
-        type: (el.endArrow && el.endArrow !== "none"
-          ? "arrow"
-          : "line") as "arrow" | "line",
+        // leafer 2.x 的 endArrow 默认值是字符串 "none"（truthy），需排除；
+        // 两端都无端点时按 line 序列化，任一端有端点则为 arrow
+        type: (hasArrowHead(el) ? "arrow" : "line") as "arrow" | "line",
         width: el.width ?? 0,
         height: el.height ?? 0,
         points: el.points as { x: number; y: number }[] | undefined,
         bindStart: t.__bindStart,
         bindEnd: t.__bindEnd,
+        startArrow: arrowHeadOf(el.startArrow),
+        endArrow: arrowHeadOf(el.endArrow),
       };
     }
     if (el instanceof Path) {
       const t = el as unknown as {
         __freehandPoints?: number[][];
         __penSize?: number;
-        __rough?: { seed: number; original?: string };
+        __rough?: {
+          seed: number;
+          original?: string;
+          roughness?: number;
+          originalPath?: string;
+        };
       };
       // 元素位移（leafer 移动 Path 时改 x/y、path 不变），导出时并入 path
       const dx = el.x ?? 0;
@@ -3072,6 +3269,16 @@ export class Board {
         text: el.text == null ? undefined : String(el.text),
         fontSize: typeof el.fontSize === "number" ? el.fontSize : undefined,
         fill: colorOf(el.fill),
+        // 文本排版扩展：对齐/字重/字体随文件保存（autoSizeAlign 按对齐自动推导，不单独存）
+        textAlign: el.textAlign === "center" || el.textAlign === "right" ? el.textAlign : undefined,
+        fontFamily:
+          typeof el.fontFamily === "string" ? el.fontFamily : undefined,
+        fontWeight:
+          typeof el.fontWeight === "number"
+            ? (el.fontWeight as FontWeight)
+            : el.fontWeight === "bold"
+              ? 700
+              : undefined,
       };
     }
     return null;
@@ -3127,22 +3334,41 @@ export class Board {
     };
     const fill = d.fill === "none" ? undefined : d.fill;
     switch (d.type) {
-      case "rect":
+      case "rect": {
         return new Rect({
           ...common,
           width: d.width,
           height: d.height,
           fill,
         });
-      case "ellipse":
+      }
+      case "frame": {
+        // 框架：虚线矩形 + 淡填充（固定风格，恢复时虚线兑底）
+        const el = new Rect({
+          ...common,
+          width: d.width,
+          height: d.height,
+          fill,
+          dashPattern: d.strokeDash ?? [8, 5],
+        });
+        (el as unknown as Record<string, unknown>)[FRAME_FLAG] = true;
+        return el;
+      }
+      case "ellipse": {
         return new Ellipse({
           ...common,
           width: d.width,
           height: d.height,
           fill,
         });
+      }
       case "line": {
-        const el = new Line({ ...common, points: d.points });
+        const el = new Line({
+          ...common,
+          points: d.points,
+          startArrow: toLeaferArrow(d.startArrow),
+          endArrow: toLeaferArrow(d.endArrow),
+        });
         bindingsToEl(el, d);
         return el;
       }
@@ -3150,7 +3376,12 @@ export class Board {
         const el = new Line({
           ...common,
           points: d.points,
-          endArrow: "triangle",
+          // 终点默认三角箭头（兼容旧文件）；显式 "none" 时保持无端点
+          startArrow: toLeaferArrow(d.startArrow),
+          endArrow:
+            d.endArrow !== undefined
+              ? toLeaferArrow(d.endArrow)
+              : "triangle",
         });
         bindingsToEl(el, d);
         return el;
@@ -3189,6 +3420,14 @@ export class Board {
           text: d.text,
           fontSize: d.fontSize,
           fill: fill ?? d.stroke,
+          // 文本排版扩展：对齐/字重/字体恢复；自动宽度下居中/右对齐需 autoSizeAlign
+          textAlign: d.textAlign,
+          fontFamily: d.fontFamily,
+          fontWeight: d.fontWeight,
+          autoSizeAlign:
+            d.textAlign && d.textAlign !== "left" && !d.width
+              ? true
+              : undefined,
         });
       case "image":
         return new Image({

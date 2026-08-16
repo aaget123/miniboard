@@ -22,6 +22,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "selectAll", label: "全选", defaultKeys: ["ctrl+a"] },
   { id: "delete", label: "删除选中", defaultKeys: ["delete", "backspace"] },
   { id: "duplicate", label: "重复选中", defaultKeys: ["ctrl+d"] },
+  { id: "bold", label: "粗体", defaultKeys: ["ctrl+b"] },
   { id: "escape", label: "逐层退出", defaultKeys: ["escape"] },
   { id: "palette", label: "命令面板", defaultKeys: ["ctrl+k"] },
   { id: "aiPanel", label: "AI 助手面板", defaultKeys: ["k"] },

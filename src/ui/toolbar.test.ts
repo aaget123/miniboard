@@ -53,13 +53,13 @@ describe("computeToolbarNodes 分组顺序", () => {
       "[shape]",
       "text",
     ]);
-    // 选择组收纳 选择/框选/套索；形状组收纳 矩形/椭圆
+    // 选择组收纳 选择/框选/套索；形状组收纳 矩形/椭圆/框架
     expect(groupTools(nodes, "select")).toEqual([
       "select",
       "marquee",
       "lasso",
     ]);
-    expect(groupTools(nodes, "shape")).toEqual(["rect", "ellipse"]);
+    expect(groupTools(nodes, "shape")).toEqual(["rect", "ellipse", "frame"]);
   });
 
   it("拖动分组头后：组按钮按偏好顺序提前输出（形状移到最前）", () => {
@@ -209,7 +209,7 @@ describe("computeToolbarNodes 分组顺序", () => {
       "text",
     ]);
     expect(groupTools(nodes, "cg-abc")).toEqual(["pen"]);
-    expect(groupTools(nodes, "shape")).toEqual(["rect", "ellipse"]);
+    expect(groupTools(nodes, "shape")).toEqual(["rect", "ellipse", "frame"]);
   });
 
   it("自定义分组按钮在序列中：组名用自定义名称，组内收纳覆盖工具", () => {

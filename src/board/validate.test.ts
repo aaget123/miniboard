@@ -92,6 +92,44 @@ describe("validateElementData", () => {
       validateElementData({ type: "rect", x: 0, y: 0, width: 10, height: 10, strokeWidth: Number.NaN }).ok,
     ).toBe(false);
   });
+
+  it("text 元素校验文本排版扩展字段", () => {
+    const r = validateElementData({
+      type: "text",
+      x: 0,
+      y: 0,
+      text: "你好",
+      textAlign: "right",
+      fontFamily: "宋体",
+      fontWeight: 700,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data).toMatchObject({
+        textAlign: "right",
+        fontFamily: "宋体",
+        fontWeight: 700,
+      });
+    }
+    // 旧数据 normal/bold 字符串归一化为数字档位
+    const old = validateElementData({
+      type: "text",
+      x: 0,
+      y: 0,
+      text: "x",
+      fontWeight: "bold",
+    });
+    expect(old.ok).toBe(true);
+    if (old.ok) {
+      expect(old.data.fontWeight).toBe(700);
+    }
+    expect(
+      validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: 950 }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: "heavy" }).ok,
+    ).toBe(false);
+  });
 });
 
 describe("validateElementList", () => {

@@ -15,6 +15,16 @@ export type ToolType =
 // ================= 统一功能规则 =================
 // 功能区（绘制工具）统一注册：内置工具与 AI 生成工具共用同一结构。
 
+/**
+ * 箭头端点样式（line/arrow 两端可配；"dot" = 小号实心圆点）。
+ * leafer 渲染映射：none→无；arrow→arrow；triangle→triangle；circle→circle；
+ * dot→{ type: "circle", scale: 0.5 }（leafer 无独立圆点形状，用小号实心圆实现）。
+ */
+export type ArrowHead = "none" | "arrow" | "triangle" | "circle" | "dot";
+
+/** 文字字重档位（leafer IFontWeight 数值档位；常规 400 / 粗体 700） */
+export type FontWeight = 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+
 /** 当前绘制样式（描边色/粗细/填充开关） */
 export type BoardStyle = {
   stroke: string;
@@ -30,6 +40,19 @@ export type BoardStyle = {
   opacity?: number;
   /** 圆角半径（仅 rect；仅作用于选中） */
   cornerRadius?: number;
+  // ---- 文本排版扩展（仅选中文字时生效，不进默认样式） ----
+  /** 文字水平对齐（undefined = 左对齐） */
+  textAlign?: "left" | "center" | "right";
+  /** 字体族（undefined = 默认字体） */
+  fontFamily?: string;
+  /** 字重（undefined = 常规；整元素切换，TextEditor 纯文本机制不支持局部加粗） */
+  fontWeight?: FontWeight;
+  /** 起点端点样式（仅作用于选中 line/arrow） */
+  startArrow?: ArrowHead;
+  /** 终点端点样式（仅作用于选中 line/arrow） */
+  endArrow?: ArrowHead;
+  /** 粗糙度 0~2（仅作用于已手绘元素，同一 seed 重绘） */
+  roughness?: number;
 };
 
 /**
@@ -108,7 +131,8 @@ export type ElementData = {
     | "path"
     | "freehand"
     | "text"
-    | "image";
+    | "image"
+    | "frame";
   /** 稳定标识（AI 编辑模式按 id 引用元素），序列化时自动分配 */
   id?: string;
   x: number;
@@ -125,16 +149,29 @@ export type ElementData = {
   penPoints?: number[][];
   /** freehand: perfect-freehand 的 size（笔画直径） */
   penSize?: number;
-  /** rough 手绘风格：seed 保证抖动可复现，original 记录原几何类型（供还原/AI 理解） */
-  rough?: { seed: number; original?: string };
+  /** rough 手绘风格：seed 保证抖动可复现，original 记录原几何类型（供还原/AI 理解），roughness 粗糙度 0~2（undefined = 1），originalPath 记录多边形原始顶点 path，originalWidth/originalHeight/originalPoints 记录原始几何参数（改粗糙度重绘用，避免以含抖动的渲染尺寸为基准导致逐次放大） */
+  rough?: {
+    seed: number;
+    original?: string;
+    roughness?: number;
+    originalPath?: string;
+    originalWidth?: number;
+    originalHeight?: number;
+    originalPoints?: { x: number; y: number }[];
+  };
+  /** text: 文本内容 */
   text?: string;
   fontSize?: number;
   url?: string; // image: dataURL 或路径
   /** line/arrow: 端点绑定的元素稳定 id（被绑元素移动时端点自动跟随） */
   bindStart?: string;
   bindEnd?: string;
+  /** line/arrow: 起点端点样式（undefined = 无） */
+  startArrow?: ArrowHead;
+  /** line/arrow: 终点端点样式（undefined = 无；arrow 类型创建时默认 triangle） */
+  endArrow?: ArrowHead;
   locked?: boolean; // 锁定后不可拖动/缩放/删除
-  /** 分组 id：同组元素成组移动/对齐/分布/翻转/层序（任一成员选中则整组参与） */
+  /** 分组 id：同组元素整组联动（任一成员选中则整组参与移动/删除/AI 排列） */
   groupId?: string;
   /** 描边虚线（leafer 渲染映射 dashPattern；undefined = 实线） */
   strokeDash?: number[];
@@ -144,6 +181,13 @@ export type ElementData = {
   cornerRadius?: number;
   /** AI 创建时自报的创建意图（简短中文，说明为何创建此元素；仅 AI 创建的元素有） */
   intent?: string;
+  // ---- 文本排版扩展 ----
+  /** text: 水平对齐（undefined = 左对齐） */
+  textAlign?: "left" | "center" | "right";
+  /** text: 字体族（undefined = 默认字体） */
+  fontFamily?: string;
+  /** text: 字重（undefined = 常规；旧数据可能为 "normal"/"bold" 字符串，读取时兼容） */
+  fontWeight?: FontWeight;
 };
 
 export type SceneFile = {
