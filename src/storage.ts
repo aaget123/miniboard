@@ -1,4 +1,5 @@
 import type { Board } from "./board/canvas";
+import { dataURLToJpeg, jpegToPdf, PDF_EXPORT_MAX_SIDE } from "./board/pdf";
 import type { ProjectMeta, SceneFile } from "./types";
 
 /**
@@ -374,6 +375,32 @@ export class ProjectStore {
     }
     const blob = new Blob([svg], { type: "image/svg+xml" });
     downloadBlob(blob, name);
+    return true;
+  }
+
+  /** 导出 PDF 文档（画布位图化后嵌入单页 PDF；中文由浏览器渲染无字体问题） */
+  async exportPDF(): Promise<boolean> {
+    const png = await this.board.exportPNG();
+    const jpeg = await dataURLToJpeg(png, PDF_EXPORT_MAX_SIDE);
+    if (!jpeg) {
+      return false;
+    }
+    const bytes = jpegToPdf(jpeg.dataURL, jpeg.width, jpeg.height);
+    const name = `白板-${dateStamp()}.pdf`;
+    if (isDesktop()) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeFile } = await import("@tauri-apps/plugin-fs");
+      const path = await save({
+        defaultPath: name,
+        filters: [{ name: "PDF 文档", extensions: ["pdf"] }],
+      });
+      if (!path) {
+        return false;
+      }
+      await writeFile(path, bytes);
+      return true;
+    }
+    downloadBlob(new Blob([bytes.slice()], { type: "application/pdf" }), name);
     return true;
   }
 

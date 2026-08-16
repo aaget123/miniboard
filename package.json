@@ -19,6 +19,7 @@
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-http": "^2",
     "leafer-ui": "^2.2.9",
+    "pdfjs-dist": "^6.2.108",
     "perfect-freehand": "^1.2.3",
     "roughjs": "^4.6.6"
   },

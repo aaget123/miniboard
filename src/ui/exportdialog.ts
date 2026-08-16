@@ -1,7 +1,7 @@
 import { iconHTML, type IconName } from "./icons";
 
-/** 导出格式：PNG 位图 / SVG 矢量图 */
-export type ExportFormat = "png" | "svg";
+/** 导出格式：PNG 位图 / SVG 矢量图 / PDF 文档 */
+export type ExportFormat = "png" | "svg" | "pdf";
 
 /**
  * 导出弹窗：统一导出入口（右侧悬浮栏与命令面板共用），
@@ -46,7 +46,7 @@ export class ExportDialog {
     const hint = document.createElement("div");
     hint.className = "ai-modal-hint";
     hint.textContent =
-      "PNG 为位图，适合分享与插入文档；SVG 为矢量图，可无损缩放。";
+      "PNG 为位图，适合分享与插入文档；SVG 为矢量图，可无损缩放；PDF 为单页文档，适合打印与归档。";
     modal.appendChild(hint);
 
     const options = document.createElement("div");
@@ -54,6 +54,7 @@ export class ExportDialog {
     const OPTIONS: { fmt: ExportFormat; icon: IconName; label: string; desc: string }[] = [
       { fmt: "png", icon: "camera", label: "PNG 图片", desc: "位图，适合分享与插入文档" },
       { fmt: "svg", icon: "file", label: "SVG 矢量图", desc: "矢量，可无损缩放" },
+      { fmt: "pdf", icon: "download", label: "PDF 文档", desc: "单页 PDF，适合打印与归档" },
     ];
     for (const opt of OPTIONS) {
       const btn = document.createElement("button");

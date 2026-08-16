@@ -16,6 +16,7 @@ vi.mock("../board/canvas", () => ({
 function mockBoard(elements: ElementData[], background = "#ffffff"): Board {
   return {
     serialize: () => elements,
+    serializeWorld: () => elements,
     backgroundColor: background,
     viewport: {
       view: { width: 1200, height: 800 },

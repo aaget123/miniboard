@@ -16,10 +16,10 @@ A **local-first, fully offline** hand-drawn whiteboard. Built with Tauri 2 and l
 - **Tidy & beautify**: recognize hand-drawn shapes and convert them into standard shapes; convert standard shapes into hand-drawn rough style (rough.js, reproducible seed, adjustable roughness 0–2)
 - **Text styling**: alignment / font family / weight slider (100–900); toggle normal/bold quickly with `Ctrl+B`
 - **Arrow endpoints**: independent start/end styles — arrow / triangle / dot / circle / none
-- **Frame element**: `F` key creates a dashed frame (Figma-style); inner elements follow the frame when moving; supports importing MD / code / text files as content frames (auto-sized to content, collapsible with scroll for tall content); frame focus zooms the viewport to the frame
+- **Frame element**: `F` key creates a dashed frame (Figma-style); inner elements follow the frame when moving / scaling / rotating — elements fully inside a frame (including dragged-in ones) are auto-attached, dragging out detaches them; supports importing MD / code / text files as content frames (auto-sized to content, collapsible with scroll for tall content); frame focus zooms the viewport to the frame; dropped files are auto-routed by type — images insert directly, PDFs render their first page as an image, text / code become content frames
 - **Multi-project management**: independent canvases with autosave; restores the last project on launch
 - **Customizable data directory**: projects and AI tools are stored as local files (default: system app-data dir; changeable with automatic migration)
-- **Export**: PNG bitmap / SVG vector, lossless element structure
+- **Export**: PNG bitmap / SVG vector / single-page PDF, lossless element structure
 
 > Full feature details are available in the [Chinese README](./README.md) (功能细节 section).
 

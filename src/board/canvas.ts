@@ -760,10 +760,16 @@ export class Board {
         this.moveNormalizeEls.add(moved);
       }
       // 内容归属同步：框架内容被拖出所属框架（中心点出框）即解除归属，
-      // 变回自由元素（夹紧生效时中心保持在框内，不会误触发）
+      // 变回自由元素（夹紧生效时中心保持在框内，不会误触发）；
+      // 未归属元素拖入某框架（完全包含）时补挂归属，此后随框架移动/缩放联动
       if (moved && !isFrameEl(moved)) {
         const fid = this.frameIdOf(moved);
-        if (fid) {
+        if (!fid) {
+          const frame = this.frameContaining(moved);
+          if (frame) {
+            this.setFrameId(moved, this.aiIdOf(frame));
+          }
+        } else {
           const frame = this.frameById(fid);
           const fb = frame?.worldBoxBounds;
           const eb = moved.worldBoxBounds;
@@ -2803,17 +2809,17 @@ export class Board {
   }
 
   /**
-   * 绘制/导入完成的元素归属判定：世界 bbox 完全包含于某框架 → 挂上该框架的
-   * frameId（一次性判定，此后跟随/拖出都由 frameId 显式驱动，不再靠 bbox 猜测）。
+   * 完全包含 el 的框架（归属判定共用：创建/拖入/旧数据升级一致）。
+   * 世界 bbox 含描边外扩，容差取描边半宽 + 1px 浮点余量，避免贴边元素
+   * （如夹紧后与框架边缘重合）因描边外扩 1px 而归属失败。
    */
-  private adoptIntoFrame(el: UI) {
-    if (isFrameEl(el) || this.frameIdOf(el)) {
-      return;
-    }
+  private frameContaining(el: UI): UI | null {
     const eb = el.worldBoxBounds;
     if (!eb) {
-      return;
+      return null;
     }
+    const sw = typeof el.strokeWidth === "number" ? el.strokeWidth : 0;
+    const tol = sw / 2 + 1;
     for (const frame of this.app.tree.children as UI[]) {
       if (!isFrameEl(frame)) {
         continue;
@@ -2823,14 +2829,28 @@ export class Board {
         continue;
       }
       if (
-        eb.x >= fb.x &&
-        eb.y >= fb.y &&
-        eb.x + eb.width <= fb.x + fb.width &&
-        eb.y + eb.height <= fb.y + fb.height
+        eb.x >= fb.x - tol &&
+        eb.y >= fb.y - tol &&
+        eb.x + eb.width <= fb.x + fb.width + tol &&
+        eb.y + eb.height <= fb.y + fb.height + tol
       ) {
-        this.setFrameId(el, this.aiIdOf(frame));
-        return;
+        return frame;
       }
+    }
+    return null;
+  }
+
+  /**
+   * 绘制/导入完成的元素归属判定：完全包含于某框架 → 挂上该框架的
+   * frameId（一次性判定，此后跟随/拖出都由 frameId 显式驱动，不再靠 bbox 猜测）。
+   */
+  private adoptIntoFrame(el: UI) {
+    if (isFrameEl(el) || this.frameIdOf(el)) {
+      return;
+    }
+    const frame = this.frameContaining(el);
+    if (frame) {
+      this.setFrameId(el, this.aiIdOf(frame));
     }
   }
 
@@ -3705,16 +3725,19 @@ export class Board {
     ids: string[],
     action: ArrangeAction,
   ): { done: number; skipped: number } {
+    // before 为相对坐标（历史快照基准）；计算在世界坐标下进行（frame 内元素
+    // 相对坐标会让对齐/分布失真），loadElements 用 worldCoords 模式重建
     const before = this.serialize();
-    const byId = new Map(before.map((d) => [d.id, d]));
+    const world = this.expandFrameContents(before);
+    const byId = new Map(world.map((d) => [d.id, d]));
     const found = ids.filter((id) => byId.has(id));
     const skipped = found.filter((id) => byId.get(id)?.locked).length;
     const selIds = found.filter((id) => !byId.get(id)?.locked);
     if (!selIds.length) {
       return { done: 0, skipped };
     }
-    const members = expandGroupMembers(before, selIds);
-    const targets = before.filter((d) => members.has(d.id ?? ""));
+    const members = expandGroupMembers(world, selIds);
+    const targets = world.filter((d) => members.has(d.id ?? ""));
     let next: ElementData[];
     if (
       action === "front" ||
@@ -3723,19 +3746,137 @@ export class Board {
       action === "backward"
     ) {
       // 层序作用于全列表（组内成员必须保持相对顺序），其余动作只作用于目标元素
-      next = reorderElements(before, [...members], (d) => d.id ?? "", action);
+      next = reorderElements(world, [...members], (d) => d.id ?? "", action);
     } else {
       const changed = this.arrangeFn(action)(targets);
       const changedById = new Map(changed.map((d) => [d.id, d]));
-      next = before.map((d) => changedById.get(d.id) ?? d);
+      next = world.map((d) => changedById.get(d.id) ?? d);
     }
-    if (next.every((d, i) => d === before[i])) {
+    if (next.every((d, i) => d === world[i])) {
       return { done: 0, skipped };
     }
-    this.loadElements(next);
+    this.loadElements(next, { worldCoords: true });
+    // 历史快照保持相对坐标（undo/redo 走默认换算路径）
     this.pushSnapshot(before);
-    this.pushSnapshot(next);
+    this.pushSnapshot(this.serialize());
     return { done: members.size, skipped };
+  }
+
+  // ================= AI 整理/手绘/粗糙度（beautify_elements 等工具，按 id 操作） =================
+
+  /**
+   * AI 整理（beautify_elements 工具）：按 id 把手绘笔迹识别为标准图形/拉直，
+   * 未指名的元素原样保留；同组成员整组参与、锁定元素跳过；整轮改动一步撤销。
+   */
+  beautifyByIds(
+    ids: string[],
+  ): { changed: number; stats: BeautifyStats; skipped: number } {
+    const before = this.serialize();
+    const byId = new Map(before.map((d) => [d.id, d]));
+    const found = ids.filter((id) => byId.has(id));
+    const skipped = found.filter((id) => byId.get(id)?.locked).length;
+    const selIds = found.filter((id) => !byId.get(id)?.locked);
+    if (!selIds.length) {
+      return { changed: 0, stats: [], skipped };
+    }
+    const members = expandGroupMembers(before, selIds);
+    const { elements, stats } = beautifyScene(
+      this.expandFrameContents(before),
+      [...members],
+    );
+    if (!stats.length) {
+      return { changed: 0, stats: [], skipped };
+    }
+    this.loadElements(elements, { worldCoords: true });
+    this.pushSnapshot(before);
+    this.pushSnapshot(this.serialize());
+    return { changed: stats.length, stats, skipped };
+  }
+
+  /**
+   * AI 手绘化（sketchify_elements 工具）：按 id 把标准图形转为 rough 手绘风格，
+   * 已手绘/不可手绘的元素自动跳过；同组成员整组参与、锁定元素跳过。
+   */
+  sketchifyByIds(ids: string[]): { changed: number; skipped: number } {
+    const before = this.serialize();
+    const byId = new Map(before.map((d) => [d.id, d]));
+    const found = ids.filter((id) => byId.has(id));
+    const skipped = found.filter((id) => byId.get(id)?.locked).length;
+    const selIds = found.filter((id) => !byId.get(id)?.locked);
+    if (!selIds.length) {
+      return { changed: 0, skipped };
+    }
+    const members = expandGroupMembers(before, selIds);
+    let changed = 0;
+    const next = this.expandFrameContents(before).map((d) => {
+      if (!d.id || !members.has(d.id) || !isSketchable(d)) {
+        return d;
+      }
+      const sketched = sketchifyData(d);
+      if (!sketched) {
+        return d;
+      }
+      changed++;
+      return {
+        ...d,
+        type: "path" as const,
+        path: sketched.path,
+        rough: {
+          seed: sketched.seed,
+          original: d.type,
+          roughness: 1,
+          originalPath: d.type === "path" ? d.path : undefined,
+          originalWidth: sketched.originalWidth,
+          originalHeight: sketched.originalHeight,
+          originalPoints: sketched.originalPoints,
+        },
+      };
+    });
+    if (!changed) {
+      return { changed: 0, skipped };
+    }
+    this.loadElements(next, { worldCoords: true });
+    this.pushSnapshot(before);
+    this.pushSnapshot(this.serialize());
+    return { changed, skipped };
+  }
+
+  /**
+   * AI 粗糙度（set_roughness 工具）：按 id 调整已手绘元素的抖动强度（0~2），
+   * 同一 seed 重绘（抖动态不变仅幅度变化）；无 rough 元数据的元素跳过。
+   */
+  setRoughnessByIds(
+    ids: string[],
+    value: number,
+  ): { changed: number; skipped: number } {
+    const before = this.serialize();
+    const byId = new Map(before.map((d) => [d.id, d]));
+    const found = ids.filter((id) => byId.has(id));
+    const skipped = found.filter((id) => byId.get(id)?.locked).length;
+    const selIds = found.filter((id) => !byId.get(id)?.locked);
+    if (!selIds.length) {
+      return { changed: 0, skipped };
+    }
+    const members = expandGroupMembers(before, selIds);
+    let changed = 0;
+    const next = this.expandFrameContents(before).map((d) => {
+      if (!d.id || !members.has(d.id) || !d.rough) {
+        return d;
+      }
+      const redrawn = redrawRough(d, d.rough, value);
+      if (!redrawn) {
+        return d;
+      }
+      changed++;
+      return { ...d, path: redrawn.path, rough: { ...d.rough, roughness: value } };
+    });
+    if (!changed) {
+      return { changed: 0, skipped };
+    }
+    this.loadElements(next, { worldCoords: true });
+    this.pushSnapshot(before);
+    this.pushSnapshot(this.serialize());
+    return { changed, skipped };
   }
 
   /** ArrangeAction → 纯函数变换（对齐/分布/翻转；层序走 reorderElements 分支） */
@@ -4471,6 +4612,14 @@ export class Board {
     }
     // 内容归属元素：世界坐标 → 相对框架原点的坐标（框架 id + 相对位置）
     return this.contractFrameContents(result);
+  }
+
+  /**
+   * 世界坐标序列化（AI 画布感知/整理共用）：frame 内容展开为画布绝对坐标（清 frameId）。
+   * 文件数据契约中 frame 内元素存相对坐标，AI 感知与写回均以世界坐标为准。
+   */
+  serializeWorld(): ElementData[] {
+    return this.expandFrameContents(this.serialize());
   }
 
   private elementToData(el: UI): ElementData | null {

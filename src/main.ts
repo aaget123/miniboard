@@ -1,4 +1,5 @@
 import { Board } from "./board/canvas";
+import { pdfFirstPageToImage } from "./board/pdf";
 import { ToolRegistry } from "./board/registry";
 import { ProjectStore, isDesktop, resolveDataDir } from "./storage";
 import type { CustomToolDef, FontWeight } from "./types";
@@ -339,10 +340,25 @@ async function main() {
   // 统一导出弹窗（右侧悬浮栏/命令面板共用）：选格式后执行实际导出
   const exportDialog = new ExportDialog(document.body);
   exportDialog.onExport((fmt) => {
-    const p = fmt === "png" ? storage.exportPNG() : storage.exportSVG();
+    if (fmt === "pdf" && board.elementCount === 0) {
+      toast("画布是空的，没有内容可导出");
+      return;
+    }
+    const p =
+      fmt === "png"
+        ? storage.exportPNG()
+        : fmt === "svg"
+          ? storage.exportSVG()
+          : storage.exportPDF();
     p.then((ok) => {
       if (ok) {
-        toast(fmt === "png" ? "📷 已导出 PNG" : "📄 已导出 SVG");
+        toast(
+          fmt === "png"
+            ? "📷 已导出 PNG"
+            : fmt === "svg"
+              ? "📄 已导出 SVG"
+              : "📕 已导出 PDF",
+        );
       }
     }).catch((err) => toast(`导出失败：${err}`));
   });
@@ -400,6 +416,53 @@ async function main() {
     });
     toast(`📄 已导入 ${name}`);
   };
+  // 拖入文件分流：图片直插画布、PDF 首页转图片、文本/代码进内容框架、其他提示不支持
+  const IMAGE_EXTS = new Set([
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico",
+  ]);
+  const handleDroppedFile = async (file: File) => {
+    const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+    if (IMAGE_EXTS.has(ext)) {
+      const ok = await board.insertImage(file);
+      toast(ok ? "🖻 已插入图片" : `图片加载失败：${file.name}`);
+      return;
+    }
+    if (ext === "pdf") {
+      try {
+        const page = await pdfFirstPageToImage(await file.arrayBuffer());
+        if (!page) {
+          toast(`PDF 解析失败：${file.name}`);
+          return;
+        }
+        // 渲染出的首页 PNG 转成 File，复用 insertImage 的缩放/落位逻辑
+        const blob = await (await fetch(page.dataURL)).blob();
+        const png = new File(
+          [blob],
+          `${file.name.replace(/\.pdf$/i, "")}.png`,
+          { type: "image/png" },
+        );
+        const ok = await board.insertImage(png);
+        toast(
+          ok ? `📕 已导入 PDF 首页：${file.name}` : `PDF 导入失败：${file.name}`,
+        );
+      } catch {
+        toast(`PDF 导入失败：${file.name}`);
+      }
+      return;
+    }
+    if (
+      ext === "md" ||
+      ext === "markdown" ||
+      ext === "txt" ||
+      ext === "text" ||
+      ext === "csv" ||
+      CONTENT_CODE_EXTS.has(ext)
+    ) {
+      placeContentFrame(file.name, await file.text());
+      return;
+    }
+    toast(`不支持的文件类型：${file.name}（支持图片/PDF/文本/代码）`);
+  };
   // 文件选择对话框导入（右侧栏/命令面板共用）
   const importFile = () => {
     storage
@@ -423,7 +486,7 @@ async function main() {
         if (payload.type === "drop" && payload.paths) {
           for (const f of payload.paths) {
             if (f instanceof File) {
-              f.text().then((text) => placeContentFrame(f.name, text));
+              void handleDroppedFile(f);
             }
           }
         }
@@ -441,7 +504,7 @@ async function main() {
             toast(`文件过大（>5MB）：${file.name}`);
             continue;
           }
-          file.text().then((text) => placeContentFrame(file.name, text));
+          void handleDroppedFile(file);
         }
       });
     }

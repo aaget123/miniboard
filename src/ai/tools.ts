@@ -210,7 +210,8 @@ export function describeCanvas(
   ids?: string[],
   region?: CanvasRegion | null,
 ): string {
-  const full = board.serialize();
+  // 世界坐标序列化：frame 内元素展开为画布绝对坐标，保证坐标/region 计算基准一致
+  const full = board.serializeWorld();
   const all = ids?.length
     ? full.filter((e) => e.id && ids.includes(e.id))
     : region
@@ -745,6 +746,61 @@ function chatTools(): AiTool[] {
       mutating: true,
     },
     {
+      name: "beautify_elements",
+      description:
+        "把手绘笔迹整理为标准图形（beautify）：闭合笔迹识别为圆/椭圆/矩形/三角形/多边形等标准元素，近似直线转为标准线段，其余弯曲线条拉直简化；保留颜色与粗细。只整理 ids 指定的元素，其他元素原样不动；ids 为元素 id 列表（来自 get_canvas 或 @选区）；锁定元素自动跳过；同组成员整组参与（只传组内一个 id 即可）；没有手绘笔迹的目标会自动跳过（返回未执行时不要重复提交相同调用）。适合“整理/识别/清理这些手绘图形”类请求",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "要整理的元素 id 列表（手绘笔迹 freehand 才有效果）",
+          },
+        },
+        required: ["ids"],
+      },
+      mutating: true,
+    },
+    {
+      name: "sketchify_elements",
+      description:
+        "把标准图形转为 rough 手绘风格（矩形/椭圆/直线/箭头/标准多边形）：双线+抖动描边，抖动 seed 随元素保存（撤销/重载后形态可复现）；已手绘元素自动跳过。ids 为元素 id 列表（来自 get_canvas 或 @选区）；锁定元素自动跳过；同组成员整组参与；无可转换目标时自动跳过（返回未执行时不要重复提交相同调用）。适合“把这些图形变成手绘风格”类请求",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "要手绘化的元素 id 列表（标准图形才有有效果）",
+          },
+        },
+        required: ["ids"],
+      },
+      mutating: true,
+    },
+    {
+      name: "set_roughness",
+      description:
+        "调整已手绘元素的粗糙度（0~2，步进 0.1；0 = 接近规整，2 = 抖动最强）：以同一抖动 seed 即时重绘，抖动态不变仅幅度变化。ids 为元素 id 列表；无手绘元数据的元素自动跳过；锁定元素自动跳过；同组成员整组参与。适合“更粗糙一点/更规整一点”类请求",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "要调整粗糙度的元素 id 列表（已手绘元素才有效果）",
+          },
+          value: {
+            type: "number",
+            description: "粗糙度 0~2（0.1 步进）",
+          },
+        },
+        required: ["ids", "value"],
+      },
+      mutating: true,
+    },
+    {
       name: "create_elements",
       description:
         "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation；可选 intent（简短中文自报创建意图，如\"流程起点\"、\"标题\"——系统会保存并在 get_canvas 返回，供后续轮次理解你的设计意图）。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
@@ -976,6 +1032,8 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
     return "错误：节点缺少 id";
   }
   const nodeMap = new Map(validNodes.map((n) => [n.id as string, n]));
+  // 整张图的组 id 前缀：节点矩形与文字同组（整组联动），与其他流程图互不混淆
+  const flowId = Date.now().toString(36);
 
   // 拓扑分层：level(node) = max(level(from)) + 1
   const level = new Map<string, number>();
@@ -1042,6 +1100,8 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
       const x = startX + i * (NODE_W + H_GAP);
       const y = originY + l * (NODE_H + V_GAP);
       positions.set(n.id, { x, y });
+      // 节点矩形与文字同组：移动/删除/AI 排列时整组联动
+      const groupId = `${flowId}-${n.id}`;
       const elId = board.addElement({
         type: "rect",
         x,
@@ -1051,6 +1111,7 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
         stroke: "#4f8cff",
         strokeWidth: 2,
         fill: "rgba(79, 140, 255, 0.12)",
+        groupId,
       });
       if (elId) {
         idMap.set(n.id, elId);
@@ -1065,6 +1126,7 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
           text: n.label,
           fontSize: TEXT_FONT_SIZE,
           fill: "#ffffff",
+          groupId,
         });
       }
     });
@@ -1088,6 +1150,11 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
       NODE_W / 2 +
       (horizontal ? (dx > 0 ? -NODE_W / 2 : NODE_W / 2) : 0);
     const ty = to.y + (horizontal ? NODE_H / 2 : 0);
+    const fromRect = idMap.get(e.from);
+    const toRect = idMap.get(e.to);
+    if (!fromRect || !toRect) {
+      continue;
+    }
     board.addElement({
       type: "arrow",
       x: 0,
@@ -1100,6 +1167,9 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
       ],
       stroke: "#4f8cff",
       strokeWidth: 1.5,
+      // 端点绑定节点矩形：节点移动时连线自动跟随
+      bindStart: fromRect,
+      bindEnd: toRect,
     });
   }
 
@@ -1362,6 +1432,133 @@ export async function executeTool(
         name: tool.name,
         args,
         result: `已完成${ACTION_LABELS[action] ?? action}：${done} 个元素${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
+        changed: true,
+      };
+    }
+
+    case "beautify_elements": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：beautify_elements 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const ids = Array.isArray(args.ids)
+        ? args.ids.filter((s): s is string => typeof s === "string")
+        : [];
+      if (!ids.length) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：ids 不能为空（至少传 1 个元素 id）",
+          changed: false,
+        };
+      }
+      const { changed, stats, skipped } = board.beautifyByIds(ids);
+      if (!changed) {
+        return {
+          name: tool.name,
+          args,
+          result: skipped
+            ? `未执行：${ids.length} 个目标元素全部锁定（锁定元素不能整理，请先解锁）`
+            : "未执行：目标中没有可整理的手绘笔迹（id 不存在或已是标准图形）",
+          changed: false,
+        };
+      }
+      const detail = stats.map((s) => `${s.label} ${s.count} 处`).join(" · ");
+      return {
+        name: tool.name,
+        args,
+        result: `已整理 ${changed} 个元素：${detail}${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
+        changed: true,
+      };
+    }
+
+    case "sketchify_elements": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：sketchify_elements 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const ids = Array.isArray(args.ids)
+        ? args.ids.filter((s): s is string => typeof s === "string")
+        : [];
+      if (!ids.length) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：ids 不能为空（至少传 1 个元素 id）",
+          changed: false,
+        };
+      }
+      const { changed, skipped } = board.sketchifyByIds(ids);
+      if (!changed) {
+        return {
+          name: tool.name,
+          args,
+          result: skipped
+            ? `未执行：${ids.length} 个目标元素全部锁定（锁定元素不能转换，请先解锁）`
+            : "未执行：目标中没有可转换的标准图形（id 不存在或已是手绘风格）",
+          changed: false,
+        };
+      }
+      return {
+        name: tool.name,
+        args,
+        result: `已将 ${changed} 个元素转为手绘风格${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
+        changed: true,
+      };
+    }
+
+    case "set_roughness": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：set_roughness 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const ids = Array.isArray(args.ids)
+        ? args.ids.filter((s): s is string => typeof s === "string")
+        : [];
+      if (!ids.length) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：ids 不能为空（至少传 1 个元素 id）",
+          changed: false,
+        };
+      }
+      const value = typeof args.value === "number" ? args.value : NaN;
+      if (!Number.isFinite(value) || value < 0 || value > 2) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：value 必须是 0~2 之间的数字（0 = 接近规整，2 = 抖动最强）",
+          changed: false,
+        };
+      }
+      const { changed, skipped } = board.setRoughnessByIds(ids, value);
+      if (!changed) {
+        return {
+          name: tool.name,
+          args,
+          result: skipped
+            ? `未执行：${ids.length} 个目标元素全部锁定（锁定元素不能调整，请先解锁）`
+            : "未执行：目标中没有已手绘元素（id 不存在或没有手绘元数据）",
+          changed: false,
+        };
+      }
+      return {
+        name: tool.name,
+        args,
+        result: `已调整 ${changed} 个元素的粗糙度为 ${value}${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
         changed: true,
       };
     }
