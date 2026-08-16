@@ -67,8 +67,11 @@ export function normKey(key: string): string {
   return lower === "+" ? "plus" : lower;
 }
 
-/** 组合串 → 展示文本（"ctrl+shift+z" → "Ctrl+Shift+Z"） */
+/** 组合串 → 展示文本（"ctrl+shift+z" → "Ctrl+Shift+Z"；空串/无键位返回空串） */
 export function formatCombo(combo: string): string {
+  if (!combo) {
+    return "";
+  }
   return combo
     .split("+")
     .map((p) => {

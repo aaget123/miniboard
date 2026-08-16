@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mirrorPath, translatePath } from "./path";
+import { mirrorPath, scalePath, translatePath } from "./path";
 
 describe("translatePath", () => {
   it("零位移或空串原样返回", () => {
@@ -85,6 +85,52 @@ describe("mirrorPath", () => {
   it("浮点坐标保留 2 位小数", () => {
     expect(mirrorPath("M 0.5 0.5 L 10.333 20.666", "h", 5)).toBe(
       "M 9.5 0.5 L -0.33 20.67",
+    );
+  });
+});
+
+describe("scalePath", () => {
+  it("单位缩放或空串原样返回", () => {
+    const p = "M 0 0 L 10 10 Z";
+    expect(scalePath(p, 1, 1, 5, 5)).toBe(p);
+    expect(scalePath("", 2, 2, 5, 5)).toBe("");
+  });
+
+  it("以 (ox, oy) 为中心缩放 M/L 绝对坐标", () => {
+    expect(scalePath("M 0 0 L 10 10 Z", 2, 0.5, 0, 0)).toBe("M 0 0 L 20 5 Z");
+    expect(scalePath("M 10 10 L 20 20", 2, 2, 10, 10)).toBe("M 10 10 L 30 30");
+  });
+
+  it("H 只缩放 x、V 只缩放 y", () => {
+    expect(scalePath("M 0 0 H 10 V 10 H 0", 2, 3, 0, 0)).toBe(
+      "M 0 0 H 20 V 30 H 0",
+    );
+  });
+
+  it("C 六参数全部坐标对缩放", () => {
+    expect(scalePath("C 1 2 3 4 5 6", 2, 3, 1, 2)).toBe("C 1 2 5 8 9 14");
+  });
+
+  it("A 命令：rx/ry 随轴缩放、rotation/large-arc 不变、末尾 x/y 缩放", () => {
+    expect(scalePath("A 5 5 30 0 1 10 10", 2, 3, 0, 0)).toBe(
+      "A 10 15 30 0 1 20 30",
+    );
+  });
+
+  it("负缩放翻转 A 命令 sweep 标志", () => {
+    expect(scalePath("A 5 5 0 0 1 10 10", -1, 1, 0, 0)).toBe(
+      "A -5 5 0 0 0 -10 10",
+    );
+  });
+
+  it("相对命令（小写）不缩放", () => {
+    const p = "m 0 0 l 5 5 c 1 1 2 2 3 3";
+    expect(scalePath(p, 2, 2, 0, 0)).toBe(p);
+  });
+
+  it("浮点坐标保留 2 位小数", () => {
+    expect(scalePath("M 0.5 0.5 L 10.333 20.666", 2.5, 2, 0, 0)).toBe(
+      "M 1.25 1 L 25.83 41.33",
     );
   });
 });

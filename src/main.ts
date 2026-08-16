@@ -1,6 +1,6 @@
 import { Board } from "./board/canvas";
 import { ToolRegistry } from "./board/registry";
-import { ProjectStore, resolveDataDir } from "./storage";
+import { ProjectStore, isDesktop, resolveDataDir } from "./storage";
 import type { CustomToolDef, FontWeight } from "./types";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
@@ -126,6 +126,7 @@ async function main() {
     },
     onContextMenu: (x, y) => {
       const list = board.editor.list;
+      const fs = board.frameActionState();
       contextMenu.open(x, y, {
         hasSelection: list.length > 0,
         anyLocked: list.some((el) => el.locked),
@@ -133,6 +134,10 @@ async function main() {
         // 整理/手绘资格与左侧选中栏显隐条件一致
         hasFreehand: lastSelectionInfo?.hasFreehand ?? false,
         hasSketchable: lastSelectionInfo?.hasSketchable ?? false,
+        // 框架操作资格：单选未锁定 rect / frame（含约束开关状态）
+        canToFrame: fs.canToFrame,
+        canToRect: fs.canToRect,
+        frameConstrainOn: fs.constrainOn,
       });
     },
     // 双击文本/线元素自动切换选择工具时同步顶栏激活态
@@ -358,6 +363,87 @@ async function main() {
     input.click();
   };
 
+  // ---- 内容文件导入（MD/代码/文本 → 内容框架）：对话框 / 拖拽共用 ----
+  // 内容类型推断：按扩展名区分 markdown / code / text
+  const CONTENT_CODE_EXTS = new Set([
+    "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp", "h", "go",
+    "rs", "rb", "php", "sh", "bat", "ps1", "sql", "yaml", "yml",
+    "toml", "ini", "json", "css", "xml", "html", "vue", "svelte",
+  ]);
+  const contentTypeOf = (
+    name: string,
+  ): "markdown" | "code" | "text" => {
+    const ext = (name.split(".").pop() ?? "").toLowerCase();
+    if (ext === "md" || ext === "markdown") {
+      return "markdown";
+    }
+    if (CONTENT_CODE_EXTS.has(ext)) {
+      return "code";
+    }
+    return "text";
+  };
+  // 内容框架落位：视口中心略偏左上（autoSize 会按内容重算尺寸）
+  const placeContentFrame = (name: string, text: string) => {
+    if (!text.trim()) {
+      toast(`文件为空：${name}`);
+      return;
+    }
+    const c = board.viewport.center;
+    board.createContentFrame(Math.round(c.x - 100), Math.round(c.y - 60), {
+      name,
+      contentType: contentTypeOf(name),
+      content: text,
+    });
+    toast(`📄 已导入 ${name}`);
+  };
+  // 文件选择对话框导入（右侧栏/命令面板共用）
+  const importFile = () => {
+    storage
+      .importContentFile()
+      .then((file) => {
+        if (file) {
+          placeContentFrame(file.name, file.text);
+        }
+      })
+      .catch((err) => toast(`导入失败：${err}`));
+  };
+  // 拖拽导入：桌面走 Tauri rawDrop（File 对象免 fs scope），浏览器走原生 drop
+  async function bindFileDrop() {
+    if (isDesktop()) {
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      getCurrentWebview().onDragDropEvent((event) => {
+        const payload = event.payload as {
+          type?: string;
+          paths?: unknown[];
+        };
+        if (payload.type === "drop" && payload.paths) {
+          for (const f of payload.paths) {
+            if (f instanceof File) {
+              f.text().then((text) => placeContentFrame(f.name, text));
+            }
+          }
+        }
+      });
+    } else {
+      window.addEventListener("dragover", (e) => e.preventDefault());
+      window.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const files = e.dataTransfer?.files;
+        if (!files) {
+          return;
+        }
+        for (const file of files) {
+          if (file.size > 5 * 1024 * 1024) {
+            toast(`文件过大（>5MB）：${file.name}`);
+            continue;
+          }
+          file.text().then((text) => placeContentFrame(file.name, text));
+        }
+      });
+    }
+  }
+  void bindFileDrop();
+
   // 清空画布（右侧栏/命令面板共用）：可撤销
   const clearCanvas = () => {
     if (board.elementCount === 0) {
@@ -427,8 +513,8 @@ async function main() {
       section: "工具" as const,
       title: t.name,
       icon: t.icon,
-      // 内置/自定义工具统一显示生效键（配置优先，否则注册表键）
-      hint: formatCombo(shortcuts.toolKeys(t)[0]),
+      // 内置/自定义工具统一显示生效键（配置优先，否则注册表键；无快捷键的工具不显示）
+      hint: formatCombo(shortcuts.toolKeys(t)[0] ?? ""),
       keywords: `${t.kind} ${t.group ?? ""} ${t.source}`,
       run: () => {
         board.setTool(t.id);
@@ -439,6 +525,7 @@ async function main() {
     { id: "open", section: "操作", title: "打开文件", icon: "folder", hint: formatCombo(shortcuts.getKeys("open")[0]), run: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)) },
     { id: "save", section: "操作", title: "保存文件", icon: "save", hint: formatCombo(shortcuts.getKeys("save")[0]), run: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)) },
     { id: "image", section: "操作", title: "插入图片", icon: "image", run: insertImage },
+    { id: "import", section: "操作", title: "导入文件（内容框架）", icon: "file", keywords: "MD Markdown 代码 文本 导入", run: importFile },
     { id: "export", section: "操作", title: "导出画布", icon: "download", keywords: "PNG SVG 图片 矢量", run: () => exportDialog.open() },
     { id: "projects", section: "操作", title: "项目管理", icon: "folder", keywords: "项目 切换 重命名", run: () => projectDialog.open() },
     { id: "settings", section: "操作", title: "设置", icon: "settings", keywords: "AI 模型 主题 网格 提示词", run: () => settingsDialog.open() },
@@ -481,6 +568,28 @@ async function main() {
     toBack: () => board.toBack(),
     lock: () => board.lock(),
     unlock: () => board.unlock(),
+    toFrame: () => {
+      if (!board.toFrame()) {
+        toast("请单选一个未锁定的矩形转为框架");
+      }
+    },
+    toRect: () => {
+      if (!board.toRect()) {
+        toast("请单选一个未锁定的框架转为矩形");
+      }
+    },
+    toggleFrameConstrain: () => {
+      if (!board.frameActionState().canToRect) {
+        toast("请单选一个未锁定的框架");
+        return;
+      }
+      board.toggleFrameConstrain();
+      toast(
+        board.frameActionState().constrainOn
+          ? "已开启内容约束：框内绘制/拖动将被夹紧（按住 Alt 可拖出）"
+          : "已关闭内容约束",
+      );
+    },
   };
   contextMenu.onAction((action) => MENU_ACTIONS[action]());
 

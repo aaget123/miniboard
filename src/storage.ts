@@ -286,6 +286,52 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 导入内容文件（MD/代码/文本 → 内容框架用）：返回文件名与文本内容，
+   * 取消/读取失败返回 null。桌面端走原生对话框，浏览器回退 input。
+   */
+  async importContentFile(): Promise<{ name: string; text: string } | null> {
+    if (isDesktop()) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const path = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "文本/代码文件",
+            extensions: [
+              "md", "markdown", "txt", "text", "json", "csv", "xml", "html",
+              "css", "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp",
+              "h", "go", "rs", "rb", "php", "sh", "bat", "ps1", "sql",
+              "yaml", "yml", "toml", "ini", "vue", "svelte",
+            ],
+          },
+          { name: "所有文件", extensions: ["*"] },
+        ],
+      });
+      if (!path || Array.isArray(path)) {
+        return null;
+      }
+      const text = await readTextFile(path);
+      return { name: path.split(/[\\/]/).pop() ?? "导入文件", text };
+    }
+    return new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept =
+        ".md,.markdown,.txt,.text,.json,.csv,.xml,.html,.css,.js,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.h,.go,.rs,.rb,.php,.sh,.bat,.ps1,.sql,.yaml,.yml,.toml,.ini,.vue,.svelte,text/*";
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        resolve({ name: file.name, text: await file.text() });
+      };
+      input.click();
+    });
+  }
+
   /** 导出 PNG 图片 */
   async exportPNG(): Promise<boolean> {
     const dataURL = await this.board.exportPNG();

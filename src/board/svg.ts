@@ -121,7 +121,29 @@ function elementToSvg(e: ElementData): string {
       // 框架：虚线矩形 + 淡填充（与画布渲染风格一致）
       const w = e.width ?? 0;
       const h = e.height ?? 0;
-      return `<g transform="${wrapTransform(e)}"><rect width="${w}" height="${h}" ${paintAttrs(e)} stroke-dasharray="8 5"/></g>`;
+      // 内容文本：与画布派生渲染同参数（内边距 16 / 字号 14 / 行高 1.6 倍），
+      // 代码类型用等宽字体；fill 跟随描边色，缺省用深灰
+      const pad = 16;
+      const size = 14;
+      const dy = Math.round(size * 1.6 * 10) / 10;
+      const lines = (e.content ?? "").split("\n");
+      let textSvg = "";
+      if (e.content) {
+        const tspans = lines
+          .map((line, i) =>
+            i === 0
+              ? xmlEscape(line)
+              : `<tspan x="${pad}" dy="${dy}">${xmlEscape(line)}</tspan>`,
+          )
+          .join("");
+        const font =
+          e.contentType === "code"
+            ? "Consolas, 'Courier New', monospace"
+            : "system-ui, -apple-system, sans-serif";
+        const fill = e.stroke ? ` fill="${e.stroke}"` : ` fill="#4a5568"`;
+        textSvg = `<text x="${pad}" y="${pad}" font-size="${size}" font-family="${font}" dominant-baseline="text-before-edge"${fill}>${tspans}</text>`;
+      }
+      return `<g transform="${wrapTransform(e)}"><rect width="${w}" height="${h}" ${paintAttrs(e)} stroke-dasharray="8 5"/>${textSvg}</g>`;
     }
     case "freehand": {
       // 笔迹渲染通道是 fill（轮廓），颜色走 stroke 字段

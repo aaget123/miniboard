@@ -171,8 +171,21 @@ export type ElementData = {
   /** line/arrow: 终点端点样式（undefined = 无；arrow 类型创建时默认 triangle） */
   endArrow?: ArrowHead;
   locked?: boolean; // 锁定后不可拖动/缩放/删除
+  // ---- frame 内容容器（阶段 1：导入内容 + 约束夹紧） ----
+  /** frame: 框架名称（预留，供框架标签显示） */
+  name?: string;
+  /** frame: 内容类型（有 content 时框架为内容容器，渲染为框内派生文本） */
+  contentType?: "markdown" | "code" | "text";
+  /** frame: 内容文本（导入的 MD/代码/文本） */
+  content?: string;
+  /** frame: 自适应开关（有内容时按内容撑尺寸；undefined = 开启） */
+  autoSize?: boolean;
+  /** frame: 内容约束（框内绘制/拖动夹紧到框架边界；默认关闭） */
+  constrain?: boolean;
   /** 分组 id：同组元素整组联动（任一成员选中则整组参与移动/删除/AI 排列） */
   groupId?: string;
+  /** 内容归属：所在框架的 id（有值时 x/y 为相对框架原点坐标，随框架移动/缩放/旋转同步） */
+  frameId?: string;
   /** 描边虚线（leafer 渲染映射 dashPattern；undefined = 实线） */
   strokeDash?: number[];
   /** 整体不透明度 0~1（undefined = 不透明） */

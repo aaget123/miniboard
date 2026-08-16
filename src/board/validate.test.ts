@@ -130,6 +130,88 @@ describe("validateElementData", () => {
       validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: "heavy" }).ok,
     ).toBe(false);
   });
+
+  it("frame 接受合法内容框架并透传扩展字段", () => {
+    const r = validateElementData({
+      type: "frame",
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 100,
+      name: "README.md",
+      contentType: "markdown",
+      content: "# 标题",
+      autoSize: true,
+      constrain: false,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data).toMatchObject({
+        name: "README.md",
+        contentType: "markdown",
+        content: "# 标题",
+        autoSize: true,
+        constrain: false,
+      });
+    }
+  });
+
+  it("frame 拒绝非法 contentType / 缺 content / 非布尔开关 / 非字符串 name", () => {
+    expect(
+      validateElementData({
+        type: "frame",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        contentType: "pdf",
+        content: "x",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, contentType: "code" }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, content: 123 }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({
+        type: "frame",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        content: "x",
+        autoSize: "yes",
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({
+        type: "frame",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        content: "x",
+        constrain: 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, content: "x", name: 5 }).ok,
+    ).toBe(false);
+  });
+
+  it("frame 旧数据（无扩展字段）通过且不注入默认值", () => {
+    const r = validateElementData({ type: "frame", x: 0, y: 0, width: 100, height: 60 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.content).toBeUndefined();
+      expect(r.data.contentType).toBeUndefined();
+      expect(r.data.autoSize).toBeUndefined();
+      expect(r.data.constrain).toBeUndefined();
+      expect(r.data.name).toBeUndefined();
+    }
+  });
 });
 
 describe("validateElementList", () => {

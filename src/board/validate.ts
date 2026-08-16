@@ -11,6 +11,7 @@ const GENERATABLE_TYPES = new Set([
   "arrow",
   "path",
   "text",
+  "frame",
 ]);
 
 function isFiniteNum(v: unknown): v is number {
@@ -169,6 +170,40 @@ export function validateElementData(
         typeof fw === "number" ? fw : fw === "bold" ? 700 : 400
       ) as FontWeight;
     }
+  }
+  if (type === "frame") {
+    // frame 内容容器字段：contentType 枚举 / content 字符串 / 自适应与约束开关
+    if (
+      obj.contentType !== undefined &&
+      obj.contentType !== "markdown" &&
+      obj.contentType !== "code" &&
+      obj.contentType !== "text"
+    ) {
+      return {
+        ok: false,
+        error: "frame 的 contentType 必须是 markdown/code/text 之一",
+      };
+    }
+    if (obj.content !== undefined && typeof obj.content !== "string") {
+      return { ok: false, error: "frame 的 content 必须是字符串（内容文本）" };
+    }
+    if (obj.contentType !== undefined && obj.content === undefined) {
+      return { ok: false, error: "frame 声明 contentType 时必须同时提供 content" };
+    }
+    if (obj.autoSize !== undefined && typeof obj.autoSize !== "boolean") {
+      return { ok: false, error: "frame 的 autoSize 必须是布尔值" };
+    }
+    if (obj.constrain !== undefined && typeof obj.constrain !== "boolean") {
+      return { ok: false, error: "frame 的 constrain 必须是布尔值" };
+    }
+    if (obj.name !== undefined && typeof obj.name !== "string") {
+      return { ok: false, error: "frame 的 name 必须是字符串" };
+    }
+    if (obj.contentType !== undefined) data.contentType = obj.contentType as "markdown" | "code" | "text";
+    if (obj.content !== undefined) data.content = obj.content as string;
+    if (obj.autoSize !== undefined) data.autoSize = obj.autoSize as boolean;
+    if (obj.constrain !== undefined) data.constrain = obj.constrain as boolean;
+    if (obj.name !== undefined) data.name = obj.name as string;
   }
   return { ok: true, data };
 }

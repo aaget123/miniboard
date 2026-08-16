@@ -12,7 +12,10 @@ export type ContextMenuAction =
   | "toFront"
   | "toBack"
   | "lock"
-  | "unlock";
+  | "unlock"
+  | "toFrame"
+  | "toRect"
+  | "toggleFrameConstrain";
 
 export type ContextMenuState = {
   hasSelection: boolean;
@@ -22,6 +25,12 @@ export type ContextMenuState = {
   hasFreehand: boolean;
   /** 选中含可手绘化的标准图形（✎ 手绘项显隐） */
   hasSketchable: boolean;
+  /** 单选未锁定矩形（📦 转为框架项显隐） */
+  canToFrame: boolean;
+  /** 单选未锁定框架（↩ 转为矩形 / 内容约束项显隐） */
+  canToRect: boolean;
+  /** 单选框架的内容约束是否开启（内容约束项动态文案） */
+  frameConstrainOn: boolean;
 };
 
 type MenuItem = {
@@ -103,6 +112,25 @@ const ITEMS: MenuItem[] = [
     label: "解锁",
     shortcut: "",
     enabled: (s) => s.hasSelection && s.anyLocked,
+  },
+  { divider: true, enabled: (s) => s.canToFrame || s.canToRect },
+  {
+    action: "toFrame",
+    label: "转为框架",
+    icon: "frame",
+    enabled: (s) => s.canToFrame,
+  },
+  {
+    action: "toRect",
+    label: "转为矩形",
+    icon: "rect",
+    enabled: (s) => s.canToRect,
+  },
+  {
+    action: "toggleFrameConstrain",
+    label: "开启内容约束",
+    icon: "sliders",
+    enabled: (s) => s.canToRect,
   },
 ];
 
@@ -199,9 +227,24 @@ export class ContextMenu {
       }
       if (item.action === "unlock" || item.action === "lock") {
         el.style.display = (item.action === "lock") === showLock ? "" : "none";
-      } else if (item.action === "beautify" || item.action === "sketchify") {
-        // 整理/手绘：无资格时隐藏（与左侧选中栏显隐语义一致）
+      } else if (
+        item.action === "beautify" ||
+        item.action === "sketchify" ||
+        item.action === "toFrame" ||
+        item.action === "toRect" ||
+        item.action === "toggleFrameConstrain"
+      ) {
+        // 整理/手绘/框架操作：无资格时隐藏（与左侧选中栏显隐语义一致）
         el.style.display = item.enabled(state) ? "" : "none";
+        // 内容约束项动态文案：跟随框架当前开关状态
+        if (item.action === "toggleFrameConstrain") {
+          const labelEl = el.querySelector(".ctx-label");
+          if (labelEl) {
+            labelEl.textContent = state.frameConstrainOn
+              ? "关闭内容约束"
+              : "开启内容约束";
+          }
+        }
         continue;
       }
       el.classList.toggle("disabled", !item.enabled(state));
