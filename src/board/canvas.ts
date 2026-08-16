@@ -20,6 +20,21 @@ import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
 import { translatePath } from "./path";
 import { offsetElementData } from "./offset";
+import {
+  alignElements,
+  distributeElements,
+  expandGroupMembers,
+  flipElements,
+  reorderElements,
+} from "./arrange";
+import type {
+  AlignMode,
+  ArrangeAction,
+  DistributeMode,
+  FlipAxis,
+  ReorderMode,
+} from "./arrange";
+import { unionBounds } from "./bounds";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, sketchifyData } from "./rough";
@@ -360,8 +375,14 @@ export type SelectionInfo = {
   hasImage: boolean;
   anyLocked: boolean;
   allLocked: boolean;
+  /** 选中元素是否含组成员（取消成组按钮显隐） */
+  hasGroup: boolean;
   /** 单选未锁定文字时的字号（字号控件跟随） */
   fontSize?: number;
+  /** 单选未锁定元素的不透明度（透明度滑条跟随；undefined = 不透明） */
+  opacity?: number;
+  /** 单选未锁定 rect 的圆角半径（圆角滑条跟随） */
+  cornerRadius?: number;
 };
 
 export class Board {
@@ -476,9 +497,26 @@ export class Board {
     app.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
 
     this.editor.on(EditorMoveEvent.MOVE, (e) => {
+      const ev = e as EditorMoveEvent;
       // 网格吸附：单选拖动时位置对齐网格（多选保持相对位置不吸附）
       const moved = (e as { operateEvent?: { target?: unknown } }).operateEvent
         ?.target as UI | undefined;
+      // 组联动：同组未选中成员跟随本次位移（选中成员已由编辑器移动；
+      // moveX/moveY 为 world 增量，缩放视图下位移一致；锁定成员不跟随）
+      const gid = moved
+        ? (moved as unknown as { __groupId?: string }).__groupId
+        : undefined;
+      if (moved && gid && (ev.moveX || ev.moveY)) {
+        for (const other of this.app.tree.children as UI[]) {
+          if (other === moved || other.locked) {
+            continue;
+          }
+          if ((other as unknown as { __groupId?: string }).__groupId === gid) {
+            other.moveWorld(ev.moveX, ev.moveY);
+            this.normalizeContractEl(other);
+          }
+        }
+      }
       if (
         this.grid.snap &&
         moved &&
@@ -510,11 +548,15 @@ export class Board {
       let hasSketchable = false;
       let hasImage = false;
       let anyLocked = false;
+      let hasGroup = false;
       const texts: Text[] = [];
       for (const el of list) {
         const id = this.aiIdOf(el);
         if (id) {
           ids.push(id);
+        }
+        if ((el as unknown as { __groupId?: string }).__groupId) {
+          hasGroup = true;
         }
         const t = typeOf(el);
         types.push(t);
@@ -540,6 +582,16 @@ export class Board {
         texts.length === 1 && list.length === 1
           ? (texts[0].fontSize ?? TEXT_FONT_SIZE)
           : undefined;
+      // 单选未锁定元素：不透明度/圆角供样式浮层滑条跟随（多选时值混杂不给）
+      let opacity: number | undefined;
+      let cornerRadius: number | undefined;
+      if (list.length === 1 && !list[0].locked) {
+        const single = list[0];
+        opacity = numOf(single.opacity);
+        if (typeOf(single) === "rect") {
+          cornerRadius = numOf((single as Rect).cornerRadius);
+        }
+      }
       this.opts.onSelectionChange?.({
         ids,
         types,
@@ -549,7 +601,10 @@ export class Board {
         hasImage,
         anyLocked,
         allLocked: list.length > 0 && anyLocked,
+        hasGroup,
         fontSize,
+        opacity,
+        cornerRadius,
       });
     });
     // 文本内联编辑关闭：空文本即删；内容变化才入历史（对齐 fabric object:modified 时机）
@@ -1652,14 +1707,35 @@ export class Board {
     return false;
   }
 
-  /** 开始手动拖动整个选择（tree 局部坐标，锁定元素不参与） */
+  /** 开始手动拖动整个选择（tree 局部坐标；组感知：选中含组成员时整组跟随，锁定元素不参与） */
   private beginDragSelection(tx: number, ty: number) {
     this.selectDragging = true;
     this.dragStart = { x: tx, y: ty };
-    this.dragEls = this.selectedList
+    this.dragEls = this.groupExpandedSelection()
       .filter((el) => !el.locked)
       .map((el) => ({ el, x: el.x ?? 0, y: el.y ?? 0 }));
     this.movedAny = false;
+  }
+
+  /** 选中集合的组感知展开：选中含组成员时返回整组（拖拽联动用），否则原样返回 */
+  private groupExpandedSelection(): UI[] {
+    const list = this.selectedList;
+    const gids = new Set(
+      list
+        .map((el) => (el as unknown as { __groupId?: string }).__groupId)
+        .filter((g): g is string => !!g),
+    );
+    if (!gids.size) {
+      return [...list];
+    }
+    const picked = new Set<UI>(list);
+    for (const el of this.app.tree.children as UI[]) {
+      const g = (el as unknown as { __groupId?: string }).__groupId;
+      if (g !== undefined && gids.has(g)) {
+        picked.add(el);
+      }
+    }
+    return [...picked];
   }
 
   // ================= 样式应用 =================
@@ -1673,6 +1749,7 @@ export class Board {
    * - Line：无填充概念，填充通道与填充开关不影响
    * - Path（含 AI 生成的三角形/五角星等闭合形状）：可填充，填充开关/填充色生效
    * - 填充色独立于描边色：填充通道点击自动开启填充
+   * - P3：strokeDash/opacity/cornerRadius 透传到 leafer（dashPattern/opacity/cornerRadius）
    */
   applyStyleToSelection(partial: Partial<BoardStyle>): boolean {
     const list = this.selectedList.filter((el) => !el.locked);
@@ -1718,6 +1795,21 @@ export class Board {
       }
       if (partial.fontSize !== undefined && el instanceof Text) {
         el.fontSize = partial.fontSize;
+      }
+      // P3 样式扩展：线型/透明度/圆角（图片跳过圆角——内部填充为图像数据）
+      if (partial.strokeDash !== undefined) {
+        (el as unknown as { dashPattern?: number[] }).dashPattern =
+          partial.strokeDash;
+      }
+      if (partial.opacity !== undefined) {
+        el.opacity = partial.opacity;
+      }
+      if (
+        partial.cornerRadius !== undefined &&
+        el instanceof Rect &&
+        !(el instanceof Image)
+      ) {
+        el.cornerRadius = partial.cornerRadius;
       }
       if (partial.fillEnabled !== undefined) {
         if (el instanceof Text || el instanceof Line) {
@@ -1932,6 +2024,8 @@ export class Board {
       const el = this.dataToElement({
         ...offsetElementData(d, dx, dy),
         id: undefined,
+        // 副本不继承组关系，避免与原组联动
+        groupId: undefined,
       });
       if (el) {
         this.app.tree.add(el);
@@ -1993,13 +2087,278 @@ export class Board {
   }
 
   toFront() {
-    this.editor.toTop();
-    this.commitHistory();
+    this.reorderSelection("front");
   }
 
   toBack() {
-    this.editor.toBottom();
+    this.reorderSelection("back");
+  }
+
+  /** 上移一层：与相邻非选中元素交换（块整体移动，保持组内相对顺序） */
+  bringForward() {
+    this.reorderSelection("forward");
+  }
+
+  /** 下移一层：与相邻非选中元素交换 */
+  sendBackward() {
+    this.reorderSelection("backward");
+  }
+
+  /**
+   * 层序重排通用管线：序列化 → 锁定过滤 + 组归一化 → reorderElements →
+   * 全量重建 → 恢复选中 → 前后快照合并。顺序无变化时（已在目标层）不重建不写历史。
+   */
+  private reorderSelection(mode: ReorderMode) {
+    const before = this.serialize();
+    const selIds = this.selectedUnlockedIds();
+    if (!selIds.length) {
+      return;
+    }
+    const ids = expandGroupMembers(before, selIds);
+    const next = reorderElements(before, [...ids], (d) => d.id ?? "", mode);
+    if (next.every((d, i) => d === before[i])) {
+      return;
+    }
+    this.loadElements(next);
+    this.restoreSelectionByIds([...ids]);
+    this.pushSnapshot(before);
+    this.pushSnapshot(next);
+  }
+
+  // ================= 排列（对齐/分布/翻转，SelectionBar 与 AI 工具共用） =================
+
+  /** 对齐选中：以选区 AABB 为基准（left/centerX/right/top/centerY/bottom），返回是否执行 */
+  alignSelection(mode: AlignMode): boolean {
+    return this.applyArrange((targets) => alignElements(targets, mode), 2);
+  }
+
+  /** 分布选中：按中心排序首尾保持、中间均分（horizontal/vertical），少于 3 个不执行 */
+  distributeSelection(mode: DistributeMode): boolean {
+    return this.applyArrange((targets) => distributeElements(targets, mode), 3);
+  }
+
+  /** 翻转选中：绕选区 AABB 中心镜像（h 水平 / v 垂直），单元素也可执行 */
+  flipSelection(axis: FlipAxis): boolean {
+    return this.applyArrange((targets) => {
+      const b = unionBounds(targets);
+      return flipElements(
+        targets,
+        axis,
+        (b.minX + b.maxX) / 2,
+        (b.minY + b.maxY) / 2,
+      );
+    }, 1);
+  }
+
+  /**
+   * 批量几何变换通用管线：序列化 → 锁定过滤 + 组归一化 → 纯函数变换 →
+   * 全量重建 → 恢复选中（含组）→ 前后快照合并为一步撤销。
+   * 返回是否实际执行（无可用选中或目标数量不足返回 false）。
+   */
+  private applyArrange(
+    fn: (targets: ElementData[]) => ElementData[],
+    minCount: number,
+  ): boolean {
+    const before = this.serialize();
+    const selIds = this.selectedUnlockedIds();
+    if (!selIds.length) {
+      return false;
+    }
+    const ids = expandGroupMembers(before, selIds);
+    const targets = before.filter((d) => ids.has(d.id ?? ""));
+    if (targets.length < minCount) {
+      return false;
+    }
+    const changed = fn(targets);
+    const byId = new Map(changed.map((d) => [d.id, d]));
+    const next = before.map((d) => byId.get(d.id) ?? d);
+    this.loadElements(next);
+    this.restoreSelectionByIds([...ids]);
+    this.pushSnapshot(before);
+    this.pushSnapshot(next);
+    return true;
+  }
+
+  /**
+   * AI 编排入口：按 id 列表执行排列操作（对齐/分布/翻转/层序），与 UI 路径共用
+   * arrange.ts 纯函数。锁定元素跳过；组内任一成员命中则整组参与；目标不足或
+   * 已在目标层（无实际变化）时不重建不写历史。不做选中恢复（AI 操作与当前选区无关）。
+   * 返回 { done: 实际参与（含组展开）的元素数, skipped: 跳过的锁定元素数 }。
+   */
+  arrangeByIds(
+    ids: string[],
+    action: ArrangeAction,
+  ): { done: number; skipped: number } {
+    const before = this.serialize();
+    const byId = new Map(before.map((d) => [d.id, d]));
+    const found = ids.filter((id) => byId.has(id));
+    const skipped = found.filter((id) => byId.get(id)?.locked).length;
+    const selIds = found.filter((id) => !byId.get(id)?.locked);
+    if (!selIds.length) {
+      return { done: 0, skipped };
+    }
+    const members = expandGroupMembers(before, selIds);
+    const targets = before.filter((d) => members.has(d.id ?? ""));
+    let next: ElementData[];
+    if (
+      action === "front" ||
+      action === "back" ||
+      action === "forward" ||
+      action === "backward"
+    ) {
+      // 层序作用于全列表（组内成员必须保持相对顺序），其余动作只作用于目标元素
+      next = reorderElements(before, [...members], (d) => d.id ?? "", action);
+    } else {
+      const changed = this.arrangeFn(action)(targets);
+      const changedById = new Map(changed.map((d) => [d.id, d]));
+      next = before.map((d) => changedById.get(d.id) ?? d);
+    }
+    if (next.every((d, i) => d === before[i])) {
+      return { done: 0, skipped };
+    }
+    this.loadElements(next);
+    this.pushSnapshot(before);
+    this.pushSnapshot(next);
+    return { done: members.size, skipped };
+  }
+
+  /** ArrangeAction → 纯函数变换（对齐/分布/翻转；层序走 reorderElements 分支） */
+  private arrangeFn(action: ArrangeAction): (els: ElementData[]) => ElementData[] {
+    switch (action) {
+      case "align-left":
+        return (els) => alignElements(els, "left");
+      case "align-centerX":
+        return (els) => alignElements(els, "centerX");
+      case "align-right":
+        return (els) => alignElements(els, "right");
+      case "align-top":
+        return (els) => alignElements(els, "top");
+      case "align-centerY":
+        return (els) => alignElements(els, "centerY");
+      case "align-bottom":
+        return (els) => alignElements(els, "bottom");
+      case "distribute-h":
+        return (els) => distributeElements(els, "horizontal");
+      case "distribute-v":
+        return (els) => distributeElements(els, "vertical");
+      case "flip-h":
+      case "flip-v":
+        return (els) => {
+          const b = unionBounds(els);
+          const axis = action === "flip-h" ? "h" : "v";
+          return flipElements(
+            els,
+            axis,
+            (b.minX + b.maxX) / 2,
+            (b.minY + b.maxY) / 2,
+          );
+        };
+      default:
+        // 层序（front/back/forward/backward）不经过此分支
+        return (els) => els;
+    }
+  }
+
+  /** 当前选中中可操作（未锁定、非编辑器内部）元素的稳定 id */
+  private selectedUnlockedIds(): string[] {
+    return this.selectedList
+      .filter((el) => !el.locked && !this.isEditorInternal(el))
+      .map((el) => this.aiIdOf(el));
+  }
+
+  /** 按稳定 id 恢复选中（对齐/分布/翻转/层序后保持连续操作上下文） */
+  private restoreSelectionByIds(ids: string[]) {
+    const restored = (this.app.tree.children as UI[]).filter((el) => {
+      const id = (el as unknown as { __aiId?: string }).__aiId;
+      return !!id && ids.includes(id);
+    });
+    if (restored.length === 1) {
+      this.editor.target = restored[0];
+    } else if (restored.length > 1) {
+      this.editor.select(restored);
+    }
+  }
+
+  /** 重复选中元素：整体偏移 (12, 12) 并自动选中副本（Ctrl+D） */
+  duplicateSelected(): boolean {
+    const list = this.selectedList;
+    const data = list
+      .map((el) => this.elementToData(el))
+      .filter((d): d is ElementData => d !== null);
+    if (!data.length) {
+      return false;
+    }
+    const pasted: UI[] = [];
+    for (const d of data) {
+      const el = this.dataToElement({
+        ...offsetElementData(d, 12, 12),
+        id: undefined,
+        // 副本不继承组关系，避免与原组联动
+        groupId: undefined,
+      });
+      if (el) {
+        this.app.tree.add(el);
+        pasted.push(el);
+      }
+    }
+    if (pasted.length) {
+      this.editor.target = pasted.length === 1 ? pasted[0] : pasted;
+      this.commitHistory();
+      return true;
+    }
+    return false;
+  }
+
+  // ================= 成组 / 取消成组 =================
+
+  /**
+   * 成组：给选中元素分配同一 groupId（选中已含组成员时并入其组）。
+   * 组内元素对齐/分布/翻转/层序/删除按整组参与；锁定元素不参与成组。
+   */
+  groupSelected(): boolean {
+    const list = this.selectedList.filter(
+      (el) => !el.locked && !this.isEditorInternal(el),
+    );
+    if (list.length < 2) {
+      return false;
+    }
+    const existing = list
+      .map((el) => (el as unknown as { __groupId?: string }).__groupId)
+      .find(Boolean);
+    const gid = existing ?? this.newGroupId();
+    for (const el of list) {
+      (el as unknown as { __groupId?: string }).__groupId = gid;
+    }
     this.commitHistory();
+    return true;
+  }
+
+  /** 取消成组：解散选中元素所属的组（组内任一成员被选中即整组解散） */
+  ungroupSelected(): boolean {
+    const list = this.selectedList.filter(
+      (el) => !el.locked && !this.isEditorInternal(el),
+    );
+    const gids = new Set(
+      list
+        .map((el) => (el as unknown as { __groupId?: string }).__groupId)
+        .filter((g): g is string => !!g),
+    );
+    if (!gids.size) {
+      return false;
+    }
+    for (const el of this.app.tree.children as UI[]) {
+      const g = (el as unknown as { __groupId?: string }).__groupId;
+      if (g && gids.has(g)) {
+        (el as unknown as { __groupId?: string }).__groupId = undefined;
+      }
+    }
+    this.commitHistory();
+    return true;
+  }
+
+  /** 生成会话内唯一的组 id（随机后缀避免跨文件导入冲突） */
+  private newGroupId(): string {
+    return `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   lock() {
@@ -2179,9 +2538,25 @@ export class Board {
   deleteSelected() {
     const list = (this.editor as unknown as { list: UI[] }).list ?? [];
     // 锁定元素受保护，不可删除
-    const targets = list.filter((el) => !el.locked);
+    let targets = list.filter((el) => !el.locked);
     if (!targets.length) {
       return;
+    }
+    // 组感知：组内任一成员被删除时整组删除（锁定成员仍受保护）
+    const gids = new Set(
+      targets
+        .map((el) => (el as unknown as { __groupId?: string }).__groupId)
+        .filter((g): g is string => !!g),
+    );
+    if (gids.size) {
+      const all = this.app.tree.children as UI[];
+      targets = all.filter((el) => {
+        if (el.locked) {
+          return false;
+        }
+        const g = (el as unknown as { __groupId?: string }).__groupId;
+        return targets.includes(el) || (g !== undefined && gids.has(g));
+      });
     }
     targets.forEach((el) => el.remove());
     this.editor.cancel();
@@ -2272,6 +2647,16 @@ export class Board {
     }
     if (patch.path !== undefined && el instanceof Path) {
       el.path = patch.path;
+    }
+    if (patch.strokeDash !== undefined) {
+      (el as unknown as { dashPattern?: number[] }).dashPattern =
+        patch.strokeDash;
+    }
+    if (patch.opacity !== undefined) {
+      el.opacity = patch.opacity;
+    }
+    if (patch.cornerRadius !== undefined) {
+      el.cornerRadius = patch.cornerRadius;
     }
     this.opts.onMutated();
     return true;
@@ -2592,6 +2977,9 @@ export class Board {
       stroke: colorOf(el.stroke),
       strokeWidth: numOf(el.strokeWidth),
       locked: el.locked || undefined,
+      groupId: (el as unknown as { __groupId?: string }).__groupId,
+      strokeDash: (el as unknown as { dashPattern?: number[] }).dashPattern,
+      opacity: numOf(el.opacity) || undefined,
       intent: (el as unknown as { __intent?: string }).__intent,
     };
     // 注意：Image 继承自 Rect，必须先于 Rect 判断
@@ -2611,6 +2999,7 @@ export class Board {
         width: el.width ?? 0,
         height: el.height ?? 0,
         fill: colorOf(el.fill),
+        cornerRadius: numOf(el.cornerRadius) || undefined,
       };
     }
     if (el instanceof Ellipse) {
@@ -2713,6 +3102,10 @@ export class Board {
       // 恢复/导入时把文件里的 id 写回实例缓存，保证 id 稳定
       (el as unknown as { __aiId?: string }).__aiId = d.id;
     }
+    if (el && d.groupId) {
+      // 分组关系透传到实例（对齐/分布/层序/删除的组感知依赖实例缓存）
+      (el as unknown as { __groupId?: string }).__groupId = d.groupId;
+    }
     if (el && d.intent) {
       // AI 创建时自报的创建意图：透传到实例，序列化/恢复后不丢
       (el as unknown as { __intent?: string }).__intent = d.intent;
@@ -2728,6 +3121,9 @@ export class Board {
       stroke: d.stroke,
       strokeWidth: d.strokeWidth,
       locked: d.locked || undefined,
+      dashPattern: d.strokeDash,
+      opacity: d.opacity,
+      cornerRadius: d.cornerRadius,
     };
     const fill = d.fill === "none" ? undefined : d.fill;
     switch (d.type) {

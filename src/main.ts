@@ -289,6 +289,46 @@ async function main() {
       // 仅对选中文字即时生效（新文字字号固定默认值，不进默认样式）
       board.applyStyleToSelection({ fontSize: size });
     },
+    // ---- P3 样式扩展：线型/透明度/圆角（仅作用于选中，不进默认样式） ----
+    onStrokeDashChange: (dash) => {
+      board.applyStyleToSelection({ strokeDash: dash });
+    },
+    onOpacityChange: (opacity) => {
+      board.applyStyleToSelection({ opacity });
+    },
+    onCornerRadiusChange: (radius) => {
+      board.applyStyleToSelection({ cornerRadius: radius });
+    },
+    // ---- 排列面板：对齐/分布/翻转/层序/成组（Board 内部合并快照） ----
+    onAlign: (mode) => board.alignSelection(mode),
+    onDistribute: (mode) => board.distributeSelection(mode),
+    onFlip: (axis) => board.flipSelection(axis),
+    onReorder: (mode) => {
+      switch (mode) {
+        case "front":
+          board.toFront();
+          break;
+        case "back":
+          board.toBack();
+          break;
+        case "forward":
+          board.bringForward();
+          break;
+        case "backward":
+          board.sendBackward();
+          break;
+      }
+    },
+    onGroup: () => {
+      if (!board.groupSelected()) {
+        toast("至少选中 2 个未锁定元素才能成组");
+      }
+    },
+    onUngroup: () => {
+      if (!board.ungroupSelected()) {
+        toast("选中元素不在任何组中");
+      }
+    },
     onCrop: () => {
       const ok = board.startCrop();
       if (!ok) {
@@ -472,6 +512,11 @@ async function main() {
     paste: () => board.paste(),
     selectAll: () => board.selectAll(),
     delete: () => board.deleteSelected(),
+    duplicate: () => {
+      if (!board.duplicateSelected()) {
+        toast("没有可重复的元素（先选中）");
+      }
+    },
     escape: () => {
       // 逐层退出：点编辑 → 图片裁剪 → 编辑框取消 → 悬浮浮层全部收起
       closeAllFloating();

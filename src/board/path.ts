@@ -77,3 +77,87 @@ export function translatePath(path: string, dx: number, dy: number): string {
   }
   return out.trim();
 }
+
+/**
+ * 镜像 SVG path 字符串：绕 axis 轴的 center 处翻转坐标——h（水平翻转）时 x → 2*center - x，
+ * v（垂直翻转）时 y → 2*center - y。A 命令的 rx/ry 不变、rotation 取负、sweep 标志翻转
+ * （镜像反转弧的扫描方向）；相对命令（小写）原样保留（数据契约保证绝对坐标）。
+ * path 为空时原样返回。
+ */
+export function mirrorPath(
+  path: string,
+  axis: "h" | "v",
+  center: number,
+): string {
+  if (!path) {
+    return path;
+  }
+  // 拆成 [命令, 后续数值] 片段
+  const cmds: { idx: number; cmd: string }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = CMD_RE.exec(path)) !== null) {
+    cmds.push({ idx: m.index, cmd: m[0] });
+  }
+  if (!cmds.length) {
+    return path;
+  }
+  let out = "";
+  for (let i = 0; i < cmds.length; i++) {
+    const { idx, cmd } = cmds[i];
+    const end = i + 1 < cmds.length ? cmds[i + 1].idx : path.length;
+    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
+      parseFloat(n[0]),
+    );
+    out += cmd + " ";
+    const upper = cmd.toUpperCase();
+    const isAbs = cmd === upper;
+    const mirrorX = isAbs && axis === "h";
+    const mirrorY = isAbs && axis === "v";
+    let k = 0;
+    while (k < nums.length) {
+      let per = 2;
+      if (upper === "A") {
+        per = 7;
+      } else if (upper === "H" || upper === "V") {
+        per = 1;
+      } else if (upper === "C") {
+        per = 6;
+      } else if (upper === "S" || upper === "Q" || upper === "T") {
+        per = 4;
+      }
+      const group = nums.slice(k, k + per);
+      if (upper === "A") {
+        // rx ry rotation large-arc sweep 不参与镜像（sweep 翻转），仅末尾 x/y 镜像
+        const [rx, ry, rot, laf, sf, x, y] = group;
+        out += [
+          rx,
+          ry,
+          -rot,
+          laf,
+          sf === 1 ? 0 : 1,
+          mirrorX ? 2 * center - x : x,
+          mirrorY ? 2 * center - y : y,
+        ]
+          .map(fmt)
+          .join(" ");
+      } else if (per === 1) {
+        // H 只有 x 坐标、V 只有 y 坐标：仅对应轴的镜像生效，另一轴原样保留
+        const v = group[0];
+        out += fmt(
+          (upper === "H" ? mirrorX : mirrorY) ? 2 * center - v : v,
+        );
+      } else {
+        for (let j = 0; j < group.length; j += 2) {
+          out +=
+            (j ? " " : "") +
+            fmt(mirrorX ? 2 * center - group[j] : group[j]);
+          out +=
+            " " + fmt(mirrorY ? 2 * center - group[j + 1] : group[j + 1]);
+        }
+      }
+      k += per;
+    }
+    out += " ";
+  }
+  return out.trim();
+}

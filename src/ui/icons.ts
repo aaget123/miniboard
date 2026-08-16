@@ -46,7 +46,31 @@ export type IconName =
   | "monitor"
   | "download"
   | "caret"
-  | "grip";
+  | "grip"
+  // 排列面板（对齐/分布/翻转/层序/成组）
+  | "align"
+  | "alignLeft"
+  | "alignCenterH"
+  | "alignRight"
+  | "alignTop"
+  | "alignCenterV"
+  | "alignBottom"
+  | "distributeH"
+  | "distributeV"
+  | "flipH"
+  | "flipV"
+  | "front"
+  | "back"
+  | "forward"
+  | "backward"
+  | "group"
+  | "ungroup"
+  // 样式扩展（线型/透明度/圆角）
+  | "solidLine"
+  | "dash"
+  | "dottedLine"
+  | "opacity"
+  | "cornerRadius";
 
 type IconDef = {
   /** 内部元素（path/circle/rect 等），stroke 风格统一由外层 svg 属性控制 */
@@ -143,6 +167,119 @@ const DEFS: Record<IconName, IconDef> = {
       `<circle cx="15" cy="12" r="1.4" fill="currentColor" stroke="none"/>` +
       `<circle cx="9" cy="18" r="1.4" fill="currentColor" stroke="none"/>` +
       `<circle cx="15" cy="18" r="1.4" fill="currentColor" stroke="none"/>`,
+  },
+
+  // ---- 排列面板 ----
+  // 入口按钮：两侧方块 + 中线（lucide align-vertical-justify-center）
+  align: {
+    body:
+      `<rect width="14" height="6" x="5" y="16" rx="2"/>` +
+      `<rect width="10" height="6" x="7" y="2" rx="2"/>` +
+      `<path d="M2 12h20"/>`,
+  },
+  alignLeft: { body: `<path d="M21 5H3"/><path d="M15 12H3"/><path d="M17 19H3"/>` },
+  alignCenterH: {
+    body:
+      `<path d="M2 12h20"/>` +
+      `<path d="M10 16v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4"/>` +
+      `<path d="M10 8V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v4"/>` +
+      `<path d="M20 16v1a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-1"/>` +
+      `<path d="M14 8V7c0-1.1.9-2 2-2h2a2 2 0 0 1 2 2v1"/>`,
+  },
+  alignRight: { body: `<path d="M21 5H3"/><path d="M21 12H9"/><path d="M21 19H7"/>` },
+  alignTop: {
+    body:
+      `<rect width="9" height="6" x="6" y="14" rx="2"/>` +
+      `<rect width="16" height="6" x="6" y="4" rx="2"/>` +
+      `<path d="M2 2v20"/>`,
+  },
+  alignCenterV: {
+    body:
+      `<path d="M12 2v20"/>` +
+      `<path d="M8 10H4a2 2 0 0 1-2-2V6c0-1.1.9-2 2-2h4"/>` +
+      `<path d="M16 10h4a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-4"/>` +
+      `<path d="M8 20H7a2 2 0 0 1-2-2v-2c0-1.1.9-2 2-2h1"/>` +
+      `<path d="M16 14h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-1"/>`,
+  },
+  alignBottom: {
+    body:
+      `<rect width="16" height="6" x="2" y="4" rx="2"/>` +
+      `<rect width="9" height="6" x="9" y="14" rx="2"/>` +
+      `<path d="M22 22V2"/>`,
+  },
+  distributeH: {
+    body:
+      `<rect width="6" height="14" x="4" y="5" rx="2"/>` +
+      `<rect width="6" height="10" x="14" y="7" rx="2"/>` +
+      `<path d="M17 22v-5"/><path d="M17 7V2"/>` +
+      `<path d="M7 22v-3"/><path d="M7 5V2"/>`,
+  },
+  distributeV: {
+    body:
+      `<path d="M22 17h-3"/><path d="M22 7h-5"/>` +
+      `<path d="M5 17H2"/><path d="M7 7H2"/>` +
+      `<rect x="5" y="14" width="14" height="6" rx="2"/>` +
+      `<rect x="7" y="4" width="10" height="6" rx="2"/>`,
+  },
+  flipH: {
+    body:
+      `<path d="m3 7 5 5-5 5V7"/><path d="m21 7-5 5 5 5V7"/>` +
+      `<path d="M12 20v2"/><path d="M12 14v2"/>` +
+      `<path d="M12 8v2"/><path d="M12 2v2"/>`,
+  },
+  flipV: {
+    body:
+      `<path d="m17 3-5 5-5-5h10"/><path d="m17 21-5-5-5 5h10"/>` +
+      `<path d="M4 12H2"/><path d="M10 12H8"/>` +
+      `<path d="M16 12h-2"/><path d="M22 12h-2"/>`,
+  },
+  front: {
+    body:
+      `<rect x="8" y="8" width="8" height="8" rx="2"/>` +
+      `<path d="M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2"/>` +
+      `<path d="M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2"/>`,
+  },
+  back: {
+    body:
+      `<rect x="14" y="14" width="8" height="8" rx="2"/>` +
+      `<rect x="2" y="2" width="8" height="8" rx="2"/>` +
+      `<path d="M7 14v1a2 2 0 0 0 2 2h1"/>` +
+      `<path d="M14 7h1a2 2 0 0 1 2 2v1"/>`,
+  },
+  forward: { body: `<path d="M8 6L12 2L16 6"/><path d="M12 2V22"/>` },
+  backward: { body: `<path d="M8 18L12 22L16 18"/><path d="M12 2V22"/>` },
+  // 成组/取消成组：方块组合语义（lucide combine / 对称分离箭头）
+  group: {
+    body:
+      `<path d="M14 3a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"/>` +
+      `<path d="M19 3a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1"/>` +
+      `<path d="m7 15 3 3"/><path d="m7 21 3-3H5a2 2 0 0 1-2-2v-2"/>` +
+      `<rect x="14" y="14" width="7" height="7" rx="1"/>` +
+      `<rect x="3" y="3" width="7" height="7" rx="1"/>`,
+  },
+  ungroup: {
+    body:
+      `<rect x="3" y="3" width="7" height="7" rx="1"/>` +
+      `<rect x="14" y="14" width="7" height="7" rx="1"/>` +
+      `<path d="m17 7-3 3"/>` +
+      `<path d="m17 3-3 3h5a2 2 0 0 1 2 2v2"/>`,
+  },
+
+  // ---- 样式扩展 ----
+  // 线型：实线（lucide minus）/虚线（自绘三短线）/点线（自绘三点），与 minus 同风格
+  solidLine: { body: `<path d="M4 12h16"/>` },
+  dash: { body: `<path d="M4 12h3"/><path d="M10.5 12h3"/><path d="M17 12h3"/>` },
+  dottedLine: {
+    body:
+      `<circle cx="5" cy="12" r="1.5" fill="currentColor" stroke="none"/>` +
+      `<circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>` +
+      `<circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/>`,
+  },
+  opacity: { body: `<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>` },
+  cornerRadius: {
+    body:
+      `<path d="M21 11a8 8 0 0 0-8-8"/>` +
+      `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>`,
   },
 };
 

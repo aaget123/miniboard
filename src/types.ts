@@ -24,6 +24,12 @@ export type BoardStyle = {
   fillColor: string;
   /** 文字字号（仅选中文字时生效，不作为新文字默认值） */
   fontSize?: number;
+  /** 描边虚线（undefined = 实线；仅作用于选中，不进默认样式） */
+  strokeDash?: number[];
+  /** 不透明度 0~1（仅作用于选中） */
+  opacity?: number;
+  /** 圆角半径（仅 rect；仅作用于选中） */
+  cornerRadius?: number;
 };
 
 /**
@@ -128,6 +134,14 @@ export type ElementData = {
   bindStart?: string;
   bindEnd?: string;
   locked?: boolean; // 锁定后不可拖动/缩放/删除
+  /** 分组 id：同组元素成组移动/对齐/分布/翻转/层序（任一成员选中则整组参与） */
+  groupId?: string;
+  /** 描边虚线（leafer 渲染映射 dashPattern；undefined = 实线） */
+  strokeDash?: number[];
+  /** 整体不透明度 0~1（undefined = 不透明） */
+  opacity?: number;
+  /** 圆角半径（仅 rect；undefined = 直角） */
+  cornerRadius?: number;
   /** AI 创建时自报的创建意图（简短中文，说明为何创建此元素；仅 AI 创建的元素有） */
   intent?: string;
 };

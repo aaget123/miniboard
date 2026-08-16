@@ -5,6 +5,8 @@ import type { Toolbar } from "../ui/toolbar";
 import type { CustomToolInput, ElementData } from "../types";
 import { describeFreehandShape } from "../board/beautify";
 import { canvasToLocal, localToCanvas, round1 } from "../board/coords";
+import { elementBounds } from "../board/bounds";
+import type { ArrangeAction } from "../board/arrange";
 import type { AiMode, AiTool, AiToolExecution } from "./types";
 
 // ================= 画布感知（非多模态：把画布转成 JSON 给模型看） =================
@@ -97,59 +99,6 @@ export type CanvasRegion = {
   maxX: number;
   maxY: number;
 };
-
-/**
- * 元素的世界坐标 AABB（含 rotation 四角；line/arrow 取 points 绝对坐标端点）。
- * 区域过滤与网格索引共用；与 svg.ts 内容包围盒的几何口径一致。
- */
-function elementBounds(e: ElementData): {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-} {
-  if ((e.type === "line" || e.type === "arrow") && e.points?.length) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const p of e.points) {
-      const a = localToCanvas(e, p);
-      minX = Math.min(minX, a.x);
-      minY = Math.min(minY, a.y);
-      maxX = Math.max(maxX, a.x);
-      maxY = Math.max(maxY, a.y);
-    }
-    return { minX, minY, maxX, maxY };
-  }
-  const w = e.width ?? 0;
-  const h = e.height ?? 0;
-  const cx = w / 2;
-  const cy = h / 2;
-  const rad = ((e.rotation ?? 0) * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const [lx, ly] of [
-    [0, 0],
-    [w, 0],
-    [w, h],
-    [0, h],
-  ] as const) {
-    const dx = lx - cx;
-    const dy = ly - cy;
-    const px = e.x + dx * cos - dy * sin + cx;
-    const py = e.y + dx * sin + dy * cos + cy;
-    minX = Math.min(minX, px);
-    minY = Math.min(minY, py);
-    maxX = Math.max(maxX, px);
-    maxY = Math.max(maxY, py);
-  }
-  return { minX, minY, maxX, maxY };
-}
 
 /** 元素 AABB 是否与区域相交 */
 function inRegion(
@@ -382,6 +331,12 @@ export function describeCanvas(
       d.boundTo = [el.bindStart, el.bindEnd].filter(Boolean).join("、");
     }
     if (el.locked) d.locked = true;
+    // P3 样式扩展字段：不透明度/虚线/圆角（与 update_elements 白名单一致）
+    if (typeof el.opacity === "number") d.opacity = el.opacity;
+    if (el.strokeDash) d.strokeDash = el.strokeDash;
+    if (typeof el.cornerRadius === "number") d.cornerRadius = el.cornerRadius;
+    // 组标注：同组成员在排列/层序/删除操作中整组联动（AI 不可写 groupId）
+    if (el.groupId) d.groupId = el.groupId;
     // 意图：AI 创建时自报（为何创建此元素）；历史/用户元素无此字段
     if (el.intent) d.intent = el.intent;
     // 区域标签：元素中心在内容包围盒 3×3 均分中的位置，省去模型心算坐标差
@@ -398,6 +353,20 @@ export function describeCanvas(
     .map(([t, n]) => `${TYPE_LABELS[t] ?? t} ${n}`)
     .join("、");
   let summary = `画布共 ${full.length} 个元素：${typeDesc}。`;
+  // 分组信息：列出每组 id 列表（arrange_elements 会按组联动，模型无需自己推算）
+  const groups = new Map<string, string[]>();
+  for (const e of full) {
+    if (e.groupId) {
+      const list = groups.get(e.groupId) ?? [];
+      list.push(e.id ?? "?");
+      groups.set(e.groupId, list);
+    }
+  }
+  if (groups.size) {
+    summary += ` 分组：${[...groups.entries()]
+      .map(([g, list]) => `组 ${g}（${list.length} 个成员：${list.join("、")}）`)
+      .join("；")}。同组元素在排列/层序/删除操作中整组联动，元素数据里的 groupId 仅供识别、不可写入。`;
+  }
   if (ids?.length) {
     summary += `（本次返回其中 ${all.length} 个）`;
   } else if (region) {
@@ -738,6 +707,43 @@ function chatTools(): AiTool[] {
       mutating: true,
     },
     {
+      name: "arrange_elements",
+      description:
+        "批量排列画布元素（对齐/分布/翻转/层序）：一次调用对多个元素做几何整理，坐标计算由前端完成，不要自己心算坐标。动作：align-left/align-centerX/align-right/align-top/align-centerY/align-bottom 为对齐（以目标集合整体包围盒为基准，对齐需至少 2 个元素）；distribute-h/distribute-v 为均匀分布（需至少 3 个元素）；flip-h/flip-v 为翻转（绕集合中心镜像，单元素也可）；front/back/forward/backward 为层序（置顶/置底/上移/下移一层）。ids 为元素 id 列表（来自 get_canvas 或 @选区）；锁定元素自动跳过；同组成员整组参与（只传组内一个 id 即可）；目标不足或已在目标位置时自动跳过（无效果）。与 update_elements 的分工：改属性（颜色/文字/坐标等）用 update_elements，批量几何整理用 arrange_elements",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "要操作的元素 id 列表（对齐需 ≥2、分布需 ≥3 才有实际效果）",
+          },
+          action: {
+            type: "string",
+            enum: [
+              "align-left",
+              "align-centerX",
+              "align-right",
+              "align-top",
+              "align-centerY",
+              "align-bottom",
+              "distribute-h",
+              "distribute-v",
+              "flip-h",
+              "flip-v",
+              "front",
+              "back",
+              "forward",
+              "backward",
+            ],
+            description: "要执行的动作",
+          },
+        },
+        required: ["ids", "action"],
+      },
+      mutating: true,
+    },
+    {
       name: "create_elements",
       description:
         "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation；可选 intent（简短中文自报创建意图，如\"流程起点\"、\"标题\"——系统会保存并在 get_canvas 返回，供后续轮次理解你的设计意图）。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
@@ -862,6 +868,42 @@ export function toOpenAiTools(tools: AiTool[]) {
 }
 
 // ================= 工具执行器 =================
+
+/** arrange_elements 合法动作（与 arrange.ts 的 ArrangeAction 保持一致，供校验与错误提示） */
+const ARRANGE_ACTIONS: ArrangeAction[] = [
+  "align-left",
+  "align-centerX",
+  "align-right",
+  "align-top",
+  "align-centerY",
+  "align-bottom",
+  "distribute-h",
+  "distribute-v",
+  "flip-h",
+  "flip-v",
+  "front",
+  "back",
+  "forward",
+  "backward",
+];
+
+/** arrange_elements 动作的中文标签（结果汇报用） */
+const ACTION_LABELS: Record<string, string> = {
+  "align-left": "左对齐",
+  "align-centerX": "水平居中",
+  "align-right": "右对齐",
+  "align-top": "顶对齐",
+  "align-centerY": "垂直居中",
+  "align-bottom": "底对齐",
+  "distribute-h": "水平均匀分布",
+  "distribute-v": "垂直均匀分布",
+  "flip-h": "水平翻转",
+  "flip-v": "垂直翻转",
+  front: "置于顶层",
+  back: "置于底层",
+  forward: "上移一层",
+  backward: "下移一层",
+};
 
 /** read_image 工具返回图片的最长边（px）：压缩控制 token 与网络流量 */
 const IMAGE_READ_MAX_SIDE = 1024;
@@ -1234,6 +1276,10 @@ export async function executeTool(
         "fontSize",
         "points",
         "path",
+        // P3 样式扩展：线型/透明度/圆角（groupId 不可写——分组是结构操作）
+        "strokeDash",
+        "opacity",
+        "cornerRadius",
       ]);
       let ok = 0;
       let ignored = 0;
@@ -1265,6 +1311,57 @@ export async function executeTool(
           ? `已更新 ${ok} 个元素；失败 ${failed.length} 个：${failed.join("、")}（不存在或已锁定）${ignored ? `；${ignored} 个字段不在白名单，已忽略` : ""}`
           : `已更新 ${ok} 个元素${ignored ? `（${ignored} 个字段不在白名单，已忽略）` : ""}`,
         changed: ok > 0,
+      };
+    }
+
+    case "arrange_elements": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：arrange_elements 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const ids = Array.isArray(args.ids)
+        ? args.ids.filter((s): s is string => typeof s === "string")
+        : [];
+      const action = typeof args.action === "string" ? args.action : "";
+      if (!(ARRANGE_ACTIONS as readonly string[]).includes(action)) {
+        return {
+          name: tool.name,
+          args,
+          result: `错误：action 必须是 ${ARRANGE_ACTIONS.join("/")} 之一`,
+          changed: false,
+        };
+      }
+      if (!ids.length) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：ids 不能为空（至少传 1 个元素 id）",
+          changed: false,
+        };
+      }
+      const { done, skipped } = board.arrangeByIds(
+        ids,
+        action as ArrangeAction,
+      );
+      if (!done) {
+        return {
+          name: tool.name,
+          args,
+          result: skipped
+            ? `未执行：${ids.length} 个目标元素全部锁定（锁定元素不能排列，请先解锁）`
+            : "未执行：动作无实际效果（id 不存在，或数量不足——对齐需至少 2 个、分布需至少 3 个、层序需目标不在目标位置）",
+          changed: false,
+        };
+      }
+      return {
+        name: tool.name,
+        args,
+        result: `已完成${ACTION_LABELS[action] ?? action}：${done} 个元素${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
+        changed: true,
       };
     }
 

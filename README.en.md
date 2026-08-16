@@ -11,6 +11,7 @@ A **local-first, fully offline** hand-drawn whiteboard. Built with Tauri 2 and l
 ## Features
 
 - **Drawing tools**: pressure-sensitive freehand pen, line, arrow, rect, ellipse, text, eraser, marquee, lasso, etc., driven by a unified tool registry
+- **Arrange & group**: align / distribute / flip / z-order / duplicate (Ctrl+D); group elements so members move, arrange and delete together
 - **AI assistant** (OpenAI-compatible API): chat mode with canvas awareness; edit mode lets AI create custom drawing tools at runtime (with smoke-test protection); multimodal screenshot support
 - **Tidy & beautify**: recognize hand-drawn shapes and convert them into standard shapes; convert standard shapes into hand-drawn rough style (rough.js, reproducible seed)
 - **Multi-project management**: independent canvases with autosave; restores the last project on launch

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { translatePath } from "./path";
+import { mirrorPath, translatePath } from "./path";
 
 describe("translatePath", () => {
   it("零位移或空串原样返回", () => {
@@ -37,5 +37,54 @@ describe("translatePath", () => {
 
   it("负数坐标平移", () => {
     expect(translatePath("M -5 -5 L 5 5", 3, -2)).toBe("M -2 -7 L 8 3");
+  });
+});
+
+describe("mirrorPath", () => {
+  it("空串原样返回", () => {
+    expect(mirrorPath("", "h", 5)).toBe("");
+  });
+
+  it("水平镜像：x → 2*center - x，y 不变", () => {
+    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "h", 5)).toBe(
+      "M 10 0 L 0 0 L 0 10 Z",
+    );
+  });
+
+  it("垂直镜像：y → 2*center - y，x 不变", () => {
+    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "v", 5)).toBe(
+      "M 0 10 L 10 10 L 10 0 Z",
+    );
+  });
+
+  it("H 只镜像 x、V 只镜像 y", () => {
+    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "h", 5)).toBe(
+      "M 10 0 H 0 V 10 H 10",
+    );
+    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "v", 5)).toBe(
+      "M 0 10 H 10 V 0 H 0",
+    );
+  });
+
+  it("A 命令：rx/ry/large-arc 不变，rotation 变号、sweep 翻转、末尾 x/y 镜像", () => {
+    expect(mirrorPath("A 5 5 30 0 1 10 10", "h", 5)).toBe(
+      "A 5 5 -30 0 0 0 10",
+    );
+  });
+
+  it("相对命令（小写）不镜像", () => {
+    const p = "m 0 0 l 5 5 c 1 1 2 2 3 3";
+    expect(mirrorPath(p, "h", 5)).toBe(p);
+  });
+
+  it("C/Q 成对坐标逐个镜像", () => {
+    expect(mirrorPath("C 1 2 3 4 5 6", "h", 3)).toBe("C 5 2 3 4 1 6");
+    expect(mirrorPath("Q 1 2 3 4", "v", 3)).toBe("Q 1 4 3 2");
+  });
+
+  it("浮点坐标保留 2 位小数", () => {
+    expect(mirrorPath("M 0.5 0.5 L 10.333 20.666", "h", 5)).toBe(
+      "M 9.5 0.5 L -0.33 20.67",
+    );
   });
 });

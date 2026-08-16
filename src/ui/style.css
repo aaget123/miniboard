@@ -528,6 +528,71 @@ input[type="color"] {
   accent-color: var(--accent);
 }
 
+/* ---------- 排列面板（对齐/分布/翻转/层序/成组） ---------- */
+#arrange-popover {
+  position: fixed;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+#arrange-popover.visible {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+
+.arrange-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.arrange-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 28px);
+  gap: 4px;
+}
+
+.arrange-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+
+.arrange-btn:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+
+.arrange-btn:active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 样式浮层 P3 扩展：线型按钮组（实线/虚线/点线，复用 .arrange-btn） */
+.dash-group {
+  display: flex;
+  gap: 6px;
+}
+
 /* ---------- 右侧圆形悬浮工具栏（常驻，可拖拽） ---------- */
 #tools-float {
   position: fixed;
