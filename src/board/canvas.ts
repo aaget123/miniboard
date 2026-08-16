@@ -3348,8 +3348,9 @@ export class Board {
     if (!frame) {
       return { x: px, y: py };
     }
-    // 世界 bbox 直接判定（不用 elementToData，避免序列化坐标换算干扰）
-    const b = frame.worldBoxBounds;
+    // page 基准 bbox：绘制坐标为 tree.getInnerPoint 结果（page，不含 zoomLayer
+    // 变换），而 worldBoxBounds 是视口基准，缩放/平移后两者错位导致夹紧失效
+    const b = frame.getBounds("box", "page");
     if (!b) {
       return { x: px, y: py };
     }
@@ -3368,7 +3369,9 @@ export class Board {
       ) {
         continue;
       }
-      const b = el.worldBoxBounds;
+      // page 基准判定：x/y 来自 tree.getInnerPoint（page 坐标，不含 zoomLayer
+      // 变换），与 worldBoxBounds（视口基准）比较在缩放/平移后必然错位
+      const b = el.getBounds("box", "page");
       if (!b) {
         continue;
       }
@@ -3418,7 +3421,9 @@ export class Board {
    * 元素大于框架时仅最小越界修正，保证绘制起点不丢）。
    */
   private clampListToFrame(list: ElementData[], frame: UI): ElementData[] {
-    const fb = frame.worldBoxBounds;
+    // page 基准：elementBounds 读数据坐标（page），框架 bbox 必须同基准
+    // （worldBoxBounds 为视口基准，缩放/平移后与数据坐标错位）
+    const fb = frame.getBounds("box", "page");
     if (!fb) {
       return list;
     }
