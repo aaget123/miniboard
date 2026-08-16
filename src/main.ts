@@ -134,10 +134,14 @@ async function main() {
         // 整理/手绘资格与左侧选中栏显隐条件一致
         hasFreehand: lastSelectionInfo?.hasFreehand ?? false,
         hasSketchable: lastSelectionInfo?.hasSketchable ?? false,
-        // 框架操作资格：单选未锁定 rect / frame（含约束开关状态）
+        // 框架操作资格：单选未锁定 rect / frame（含约束/折叠/聚焦状态）
         canToFrame: fs.canToFrame,
         canToRect: fs.canToRect,
         frameConstrainOn: fs.constrainOn,
+        canCollapse: fs.canCollapse,
+        collapsedOn: fs.collapsedOn,
+        canFocus: fs.canFocus,
+        focusOn: fs.focusOn,
       });
     },
     // 双击文本/线元素自动切换选择工具时同步顶栏激活态
@@ -478,6 +482,7 @@ async function main() {
         })
         .catch((err) => toast(`保存失败：${err}`));
     },
+    onImport: importFile,
     onInsertImage: insertImage,
     onExport: () => exportDialog.open(),
     onToggleAI: () => {
@@ -588,6 +593,30 @@ async function main() {
         board.frameActionState().constrainOn
           ? "已开启内容约束：框内绘制/拖动将被夹紧（按住 Alt 可拖出）"
           : "已关闭内容约束",
+      );
+    },
+    toggleFrameCollapse: () => {
+      if (!board.frameActionState().canCollapse) {
+        toast("请单选一个内容超高的内容框架");
+        return;
+      }
+      board.toggleFrameCollapsed();
+      toast(
+        board.frameActionState().collapsedOn
+          ? "已折叠内容：滚轮在框架上滚动查看"
+          : "已展开全部内容",
+      );
+    },
+    toggleFrameFocus: () => {
+      if (!board.frameActionState().canFocus) {
+        toast("请单选一个未锁定的框架");
+        return;
+      }
+      board.toggleFrameFocus();
+      toast(
+        board.frameActionState().focusOn
+          ? "已聚焦框架：视口放大到框架"
+          : "已退出聚焦，恢复原视图",
       );
     },
   };

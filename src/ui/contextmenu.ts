@@ -15,7 +15,9 @@ export type ContextMenuAction =
   | "unlock"
   | "toFrame"
   | "toRect"
-  | "toggleFrameConstrain";
+  | "toggleFrameConstrain"
+  | "toggleFrameCollapse"
+  | "toggleFrameFocus";
 
 export type ContextMenuState = {
   hasSelection: boolean;
@@ -31,6 +33,14 @@ export type ContextMenuState = {
   canToRect: boolean;
   /** 单选框架的内容约束是否开启（内容约束项动态文案） */
   frameConstrainOn: boolean;
+  /** 单选未锁定内容框架可折叠（内容超高；折叠项显隐） */
+  canCollapse: boolean;
+  /** 单选框架内容是否已折叠（折叠项动态文案） */
+  collapsedOn: boolean;
+  /** 单选未锁定框架可聚焦（聚焦项显隐） */
+  canFocus: boolean;
+  /** 单选框架是否处于聚焦状态（聚焦项动态文案） */
+  focusOn: boolean;
 };
 
 type MenuItem = {
@@ -132,6 +142,18 @@ const ITEMS: MenuItem[] = [
     icon: "sliders",
     enabled: (s) => s.canToRect,
   },
+  {
+    action: "toggleFrameCollapse",
+    label: "折叠内容",
+    icon: "caret",
+    enabled: (s) => s.canCollapse,
+  },
+  {
+    action: "toggleFrameFocus",
+    label: "聚焦框架",
+    icon: "zoomIn",
+    enabled: (s) => s.canFocus,
+  },
 ];
 
 export class ContextMenu {
@@ -232,17 +254,23 @@ export class ContextMenu {
         item.action === "sketchify" ||
         item.action === "toFrame" ||
         item.action === "toRect" ||
-        item.action === "toggleFrameConstrain"
+        item.action === "toggleFrameConstrain" ||
+        item.action === "toggleFrameCollapse" ||
+        item.action === "toggleFrameFocus"
       ) {
         // 整理/手绘/框架操作：无资格时隐藏（与左侧选中栏显隐语义一致）
         el.style.display = item.enabled(state) ? "" : "none";
-        // 内容约束项动态文案：跟随框架当前开关状态
-        if (item.action === "toggleFrameConstrain") {
-          const labelEl = el.querySelector(".ctx-label");
-          if (labelEl) {
+        // 动态文案：跟随框架当前开关状态
+        const labelEl = el.querySelector(".ctx-label");
+        if (labelEl) {
+          if (item.action === "toggleFrameConstrain") {
             labelEl.textContent = state.frameConstrainOn
               ? "关闭内容约束"
               : "开启内容约束";
+          } else if (item.action === "toggleFrameCollapse") {
+            labelEl.textContent = state.collapsedOn ? "展开内容" : "折叠内容";
+          } else if (item.action === "toggleFrameFocus") {
+            labelEl.textContent = state.focusOn ? "退出聚焦" : "聚焦框架";
           }
         }
         continue;

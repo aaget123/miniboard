@@ -1,8 +1,11 @@
-// frame 内容容器纯函数测试：autoSize 尺寸估算 / 换行规范化 / 折行 / 夹紧平移量 / SVG 内容导出
+// frame 内容容器纯函数测试：autoSize 尺寸估算 / 换行规范化 / 折行 / 折叠高度 / 滚动上限 / 夹紧平移量 / SVG 内容导出
 import { describe, expect, it } from "vitest";
 import {
+  FRAME_COLLAPSED_HEIGHT,
   clampShift,
+  collapsedFrameHeight,
   frameContentSize,
+  frameScrollMax,
   normalizeContent,
   wrapLine,
 } from "./frame";
@@ -82,6 +85,40 @@ describe("frameContentSize（autoSize 内容撑框估算）", () => {
   it("\\r\\n 换行符先规范化再计行数", () => {
     const s = frameContentSize("a\r\nb\r\nc", "text");
     expect(s.height).toBeCloseTo(3 * 14 * 1.6 + 32, 5);
+  });
+});
+
+describe("collapsedFrameHeight（折叠高度）", () => {
+  it("内容超高时折叠到上限高度", () => {
+    const h = collapsedFrameHeight("a\n".repeat(100), "text");
+    expect(h).toBe(FRAME_COLLAPSED_HEIGHT);
+  });
+
+  it("内容不足一屏时返回 null（无需折叠）", () => {
+    const h = collapsedFrameHeight("a\nb", "text");
+    expect(h).toBeNull();
+  });
+});
+
+describe("frameScrollMax（滚动上限）", () => {
+  it("内容超出框架高度时返回可滚动余量", () => {
+    const content = "a\n".repeat(100); // 远超折叠上限
+    const max = frameScrollMax(content, "text", FRAME_COLLAPSED_HEIGHT);
+    expect(max).toBeGreaterThan(0);
+    expect(max).toBeCloseTo(
+      frameContentSize(content, "text").height - FRAME_COLLAPSED_HEIGHT,
+      5,
+    );
+  });
+
+  it("内容不超框时返回 0（不可滚动）", () => {
+    expect(frameScrollMax("a\nb", "text", FRAME_COLLAPSED_HEIGHT)).toBe(0);
+  });
+
+  it("折叠上限恰好等于内容高度时余量为 0", () => {
+    const content = "a\n".repeat(40);
+    const h = frameContentSize(content, "text").height;
+    expect(frameScrollMax(content, "text", h)).toBeCloseTo(0, 5);
   });
 });
 

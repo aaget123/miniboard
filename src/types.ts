@@ -180,6 +180,10 @@ export type ElementData = {
   content?: string;
   /** frame: 自适应开关（有内容时按内容撑尺寸；undefined = 开启） */
   autoSize?: boolean;
+  /** frame: 内容折叠开关（折叠后固定高度裁剪，滚轮滚动查看；undefined = 全部展示） */
+  collapsed?: boolean;
+  /** frame: 折叠状态下的内容滚动偏移（px，随文件保存；0 = 顶部，负值向上滚） */
+  scrollY?: number;
   /** frame: 内容约束（框内绘制/拖动夹紧到框架边界；默认关闭） */
   constrain?: boolean;
   /** 分组 id：同组元素整组联动（任一成员选中则整组参与移动/删除/AI 排列） */

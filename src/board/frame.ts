@@ -10,6 +10,8 @@ export const FRAME_LINE_HEIGHT = 1.6;
 export const FRAME_CODE_FONT = "Consolas, 'Courier New', monospace";
 /** autoSize 最小宽度（px） */
 export const FRAME_MIN_WIDTH = 200;
+/** 折叠后内容区最大高度（含内边距，px）：超出裁剪 + 滚轮滚动查看 */
+export const FRAME_COLLAPSED_HEIGHT = 480;
 /** 内容文字缺省色（未指定描边时） */
 export const FRAME_CONTENT_COLOR = "#4a5568";
 
@@ -84,6 +86,31 @@ export function frameContentSize(
     totalLines * FRAME_CONTENT_SIZE * FRAME_LINE_HEIGHT + FRAME_PADDING * 2,
   );
   return { width, height };
+}
+
+/**
+ * 内容框架折叠后的高度：autoSize 估算高度与折叠上限取小（内容不足一屏时
+ * 折叠不生效，保持全部展示）；返回 null 表示内容未超限无需折叠。
+ */
+export function collapsedFrameHeight(
+  content: string,
+  type: string | undefined,
+): number | null {
+  const h = frameContentSize(content, type).height;
+  return h > FRAME_COLLAPSED_HEIGHT ? FRAME_COLLAPSED_HEIGHT : null;
+}
+
+/**
+ * 折叠状态下的最大滚动偏移：内容高度超出框架高度的部分。
+ * 框架未折叠或内容不超高时返回 0（不可滚动）。
+ */
+export function frameScrollMax(
+  content: string,
+  type: string | undefined,
+  boxHeight: number,
+): number {
+  const h = frameContentSize(content, type).height;
+  return Math.max(0, h - boxHeight);
 }
 
 /** bbox 平移量计算：把 box 完全平移进容器框内（box 大于容器时仅最小越界修正） */

@@ -10,13 +10,13 @@ A **local-first, fully offline** hand-drawn whiteboard. Built with Tauri 2 and l
 
 ## Features
 
-- **Drawing tools**: pressure-sensitive freehand pen, line, arrow, rect, ellipse, text, frame, eraser, marquee, lasso, etc., driven by a unified tool registry
+- **Drawing tools**: pressure-sensitive freehand pen, line, arrow, rect, ellipse, text, frame, eraser (segmented stroke erase), marquee, lasso, etc., driven by a unified tool registry
 - **Editing**: duplicate (Ctrl+D) and other convenient operations
 - **AI assistant** (OpenAI-compatible API): chat mode with canvas awareness; edit mode lets AI create custom drawing tools at runtime (with smoke-test protection); multimodal screenshot support
 - **Tidy & beautify**: recognize hand-drawn shapes and convert them into standard shapes; convert standard shapes into hand-drawn rough style (rough.js, reproducible seed, adjustable roughness 0–2)
 - **Text styling**: alignment / font family / weight slider (100–900); toggle normal/bold quickly with `Ctrl+B`
 - **Arrow endpoints**: independent start/end styles — arrow / triangle / dot / circle / none
-- **Frame element**: `F` key creates a dashed frame (Figma-style); inner elements follow the frame when moving; supports importing MD / code / text files as content frames (auto-sized to content)
+- **Frame element**: `F` key creates a dashed frame (Figma-style); inner elements follow the frame when moving; supports importing MD / code / text files as content frames (auto-sized to content, collapsible with scroll for tall content); frame focus zooms the viewport to the frame
 - **Multi-project management**: independent canvases with autosave; restores the last project on launch
 - **Customizable data directory**: projects and AI tools are stored as local files (default: system app-data dir; changeable with automatic migration)
 - **Export**: PNG bitmap / SVG vector, lossless element structure

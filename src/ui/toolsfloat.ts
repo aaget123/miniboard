@@ -3,6 +3,8 @@ import { iconHTML, type IconName } from "./icons";
 export type ToolsFloatHandlers = {
   onOpen: () => void;
   onSave: () => void;
+  /** 导入文件（内容框架）：选择本地文本文件作为框架内容导入画布 */
+  onImport: () => void;
   onInsertImage: () => void;
   /** 打开统一导出弹窗（PNG / SVG 二选一） */
   onExport: () => void;
@@ -69,6 +71,7 @@ export class ToolsFloat {
     this.panel.append(
       makeItem("folder", "打开文件 (Ctrl+O)", () => handlers.onOpen()),
       makeItem("save", "保存文件 (Ctrl+S)", () => handlers.onSave()),
+      makeItem("file", "导入文件（内容框架）", () => handlers.onImport()),
       makeItem("image", "插入图片", () => handlers.onInsertImage()),
       makeItem("download", "导出画布（PNG / SVG）", () => handlers.onExport()),
       makeDivider(),

@@ -36,12 +36,14 @@ import { rotatePoint, transformPath, translatePath } from "./path";
 import { offsetElementData } from "./offset";
 import {
   FRAME_CODE_FONT,
+  FRAME_COLLAPSED_HEIGHT,
   FRAME_CONTENT_COLOR,
   FRAME_CONTENT_SIZE,
   FRAME_LINE_HEIGHT,
   FRAME_PADDING,
   clampShift,
   frameContentSize,
+  frameScrollMax,
   normalizeContent,
 } from "./frame";
 import {
@@ -56,7 +58,7 @@ import { elementBounds, unionBounds } from "./bounds";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
-import { penSizeOf, strokeOutlinePath } from "./stroke";
+import { penSizeOf, splitErasedPoints, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
 import { elementsToSVG } from "./svg";
 import type { GridSettings } from "../ui/settings";
@@ -371,6 +373,27 @@ function isFreehandEl(el: UI): boolean {
   );
 }
 
+/** 橡皮固定半径（px，屏幕像素）：分段擦除命中与光标圆圈共用 */
+const ERASER_DEFAULT = 10;
+
+/** 橡皮分段擦除快照：一次手势内同一原始笔迹的段集合（root 承载第一段，parts 为拆出的其余段） */
+type EraseSnap = {
+  root: Path;
+  points: number[][];
+  size: number;
+  parts: Path[];
+};
+
+/** 橡皮圆圈光标（SVG data URI）：直径 = 2×半径，双圈描边保证深浅主题下均可见 */
+function eraserCursorURL(radius: number): string {
+  const d = radius * 2;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${d}" height="${d}" viewBox="0 0 ${d} ${d}">` +
+    `<circle cx="${radius}" cy="${radius}" r="${radius - 2}" fill="rgba(127,127,127,0.15)" stroke="#fff" stroke-width="2"/>` +
+    `<circle cx="${radius}" cy="${radius}" r="${radius - 2}" fill="none" stroke="#333" stroke-width="1"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${radius} ${radius}, crosshair`;
+}
+
 /**
  * 元素数据类型的轻量判定（与 elementToData 的类型分支一致，无序列化副作用）。
  * 供选中信息类型感知（左侧悬浮栏差异化显隐）与绑定判定复用。
@@ -543,11 +566,17 @@ export class Board {
   private erasing = false;
   private eraserDeleted = false;
   private lastErase = { x: 0, y: 0 };
+  /** 橡皮手势轨迹（app 坐标）：分段擦除按轨迹剔除笔迹区间 */
+  private eraseTrail: { x: number; y: number }[] = [];
+  /** 分段擦除快照：本手势已拆分的笔迹元素 → 原始点列（元素局部坐标） */
+  private eraseSnap = new Map<UI, EraseSnap>();
   // 选中框内拖动：点击点在选中元素包围盒内（而非元素本体）时手动移动整个选择
   private selectDragging = false;
   private dragStart = { x: 0, y: 0 };
   private dragEls: { el: UI; x: number; y: number }[] = [];
   private movedAny = false;
+  /** leafer 拖动涉及的契约元素（拖动结束统一归一化 x/y → points/path） */
+  private moveNormalizeEls = new Set<UI>();
   // 内部剪贴板（复制/剪切/粘贴）
   private clipboard: ElementData[] = [];
   /** 剪贴板内容原始包围盒（复制时从选中元素实际渲染 bounds 记录，含 path/points 坐标语义，粘贴时用于中心对齐） */
@@ -575,6 +604,11 @@ export class Board {
   private textScaleOrig = new Map<Text, { fontSize: number; width: number }>();
   /** 框架缩放手势的内容快照（幂等重算基准；手势结束清空） */
   private frameScaleSnap: FrameScaleSnap | null = null;
+  /** 框架聚焦状态：保存聚焦前视口，再次聚焦/退出时恢复（会话级，不序列化） */
+  private frameFocus: {
+    id: string;
+    view: { x: number; y: number; sx: number; sy: number };
+  } | null = null;
   // 网格：设置（大小/显示/吸附）与网格线层（挂在 zoomLayer 最底层，随缩放/平移重建）
   private grid: GridSettings = { size: 20, show: false, snap: false };
   private gridPath: Path | null = null;
@@ -718,9 +752,12 @@ export class Board {
       if (moved && isFrameEl(moved) && (ev.moveX || ev.moveY)) {
         this.moveFrameContents(moved, ev.moveX, ev.moveY);
       }
-      // 契约元素（line/arrow/path）拖动时 leafer 改 x/y，把位移并入 points/path 并归零
+      // 契约元素（line/arrow/path）拖动时 leafer 改 x/y，但拖动中立即归零会
+      // 破坏 leafer 的增量计算（getValidMove 按“拖起点位置 - 当前位置”求增量，
+      // 归零后增量退化为累计总位移，元素被反复叠加放大、越拖越飞），
+      // 改为拖动结束时统一并入 points/path 并归零
       if (moved) {
-        this.normalizeContractEl(moved);
+        this.moveNormalizeEls.add(moved);
       }
       // 内容归属同步：框架内容被拖出所属框架（中心点出框）即解除归属，
       // 变回自由元素（夹紧生效时中心保持在框内，不会误触发）
@@ -807,6 +844,15 @@ export class Board {
     // 快照残留会导致下次缩放复用旧元素引用，必须及时清理）
     this.app.on(DragEvent.END, () => {
       this.frameScaleSnap = null;
+      // 拖动结束统一归一化契约元素（line/arrow/path）：位移并入 points/path
+      // 并归零，满足“绝对坐标 + x/y=0”数据契约
+      if (this.moveNormalizeEls.size) {
+        for (const el of this.moveNormalizeEls) {
+          this.normalizeContractEl(el);
+        }
+        this.moveNormalizeEls.clear();
+        this.scheduleHistory();
+      }
     });
     this.app.on(ZoomEvent.END, () => {
       this.frameScaleSnap = null;
@@ -961,6 +1007,8 @@ export class Board {
     const view = this.app.canvas.view as HTMLElement;
     view.classList.toggle("hand-tool", tool === "hand");
     view.classList.toggle("eraser-tool", tool === "eraser");
+    // 橡皮圆圈光标：固定半径，所见即所擦（其他工具恢复默认）
+    view.style.cursor = tool === "eraser" ? eraserCursorURL(ERASER_DEFAULT) : "";
     view.classList.remove("panning");
     view.classList.remove("move-cursor");
   }
@@ -1061,13 +1109,18 @@ export class Board {
     e.preventDefault();
     const view = this.app.canvas.view as HTMLElement;
     const rect = view.getBoundingClientRect();
+    // 折叠内容框架滚动优先：鼠标悬停在可滚动框架上时滚轮滚动内容，
+    // 其余区域维持滚轮缩放（缩放不动点用视口坐标）
+    const local = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const world = this.app.tree.getInnerPoint(local);
+    const scrollEl = this.scrollableFrameAt(world);
+    if (scrollEl) {
+      this.scrollFrameContent(scrollEl, e.deltaY);
+      return;
+    }
     // 向上滚放大、向下滚缩小
     const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
-    this.zoomTo(
-      this.scale * factor,
-      e.clientX - rect.left,
-      e.clientY - rect.top,
-    );
+    this.zoomTo(this.scale * factor, local.x, local.y);
     // 缩放后重建 sky 层手柄（点编辑/裁剪框跟随世界坐标）
     if (this.pointEditEl) {
       this.buildPointHandles();
@@ -1198,6 +1251,8 @@ export class Board {
       this.editor.cancel();
       this.erasing = true;
       this.eraserDeleted = false;
+      this.eraseTrail = [{ x: e.x ?? 0, y: e.y ?? 0 }];
+      this.eraseSnap = new Map();
       this.lastErase = { x: e.x ?? 0, y: e.y ?? 0 };
       this.eraseAt(e.x ?? 0, e.y ?? 0);
       return;
@@ -1448,6 +1503,7 @@ export class Board {
       const ay = e.y ?? 0;
       if (Math.hypot(ax - this.lastErase.x, ay - this.lastErase.y) >= 4) {
         this.lastErase = { x: ax, y: ay };
+        this.eraseTrail.push({ x: ax, y: ay });
         this.eraseAt(ax, ay);
       }
       return;
@@ -1570,6 +1626,8 @@ export class Board {
       if (this.eraserDeleted) {
         this.commitHistory();
       }
+      this.eraseTrail = [];
+      this.eraseSnap = new Map();
       return;
     }
     // 点编辑拖点结束：拖走原本绑定的端点即解除绑定，并提交历史
@@ -1977,17 +2035,17 @@ export class Board {
 
   // ================= 选择命中 =================
 
-  private hitTest(world: { x: number; y: number }): UI | null {
+  private hitTest(world: { x: number; y: number }, radius = 5): UI | null {
     // 逐元素像素级命中：线段/箭头/画笔按实际描边命中；
     // 空心图形内部透明区域不命中，可穿透选中下层元素。
-    // hitRadius=5 扩大命中容差（细线也容易点中）
+    // hitRadius 扩大命中容差（细线也容易点中；橡皮按光标半径命中）
     const children = this.app.tree.children as UI[];
     for (let i = children.length - 1; i >= 0; i--) {
       const el = children[i];
       if (this.isEditorInternal(el)) {
         continue; // editor 内部元素（多选模拟层）不可交互
       }
-      if (el.hit(world, 5)) {
+      if (el.hit(world, radius)) {
         return el;
       }
     }
@@ -2004,14 +2062,133 @@ export class Board {
 
   // ================= 橡皮擦 =================
 
-  /** 擦除指定 app 坐标处的元素（锁定元素受保护不可擦除） */
+  /**
+   * 擦除指定 app 坐标处的元素：笔迹按橡皮轨迹分段擦除（只擦被覆盖的区间，
+   * 剩余部分拆成独立笔画）；其余元素整条删除。锁定元素受保护不可擦除。
+   */
   private eraseAt(ax: number, ay: number) {
-    const hit = this.hitTest({ x: ax, y: ay });
-    if (hit && !hit.locked) {
-      hit.remove();
+    // 直接传 app 坐标：el.hit 期望 world（app）坐标，内部按世界矩阵换算
+    // （若先转画布坐标，缩放/平移后命中会整体错位）
+    const hit = this.hitTest({ x: ax, y: ay }, ERASER_DEFAULT);
+    if (!hit || hit.locked) {
+      return;
+    }
+    if (isFreehandEl(hit)) {
+      this.eraseFreehandAt(hit as Path);
+      return;
+    }
+    hit.remove();
+    this.editor.cancel();
+    this.eraserDeleted = true;
+  }
+
+  /**
+   * 笔迹分段擦除：橡皮轨迹换算到笔迹局部坐标，从快照的原始点列中剔除
+   * 被轨迹覆盖（距离 <= 橡皮半径）的点，剩余连续段各自重生成轮廓——
+   * 第一段留在原元素（保 id），其余段拆成新元素；全擦完则整条删除。
+   * 同一手势内反复经过同一笔迹时按快照幂等重算（已拆段共享快照，不会重复拆）。
+   */
+  private eraseFreehandAt(el: Path) {
+    let snap = this.eraseSnap.get(el);
+    if (!snap) {
+      const t = el as unknown as { __freehandPoints?: number[][] };
+      const pts = t.__freehandPoints;
+      if (!pts || pts.length < 2) {
+        // 元数据缺失或单点笔迹：无法分段，整条删除
+        el.remove();
+        this.editor.cancel();
+        this.eraserDeleted = true;
+        return;
+      }
+      snap = {
+        root: el,
+        points: pts.map((p) => [...p]),
+        size:
+          (el as unknown as { __penSize?: number }).__penSize ??
+          penSizeOf(typeof el.strokeWidth === "number" ? el.strokeWidth : 2),
+        parts: [],
+      };
+      this.eraseSnap.set(el, snap);
+    }
+    const root = snap.root;
+    // 橡皮半径：屏幕像素 → 笔迹局部单位（防御画布缩放与元素缩放）
+    const zoom = this.app.tree.zoomLayer?.scaleX ?? 1;
+    const radius =
+      ERASER_DEFAULT /
+      Math.max(zoom, 0.01) /
+      Math.max(root.scaleX ?? 1, 0.01);
+    // 轨迹：app 坐标 → 笔迹局部坐标（getInnerPoint 按完整世界矩阵一步逆变换，
+    // 不能先转画布坐标再转局部，否则 tree 有平移/缩放时基准错位）
+    const trail = this.eraseTrail.map((p) => root.getInnerPoint(p));
+    const segs = splitErasedPoints(snap.points, trail, radius);
+    if (segs.length === 0) {
+      // 整条擦除：移除根元素与已拆出的所有段
+      root.remove();
+      for (const part of snap.parts) {
+        this.eraseSnap.delete(part);
+        part.remove();
+      }
+      this.eraseSnap.delete(el);
       this.editor.cancel();
       this.eraserDeleted = true;
+      return;
     }
+    this.applyFreehandSeg(root, segs[0], snap.size);
+    // 段数变多：复用已有 part 或新建；段数变少：移除多余 part
+    for (let i = 1; i < segs.length; i++) {
+      if (i - 1 < snap.parts.length) {
+        this.applyFreehandSeg(snap.parts[i - 1], segs[i], snap.size);
+      } else {
+        const part = this.makeFreehandPart(root, segs[i], snap.size);
+        snap.parts.push(part);
+        this.eraseSnap.set(part, snap);
+      }
+    }
+    while (snap.parts.length > segs.length - 1) {
+      const extra = snap.parts.pop();
+      if (extra) {
+        this.eraseSnap.delete(extra);
+        extra.remove();
+      }
+    }
+    this.eraserDeleted = true;
+  }
+
+  /** 把一段保留点列应用到笔迹元素：重算轮廓并同步采样点元数据 */
+  private applyFreehandSeg(el: Path, seg: number[][], size: number) {
+    const path = strokeOutlinePath(seg, { size });
+    if (path) {
+      el.path = path;
+    }
+    (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints =
+      seg.map((p) => [...p]);
+  }
+
+  /**
+   * 分段擦除拆出的新笔迹元素：继承原元素锚点/旋转/样式与框架、分组归属，
+   * 追加到画布末尾（同一快照内的段共享后续擦除状态）。
+   */
+  private makeFreehandPart(root: Path, seg: number[][], size: number): Path {
+    const part = new Path({
+      x: root.x,
+      y: root.y,
+      path: strokeOutlinePath(seg, { size }),
+      fill: root.fill,
+      stroke: root.stroke,
+      strokeWidth: root.strokeWidth,
+      opacity: root.opacity,
+      rotation: root.rotation,
+    });
+    const m = part as unknown as Record<string, unknown>;
+    m.__freehandPoints = seg.map((p) => [...p]);
+    m.__penSize = size;
+    this.setFrameId(part, this.frameIdOf(root));
+    const gid = (root as unknown as { __groupId?: string }).__groupId;
+    if (gid) {
+      (part as unknown as { __groupId?: string }).__groupId = gid;
+    }
+    this.app.tree.add(part);
+    return part;
   }
 
   // ================= 选中框内拖动 =================
@@ -2893,17 +3070,25 @@ export class Board {
 
   /**
    * 选中元素框架操作资格（右键菜单用）：单选未锁定 rect/frame 时给出转换资格，
-   * frame 额外给出当前内容约束开关状态。
+   * frame 额外给出内容约束/折叠开关状态与聚焦状态。
    */
   frameActionState(): {
     canToFrame: boolean;
     canToRect: boolean;
     constrainOn: boolean;
+    canCollapse: boolean;
+    collapsedOn: boolean;
+    canFocus: boolean;
+    focusOn: boolean;
   } {
     const list = this.selectedList.filter((el) => !el.locked);
     let canToFrame = false;
     let canToRect = false;
     let constrainOn = false;
+    let canCollapse = false;
+    let collapsedOn = false;
+    let canFocus = false;
+    let focusOn = false;
     if (list.length === 1) {
       const el = list[0];
       if (el instanceof Rect && !isFrameEl(el)) {
@@ -2911,11 +3096,186 @@ export class Board {
       }
       if (isFrameEl(el)) {
         canToRect = true;
-        constrainOn =
-          (el as unknown as Record<string, unknown>).__frameConstrain === true;
+        const meta = el as unknown as Record<string, unknown>;
+        constrainOn = meta.__frameConstrain === true;
+        collapsedOn = meta.__frameCollapsed === true;
+        canFocus = true;
+        focusOn = this.frameFocus?.id === this.aiIdOf(el);
+        // 折叠资格：内容型框架且内容超高（不足一屏折叠无意义）
+        if (
+          typeof meta.__frameContent === "string" &&
+          meta.__frameContent &&
+          meta.__frameAutoSize !== false
+        ) {
+          const h = frameContentSize(
+            meta.__frameContent,
+            typeof meta.__frameContentType === "string"
+              ? (meta.__frameContentType as "markdown" | "code" | "text")
+              : undefined,
+          ).height;
+          canCollapse = collapsedOn || h > FRAME_COLLAPSED_HEIGHT;
+        }
       }
     }
-    return { canToFrame, canToRect, constrainOn };
+    return {
+      canToFrame,
+      canToRect,
+      constrainOn,
+      canCollapse,
+      collapsedOn,
+      canFocus,
+      focusOn,
+    };
+  }
+
+  /**
+   * 选中单个未锁定内容框架：切换内容折叠（折叠后固定高度裁剪 + 滚轮滚动查看；
+   * 展开恢复 autoSize 全部展示）。内容不足一屏时不提供折叠入口（资格见
+   * frameActionState），此处按当前状态反转。返回是否成功。
+   */
+  toggleFrameCollapsed(): boolean {
+    const list = this.selectedList.filter((el) => !el.locked);
+    if (list.length !== 1 || !isFrameEl(list[0])) {
+      return false;
+    }
+    const el = list[0] as Box;
+    const meta = el as unknown as Record<string, unknown>;
+    const content =
+      typeof meta.__frameContent === "string" ? meta.__frameContent : "";
+    if (!content) {
+      return false;
+    }
+    const collapsing = meta.__frameCollapsed !== true;
+    const size = frameContentSize(
+      content,
+      typeof meta.__frameContentType === "string"
+        ? (meta.__frameContentType as "markdown" | "code" | "text")
+        : undefined,
+    );
+    meta.__frameCollapsed = collapsing;
+    if (collapsing) {
+      // 折叠：高度压到上限（内容不足一屏时保持原高，无裁剪也无滚动）。
+      // overflow 必须含 "scroll"：leafer Box 仅在 overflow 含 scroll 时把
+      // scrollX/scrollY 应用于子级 bounds 平移（hide 只裁剪不平移），
+      // 无 scroller 插件时不会出现滚动条 UI
+      el.height = Math.min(size.height, FRAME_COLLAPSED_HEIGHT);
+      el.overflow = "scroll";
+      el.scrollY = 0;
+    } else {
+      // 展开：恢复 autoSize 高度，清滚动与裁剪
+      el.height = size.height;
+      el.overflow = undefined;
+      el.scrollY = 0;
+    }
+    this.commitHistory();
+    this.opts.onMutated();
+    return true;
+  }
+
+  /**
+   * 折叠框架内容滚动：滚轮向下（deltaY > 0）内容上移查看后文。
+   * leafer 的 scrollY 正值让子级向下平移，因此用负值区间
+   * [-max, 0] 表示内容向上滚动（0 = 顶部，-max = 底部），
+   * 渲染管线按 overflow: "scroll" 平移子级并在框内裁剪。
+   */
+  private scrollFrameContent(el: Box, deltaY: number) {
+    const meta = el as unknown as Record<string, unknown>;
+    const content =
+      typeof meta.__frameContent === "string" ? meta.__frameContent : "";
+    const max = frameScrollMax(
+      content,
+      typeof meta.__frameContentType === "string"
+        ? (meta.__frameContentType as "markdown" | "code" | "text")
+        : undefined,
+      el.height ?? 0,
+    );
+    if (max <= 0) {
+      return;
+    }
+    const next = Math.min(Math.max((el.scrollY ?? 0) - deltaY, -max), 0);
+    el.scrollY = next;
+  }
+
+  /** 命中可滚动的折叠框架：世界坐标落在其 bbox 内且内容有滚动余量（无则 null） */
+  private scrollableFrameAt(p: { x: number; y: number }): Box | null {
+    for (const el of this.app.tree.children as UI[]) {
+      if (!isFrameEl(el)) {
+        continue;
+      }
+      const meta = el as unknown as Record<string, unknown>;
+      if (meta.__frameCollapsed !== true) {
+        continue;
+      }
+      const b = el.worldBoxBounds;
+      if (
+        b &&
+        p.x >= b.x &&
+        p.x <= b.x + b.width &&
+        p.y >= b.y &&
+        p.y <= b.y + b.height
+      ) {
+        return el as Box;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 聚焦框架：视口缩放/平移到框架充满视口（留边距），保存聚焦前视口供退出恢复；
+   * 折叠/展开状态均适用。已在聚焦且传入同一框架时退出恢复。
+   */
+  toggleFrameFocus(): boolean {
+    const list = this.selectedList.filter((el) => !el.locked);
+    if (list.length !== 1 || !isFrameEl(list[0])) {
+      return false;
+    }
+    const el = list[0];
+    const id = this.aiIdOf(el);
+    const layer = this.app.tree.zoomLayer;
+    if (!layer) {
+      return false;
+    }
+    if (this.frameFocus?.id === id) {
+      // 退出聚焦：恢复聚焦前视口
+      const v = this.frameFocus.view;
+      layer.x = v.x;
+      layer.y = v.y;
+      layer.scaleX = v.sx;
+      layer.scaleY = v.sy;
+      this.frameFocus = null;
+      this.updateGrid();
+      return true;
+    }
+    const b = el.worldBoxBounds;
+    if (!b) {
+      return false;
+    }
+    const view = this.app.canvas.view as HTMLElement;
+    const vw = this.app.width ?? view.clientWidth;
+    const vh = this.app.height ?? view.clientHeight;
+    // 目标缩放：框架占视口 85%（留边距），限制在画布缩放范围内
+    const target = Math.min(
+      MAX_SCALE,
+      Math.max(MIN_SCALE, Math.min(vw / b.width, vh / b.height) * 0.85),
+    );
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
+    this.frameFocus = {
+      id,
+      view: {
+        x: layer.x ?? 0,
+        y: layer.y ?? 0,
+        sx: layer.scaleX ?? 1,
+        sy: layer.scaleY ?? 1,
+      },
+    };
+    // 世界坐标 → 视口：layer 平移量 = 视口中心 - 框架中心 * target
+    layer.scaleX = target;
+    layer.scaleY = target;
+    layer.x = vw / 2 - cx * target;
+    layer.y = vh / 2 - cy * target;
+    this.updateGrid();
+    return true;
   }
 
   /**
@@ -4167,6 +4527,10 @@ export class Board {
           typeof meta.__frameAutoSize === "boolean" ? meta.__frameAutoSize : undefined,
         constrain:
           typeof meta.__frameConstrain === "boolean" ? meta.__frameConstrain : undefined,
+        collapsed:
+          typeof meta.__frameCollapsed === "boolean" ? meta.__frameCollapsed : undefined,
+        // 滚动偏移读运行时 scrollY（滚动交互直接改装饰属性，meta 不随动）
+        scrollY: numOf(el.scrollY),
       };
     }
     if (el instanceof Rect) {
@@ -4356,6 +4720,10 @@ export class Board {
           const size = frameContentSize(d.content, d.contentType);
           boxW = size.width;
           boxH = size.height;
+          // 折叠：内容超高时框架高度压到折叠上限，超出部分裁剪 + 滚轮滚动查看
+          if (d.collapsed) {
+            boxH = Math.min(boxH, FRAME_COLLAPSED_HEIGHT);
+          }
         }
         let contentText: Text | null = null;
         if (text) {
@@ -4383,6 +4751,12 @@ export class Board {
           height: boxH,
           fill,
           dashPattern: d.strokeDash ?? [8, 5],
+          // 折叠状态：裁剪超出内容，scrollY 偏移子级渲染。overflow 必须含
+          // "scroll"（leafer Box 只在 overflow 含 scroll 时应用 scrollX/scrollY
+          // 平移子级 bounds，hide 仅裁剪不滚动；无 scroller 插件不显示滚动条），
+          // scrollY 负值内容上移（0 = 顶部，-max = 底部），无需手动遮罩
+          overflow: d.collapsed ? "scroll" : undefined,
+          scrollY: d.collapsed ? (d.scrollY ?? 0) : undefined,
           // 注意：children 显式传 undefined 会让 leafer 2.2.9 的 Group/Branch
           // children 保持 undefined，入树时 __bindLeafer 遍历其 length 崩溃并
           // 卡死布局管线（画布永不渲染），必须用空数组
@@ -4395,6 +4769,7 @@ export class Board {
         meta.__frameContent = d.content;
         meta.__frameAutoSize = d.autoSize;
         meta.__frameConstrain = d.constrain;
+        meta.__frameCollapsed = d.collapsed;
         return el;
       }
       case "ellipse": {
