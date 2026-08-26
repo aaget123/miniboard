@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   detectExternalModification,
+  migrateScene,
   parseProjectIndex,
   parseScene,
   resolveActiveIndex,
 } from "./storage-core";
 import type { ProjectIndex } from "./storage-core";
+import type { SceneFile } from "./types";
 
 const meta = (id: string, name = `项目-${id}`) => ({
   id,
@@ -130,5 +132,30 @@ describe("detectExternalModification（多开写入竞争检测）", () => {
   it("无基线（recorded=null）：宁可不拦截也不误报", () => {
     expect(detectExternalModification(null, 2000)).toBe(false);
     expect(detectExternalModification(null, null)).toBe(false);
+  });
+});
+
+describe("migrateScene（版本迁移管道）", () => {
+  const v1: SceneFile = {
+    app: "miniboard",
+    version: 1,
+    background: "#1e1f22",
+    elements: [],
+  };
+
+  it("当前版本 v1 原样通过", () => {
+    const out = migrateScene(v1);
+    expect(out).not.toBeNull();
+    expect(out!.version).toBe(1);
+    expect(out!.elements).toEqual([]);
+  });
+
+  it("未来更高版本：拒绝载入（防降级改写）", () => {
+    expect(migrateScene({ ...v1, version: 99 as never })).toBeNull();
+  });
+
+  it("结构非法：返回 null", () => {
+    expect(migrateScene({ app: "other" } as never)).toBeNull();
+    expect(migrateScene(null as never)).toBeNull();
   });
 });

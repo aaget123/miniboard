@@ -41,6 +41,8 @@ export class StatusBar {
   private projectBtn!: HTMLButtonElement;
   private savedHint!: HTMLSpanElement;
   private savedTimer = 0;
+  /** 选区整体包围盒（选中元素时展示 W×H） */
+  private selSize: { width: number; height: number } | null = null;
 
   constructor(
     container: HTMLElement,
@@ -122,11 +124,29 @@ export class StatusBar {
     this.zoomBtn.textContent = `${Math.round(percent)}%`;
   }
 
+  /** 记录选区包围盒（由宿主在选中变化时更新；null = 无选中） */
+  setSelectionSize(size: { width: number; height: number } | null) {
+    this.selSize = size;
+    this.renderInfo();
+  }
+
   /** 左侧信息：元素数与光标画布坐标（坐标为空时只显示元素数） */
   setInfo(count: number, coords?: { x: number; y: number }) {
-    const c = coords
-      ? ` · x: ${coords.x.toFixed(1)}, y: ${coords.y.toFixed(1)}`
-      : "";
-    this.infoEl.textContent = `${count} 个元素${c}`;
+    this.elCount = count;
+    this.coords = coords ?? null;
+    this.renderInfo();
   }
+
+  private renderInfo() {
+    const c = this.coords
+      ? ` · x: ${this.coords.x.toFixed(1)}, y: ${this.coords.y.toFixed(1)}`
+      : "";
+    const s = this.selSize
+      ? ` · ${Math.round(this.selSize.width)} × ${Math.round(this.selSize.height)}`
+      : "";
+    this.infoEl.textContent = `${this.elCount} 个元素${s}${c}`;
+  }
+
+  private elCount = 0;
+  private coords: { x: number; y: number } | null = null;
 }

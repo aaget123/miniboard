@@ -85,6 +85,27 @@ function numOf(v: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : Date.now();
 }
 
+/** 当前场景文件格式版本（写入时使用） */
+export const SCENE_VERSION = 1;
+
+/**
+ * 场景版本迁移管道：从旧版本升级到当前版本（逐级链式，未来 v2 在此追加
+ * `1 → 2` 步骤）。未知更高版本返回 null（调用方按损坏文件处理，
+ * 避免新版文件被旧版程序错误降级改写）。
+ */
+export function migrateScene(scene: SceneFile): SceneFile | null {
+  if (!scene?.app || scene.app !== "miniboard" || !Array.isArray(scene.elements)) {
+    return null;
+  }
+  const v = typeof scene.version === "number" ? scene.version : 1;
+  if (v > SCENE_VERSION) {
+    return null;
+  }
+  // 未来迁移步骤示例（追加链式升级）：
+  // if (v === 1) { scene = upgradeV1toV2(scene); v = 2; }
+  return { ...scene, version: SCENE_VERSION as SceneFile["version"] };
+}
+
 /**
  * 多开写入竞争检测（纯函数）：把"上次自己写入/读取时的 mtime 基线"与
  * 当前文件 mtime 对比——不一致即视为被其他窗口或程序改过，调用方应拒绝覆盖。

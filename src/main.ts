@@ -152,6 +152,8 @@ async function main() {
   };
   // 橡皮半径滑条反向同步（Board 回调先于 selectionBar 创建触发时安全空实现）
   let syncEraserSlider: (radiusPx: number) => void = () => {};
+  // 选区尺寸状态栏同步（同上，晚绑定）
+  let syncSelectionSize: () => void = () => {};
 
   const board = new Board(canvasEl, {
     getStyle: () => ({ ...style }),
@@ -217,6 +219,7 @@ async function main() {
   let textEditing = false;
   const refreshSelectionBar = (info: SelectionInfo | null) => {
     const tool = board.currentTool;
+    syncSelectionSize();
     // 画笔激活：左侧栏显示样式按钮，用于设置新笔迹的默认颜色/粗细
     const penMode = tool === "pen";
     // 橡皮激活：左侧栏只显示半径滑条
@@ -650,6 +653,8 @@ async function main() {
   });
   // 自动保存成功轻提示（失败走 toast，成功走这里形成安全闭环）
   storage.onSaved = () => statusBar.flashSaved();
+  // 选区尺寸：选中变化与画布变更时刷新状态栏 W×H
+  syncSelectionSize = () => statusBar.setSelectionSize(board.getSelectionSize());
 
   // AI 助手面板（交流 + 编辑双模式）懒加载工厂；配置缺失时唤起设置弹窗并定位到模型页签。
   // 创建时兜底同步当前项目对话分桶，并接管「面板开合 → 圆形栏激活态/状态栏避让/浮层互斥」联动

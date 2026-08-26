@@ -289,6 +289,8 @@ export class Board {
   private eraserRadius = ERASER_DEFAULT;
   // 待删预览高亮（sky 层红色虚线框）：实时指示橡皮当前命中的目标
   private erasePreview: Rect | null = null;
+  private erasePreviewPending: { x: number; y: number } | null = null;
+  private erasePreviewRaf = 0;
   // 缩放/旋转手势中标记：手势结束（DragEvent.END）时对受约束成员做收尾夹紧
   private frameClampDirty = false;
   // 约束夹紧首次触发提示（Alt 豁免）只报一次
@@ -2270,12 +2272,27 @@ export class Board {
   }
 
   /**
-   * 待删预览（所见即所删）：
+   * 待删预览入口（rAF 合帧：拖拽高频移动时每帧至多重算一次命中）。
+   * 实际渲染见 renderErasePreviewAt：
    * - 整删类元素：红色虚线框包住整个目标；
    * - 笔迹/线性等分段类元素：只高亮橡皮邻域内将被裁掉的区段
    *   （整条包围盒对长曲线毫无信息量，误导"全部要被删"）。
    */
   private updateErasePreview(ax: number, ay: number) {
+    this.erasePreviewPending = { x: ax, y: ay };
+    if (this.erasePreviewRaf) {
+      return;
+    }
+    this.erasePreviewRaf = requestAnimationFrame(() => {
+      this.erasePreviewRaf = 0;
+      const p = this.erasePreviewPending;
+      if (p) {
+        this.renderErasePreviewAt(p.x, p.y);
+      }
+    });
+  }
+
+  private renderErasePreviewAt(ax: number, ay: number) {
     if (this.tool !== "eraser") {
       return;
     }
@@ -2339,6 +2356,11 @@ export class Board {
   }
 
   private clearErasePreview() {
+    if (this.erasePreviewRaf) {
+      cancelAnimationFrame(this.erasePreviewRaf);
+      this.erasePreviewRaf = 0;
+    }
+    this.erasePreviewPending = null;
     if (this.erasePreview) {
       this.erasePreview.remove();
       this.erasePreview = null;
@@ -4573,6 +4595,31 @@ export class Board {
   /** 按稳定 id 查找画布元素（AI 工具执行器/试画清理用）；不存在返回 null */
   findElementByAiId(id: string): UI | null {
     return this.findByAiId(id);
+  }
+
+  /** 选区联合包围盒尺寸（状态栏 W×H 展示用）；无选中返回 null */
+  getSelectionSize(): { width: number; height: number } | null {
+    let box: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null = null;
+    for (const el of this.selectedList) {
+      const b = el.worldBoxBounds;
+      if (!b) {
+        continue;
+      }
+      box = box
+        ? {
+            x: Math.min(box.x, b.x),
+            y: Math.min(box.y, b.y),
+            width: Math.max(box.x + box.width, b.x + b.width) - Math.min(box.x, b.x),
+            height: Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
+          }
+        : { ...b };
+    }
+    return box ? { width: box.width, height: box.height } : null;
   }
 
   /** 按稳定 id 查找画布元素（AI 优化用） */

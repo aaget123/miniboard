@@ -1,7 +1,12 @@
 import type { Board } from "./board/canvas";
 import { dataURLToJpeg, jpegToPdf, PDF_EXPORT_MAX_SIDE } from "./board/pdf";
-import { parseProjectIndex, parseScene, resolveActiveIndex } from "./storage-core";
-import { detectExternalModification } from "./storage-core";
+import {
+  detectExternalModification,
+  migrateScene,
+  parseProjectIndex,
+  parseScene,
+  resolveActiveIndex,
+} from "./storage-core";
 import type { ProjectIndex } from "./storage-core";
 import type { ProjectMeta } from "./types";
 
@@ -543,7 +548,12 @@ export class ProjectStore {
     if (!scene) {
       return false;
     }
-    this.board.loadElements(scene.elements);
+    // 版本迁移管道：旧版本逐级升级；未来更高版本文件拒绝载入（防降级改写）
+    const migrated = migrateScene(scene);
+    if (!migrated) {
+      return false;
+    }
+    this.board.loadElements(migrated.elements);
     return true;
   }
 
