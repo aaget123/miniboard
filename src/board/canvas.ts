@@ -395,6 +395,10 @@ export class Board {
         // 关闭等比锁定：抓边缩放时只改单轴，不会把元素等比放大到失控
         // （此前 lockRatio 开启时，用户误抓框架边线会把框架“撑爆”）
         lockRatio: false,
+        // 全程关闭编辑器内置框选（boxSelect）：其结算按「命中式」进行，
+        // 被顶层填充元素遮挡的元素选不中（套索/框选遮挡问题的根源）。
+        // 框选/套索统一走本应用的 M/Q 工具（包围盒式、无遮挡语义）
+        boxSelect: false,
         // 拖动位移修正钩子：leafer 按“拖动起点 + pointer 总位移”计算移动，
         // MOVE 事件里直接改位置会被其 totalOffset 补偿抵消（“吸不住”），
         // 必须在移动前修正增量：网格吸附 + 约束框架夹紧。x/y 为 local 增量。
@@ -887,11 +891,6 @@ export class Board {
 
   setTool(tool: string) {
     this.tool = tool;
-    // 编辑器内置框选（boxSelect）只在 select 工具下保留：框选/套索工具由
-    // 本应用自己结算选择（包围盒式、无遮挡语义）。若编辑器并行框选，松手时
-    // 会用「命中式」结果覆盖我们的选择——被顶层填充元素遮挡的元素选不中、
-    // 框架内容永远抢在框架本体之前（覆盖/框架无法选中的根因）
-    this.editor.config.boxSelect = tool === "select";
     // 内联文本编辑中：先关闭编辑器（触发收尾：空文本删除/历史提交）
     if (this.editor.innerEditor) {
       this.editor.closeInnerEditor();
