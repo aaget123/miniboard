@@ -1310,6 +1310,13 @@ export class Board {
           }
           return;
         }
+        // 命中已选中的元素：保持当前选择不变（不塌缩为单选）。
+        // 此前无条件 editor.target = hit 会把多选（套索/框选出的组）塌缩成
+        // 被按住的单个元素——顶层填充矩形遮挡下层元素时，拖拽就只剩下大矩形。
+        // 多选拖动由编辑框矩形（move 点）承接，按下已选成员应整体移动全组
+        if (this.editor.hasItem(hit)) {
+          return;
+        }
         this.editor.target = hit ?? undefined;
         return;
       }
