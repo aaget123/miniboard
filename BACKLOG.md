@@ -23,13 +23,24 @@
   已拆出 ai/perception.ts；执行器（executeTool 各 case）仍约 900 行，
   可按 create/update/arrange/beautify 再切
 
-## P2 · 小尾巴（各项 ≤ 半天）
+## P2 · 小尾巴
 
-- [ ] 其余 window.confirm 迁移到应用内弹窗：`ui/confirm.ts` 的 `showConfirm`
-      已就绪，设置页/项目管理/工具删除等 7 处仍用原生 confirm
-      （WKWebView 环境同样会静默失败）
-- [ ] 快照历史 CPU 成本剖析（内存自适应前提不成立，已放弃；如需优化改增量序列化）
-- [ ] 小地图升级：Ctrl 概览浮层已有 ✓；常驻迷你小地图 / 滚轮缩放联动视口框待定
+**当前无未实施项。** 已完成的最后一批：
+
+- ~~其余 window.confirm 迁移~~ ✓ 全部 9 处统一走 `ui/confirm.ts` 的 `showConfirm`
+  （项目删除 / 工具删除 / AI 配置删除 / 工具栏布局重置 / 快捷键重置与冲突覆盖 /
+  提示词重置）
+- ~~快照历史 CPU 成本剖析~~ ✓ 分析完成，结论如下：
+  - `History` 为引用入栈：push O(1)（redo 分支裁剪的 slice O(深度) 可忽略），
+    undo/redo 返回存储引用 O(1)；已补 `history.test.ts`（含 60 步 × 5000 元素规模用例）
+  - 真实成本在两处 O(n)：commitHistory → `board.serialize()` 全量序列化
+    （250ms 防抖节流）与 undo/redo 后 `loadElements` 全量重建——前者是持续拖动
+    的高频路径，后者是每次撤销的一次性成本
+  - 决策维持：万级元素出现可感知卡顿前不做增量序列化；届时优化点在
+    serializeWorld 层（脏区/版本号），History 结构无需改动
+- ~~小地图升级~~ ✓ Ctrl 概览浮层可见期间 rAF 实时刷新（缩放/平移/内容变化
+  即时反映视口框）；「常驻迷你小地图」形态暂不做——Ctrl 浮层已覆盖需求，
+  如需再加设置开关
 
 ## 已知技术债
 

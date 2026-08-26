@@ -1,6 +1,7 @@
 import type { ProjectStore } from "../storage";
 import type { ProjectMeta } from "../types";
 import { iconHTML } from "./icons";
+import { showConfirm } from "./confirm";
 
 /**
  * 项目管理弹窗（☰ 文件与工具 → 📁 项目）：
@@ -204,7 +205,14 @@ export class ProjectDialog {
     if (!meta) {
       return;
     }
-    if (!window.confirm(`确定删除项目「${meta.name}」？此操作不可恢复。`)) {
+    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+    const ok = await showConfirm({
+      title: "删除项目",
+      message: `确定删除项目「${meta.name}」？此操作不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    });
+    if (!ok) {
       return;
     }
     await this.projects.remove(id);

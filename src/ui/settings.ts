@@ -7,6 +7,7 @@ import type { ToolRegistry } from "../board/registry";
 import type { ToolDef, ToolGroup } from "../types";
 import { ToolManageDialog } from "./toolmanage";
 import { iconHTML } from "./icons";
+import { showConfirm } from "./confirm";
 import { isDesktop } from "../storage";
 import { SHORTCUT_ACTIONS, comboFromEvent, formatCombo, formatKeys } from "./shortcuts";
 import type { ShortcutManager } from "./shortcuts";
@@ -804,16 +805,24 @@ export class SettingsDialog {
     if (!p) {
       return;
     }
-    if (!window.confirm(`删除配置「${p.name}」？`)) {
-      return;
-    }
-    this.store.profiles = this.store.profiles.filter((x) => x.id !== this.editingId);
-    if (this.store.activeId === this.editingId) {
-      this.store.activeId = this.store.profiles[0]?.id ?? "";
-    }
-    saveProfiles(this.store);
-    this.renderList();
-    this.loadForm(this.store.activeId);
+    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+    void showConfirm({
+      title: "删除配置",
+      message: `删除配置「${p.name}」？`,
+      confirmLabel: "删除",
+      danger: true,
+    }).then((ok) => {
+      if (!ok) {
+        return;
+      }
+      this.store.profiles = this.store.profiles.filter((x) => x.id !== this.editingId);
+      if (this.store.activeId === this.editingId) {
+        this.store.activeId = this.store.profiles[0]?.id ?? "";
+      }
+      saveProfiles(this.store);
+      this.renderList();
+      this.loadForm(this.store.activeId);
+    });
   }
 
   // ---------- 编辑表单 ----------
@@ -1839,16 +1848,23 @@ export class SettingsDialog {
 
   /** 恢复默认布局：清除平铺与分组顺序偏好（存 null 而非默认数组，与“未自定义过”状态一致）并重置顶栏 */
   private resetToolbarLayout() {
-    if (!window.confirm("恢复默认工具栏布局？当前自定义的平铺/排序将被清除。")) {
-      return;
-    }
-    this.toolbarVisible = this.defaultToolbarVisible();
-    this.toolbarPref = null;
-    saveToolbarPref(null);
-    saveGroupOrderPref(null);
-    this.toolbarGroupOrder = [];
-    this.onToolbarChange(null);
-    this.renderToolbarPane();
+    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+    void showConfirm({
+      title: "恢复默认工具栏布局",
+      message: "恢复默认工具栏布局？当前自定义的平铺/排序将被清除。",
+      confirmLabel: "恢复",
+    }).then((ok) => {
+      if (!ok) {
+        return;
+      }
+      this.toolbarVisible = this.defaultToolbarVisible();
+      this.toolbarPref = null;
+      saveToolbarPref(null);
+      saveGroupOrderPref(null);
+      this.toolbarGroupOrder = [];
+      this.onToolbarChange(null);
+      this.renderToolbarPane();
+    });
   }
 
   // ---------- 页签切换 ----------
@@ -1943,10 +1959,17 @@ export class SettingsDialog {
     resetAll.className = "data-dir-btn";
     resetAll.textContent = "恢复全部默认";
     resetAll.addEventListener("click", () => {
-      if (window.confirm("确定恢复全部默认快捷键？")) {
-        sm?.resetAll();
-        this.renderShortcutsPane();
-      }
+      // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+      void showConfirm({
+        title: "恢复默认快捷键",
+        message: "确定恢复全部默认快捷键？",
+        confirmLabel: "恢复",
+      }).then((ok) => {
+        if (ok) {
+          sm?.resetAll();
+          this.renderShortcutsPane();
+        }
+      });
     });
     head.appendChild(resetAll);
     section.append(label, hint, head);
@@ -2070,9 +2093,17 @@ export class SettingsDialog {
       this.cancelRecord();
     };
     if (clash) {
-      if (window.confirm(`快捷键 ${formatCombo(combo)} 已被${clash.label}占用，确定覆盖？`)) {
-        apply();
-      }
+      // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+      void showConfirm({
+        title: "快捷键冲突",
+        message: `快捷键 ${formatCombo(combo)} 已被${clash.label}占用，确定覆盖？`,
+        confirmLabel: "覆盖",
+        danger: true,
+      }).then((ok) => {
+        if (ok) {
+          apply();
+        }
+      });
     } else {
       apply();
     }
@@ -2100,12 +2131,19 @@ export class SettingsDialog {
   }
 
   private resetPrompt() {
-    if (!window.confirm("恢复默认提示词？自定义内容将被清除。")) {
-      return;
-    }
-    resetSystemPrompt(this.promptMode);
-    this.loadPromptEditor();
-    this.setPromptStatus("已恢复默认提示词", "ok");
+    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+    void showConfirm({
+      title: "恢复默认提示词",
+      message: "恢复默认提示词？自定义内容将被清除。",
+      confirmLabel: "恢复",
+      danger: true,
+    }).then((ok) => {
+      if (ok) {
+        resetSystemPrompt(this.promptMode);
+        this.loadPromptEditor();
+        this.setPromptStatus("已恢复默认提示词", "ok");
+      }
+    });
   }
 
   private setPromptStatus(text: string, cls: "" | "ok" | "error") {

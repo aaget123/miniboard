@@ -364,16 +364,24 @@ export class ToolManageDialog {
   }
 
   private removeTool(t: CustomToolDef) {
-    if (!window.confirm(`确定删除工具「${t.name}」？此操作不可恢复。`)) {
-      return;
-    }
-    this.registry.removeCustom(t.id);
-    if (this.editingId === t.id) {
-      this.editingId = "";
-      this.showList();
-    } else {
-      this.renderList();
-    }
+    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
+    void showConfirm({
+      title: "删除工具",
+      message: `确定删除工具「${t.name}」？此操作不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    }).then((ok) => {
+      if (!ok) {
+        return;
+      }
+      this.registry.removeCustom(t.id);
+      if (this.editingId === t.id) {
+        this.editingId = "";
+        this.showList();
+      } else {
+        this.renderList();
+      }
+    });
   }
 
   // ---------- 导入 / 导出 ----------

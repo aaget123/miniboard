@@ -13,6 +13,8 @@ export class Minimap {
   private mapBounds = { minX: 0, minY: 0, maxX: 1, maxY: 1 };
   /** 拖动导航中（pointerdown 后持续跟随） */
   private navigating = false;
+  /** 可见期间的实时刷新循环：缩放/平移/内容变化即时反映到视口框 */
+  private rafId = 0;
 
   constructor(
     private board: Board,
@@ -49,15 +51,36 @@ export class Minimap {
   show() {
     this.render();
     this.root.hidden = false;
+    this.startLoop();
   }
 
   hide() {
     this.root.hidden = true;
     this.navigating = false;
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = 0;
+    }
   }
 
   get visible(): boolean {
     return !this.root.hidden;
+  }
+
+  /** 可见期间逐帧重绘：小画布 + 简化矩形，单帧成本亚毫秒级 */
+  private startLoop() {
+    if (this.rafId) {
+      return;
+    }
+    const tick = () => {
+      if (this.root.hidden) {
+        this.rafId = 0;
+        return;
+      }
+      this.render();
+      this.rafId = requestAnimationFrame(tick);
+    };
+    this.rafId = requestAnimationFrame(tick);
   }
 
   /** 浮层内指针位置 → 画布坐标，平移视口中心并刷新视口框 */

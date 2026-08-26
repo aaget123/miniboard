@@ -29,6 +29,9 @@
 - **应用内确认弹窗**：`ui/confirm.ts` 提供 Promise 语义的 `showConfirm`（Esc=取消/Enter=确认、危险操作警示色）——清空画布与 AI 批量操作闸门已迁移；动机是 Tauri WKWebView 等环境不支持同步 JS 对话框（confirm 静默返回 false 会让确认闸门变成一律拒绝）
 - **biome format 强制进 CI**：Test workflow 在 lint 后运行 `format:check`；接受一次性全量重排（57 文件，登记 `.git-blame-ignore-revs`）
 - **AI 工具定义拆分**：schemas 迁移到 `ai/tool-schemas.ts`（tools.ts 保留执行器与向后兼容导出）；增量感知纯函数在 `ai/perception.ts`
+- **确认弹窗全量覆盖**：剩余 7 处原生 `window.confirm`（项目删除 / 工具删除 / AI 配置删除 / 工具栏布局重置 / 快捷键重置与冲突覆盖 / 提示词重置）全部迁移到应用内 `showConfirm`——WKWebView 等不支持同步对话框的环境不再有静默失败路径
+- **小地图实时联动**：Ctrl 概览浮层可见期间逐帧刷新，缩放 / 平移 / 内容变化即时反映视口框（单帧成本亚毫秒级）
+- **History 测试补齐**：撤销栈语义、redo 分支裁剪、深度限制与 60 步 × 5000 元素规模行为；成本剖析结论沉淀至 BACKLOG（引用入栈 O(1)，真实成本在 serialize/loadElements 的 O(n)，维持万级以下不做增量序列化的决策）
 
 ### 新增（AI 工具管理）
 
