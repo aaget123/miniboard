@@ -315,6 +315,8 @@ export class ToolRegistry {
   private compiled = new Map<string, (c: GeneratorContext) => ElementData | ElementData[]>();
   private generatorWarned = new Set<string>();
   private onChangeFn: () => void = () => {};
+  /** 使用计数防抖持久化定时器（拖拽绘制高频调用，避免每笔写盘） */
+  private useTimer = 0;
 
   constructor(private storage: ToolStorage = localStorageStorage) {
     const { list, migrated } = this.load();
@@ -564,6 +566,21 @@ export class ToolRegistry {
     this.save();
     this.onChangeFn();
     return true;
+  }
+
+  /**
+   * 记录一次实际使用（用户用该工具完成绘制，丢弃的微小草稿不计）。
+   * 只统计自定义工具（内置工具不在管理页清单里）；持久化防抖合并写盘。
+   */
+  markUsed(id: string) {
+    const tool = this.custom.find((c) => c.id === id);
+    if (!tool) {
+      return;
+    }
+    tool.useCount = (tool.useCount ?? 0) + 1;
+    tool.lastUsedAt = Date.now();
+    clearTimeout(this.useTimer);
+    this.useTimer = window.setTimeout(() => this.save(), 3000);
   }
 
   // ---------- 内部 ----------

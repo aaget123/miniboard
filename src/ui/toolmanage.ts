@@ -3,6 +3,7 @@ import type { CustomToolDef } from "../types";
 import { downloadText } from "../storage";
 import { iconHTML } from "./icons";
 import { renderToolIcon } from "./toolbar";
+import { showConfirm } from "./confirm";
 
 /** 分组选项（与注册表校验一致：自定义工具只能归入 shape 或 ai） */
 const GROUP_OPTIONS: { value: "ai" | "shape"; label: string }[] = [
@@ -33,6 +34,8 @@ export class ToolManageDialog {
   /** 导入/导出反馈行 + 隐藏文件选择器（列表视图） */
   private ioStatusEl!: HTMLElement;
   private importInput!: HTMLInputElement;
+  /** 使用统计：列表排序方式（会话级） */
+  private sortMode: "default" | "used" | "recent" | "name" = "default";
 
   constructor(
     private registry: ToolRegistry,
@@ -88,6 +91,37 @@ export class ToolManageDialog {
       this.importInput.value = "";
     });
     root.appendChild(this.importInput);
+
+    // ---- 使用统计工具行：排序 + 清理未使用（插到列表上方） ----
+    const statRow = document.createElement("div");
+    statRow.className = "tm-toolbar";
+    const sortSelect = document.createElement("select");
+    sortSelect.className = "tm-sort-select";
+    sortSelect.title = "列表排序";
+    for (const opt of [
+      { value: "default", label: "默认排序" },
+      { value: "used", label: "最常用" },
+      { value: "recent", label: "最近使用" },
+      { value: "name", label: "按名称" },
+    ] as const) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      sortSelect.appendChild(o);
+    }
+    sortSelect.value = this.sortMode;
+    sortSelect.addEventListener("change", () => {
+      this.sortMode = sortSelect.value as typeof this.sortMode;
+      this.renderList();
+    });
+    const cleanupBtn = document.createElement("button");
+    cleanupBtn.type = "button";
+    cleanupBtn.className = "tool-btn tm-io-btn tm-cleanup-btn";
+    cleanupBtn.innerHTML = `${iconHTML("trash", 13)} 清理未使用`;
+    cleanupBtn.title = "删除从未使用过的自定义工具";
+    cleanupBtn.addEventListener("click", () => this.cleanupUnused());
+    statRow.append(sortSelect, cleanupBtn);
+    root.insertBefore(statRow, this.listEl);
 
     // ---- 编辑视图 ----
     this.editorEl = document.createElement("div");
@@ -200,6 +234,16 @@ export class ToolManageDialog {
   private renderList() {
     this.listEl.innerHTML = "";
     const tools = this.registry.list().filter((t): t is CustomToolDef => t.source === "custom");
+    // 使用统计排序：默认保持创建顺序（注册表顺序）
+    if (this.sortMode === "used") {
+      tools.sort((a, b) => (b.useCount ?? 0) - (a.useCount ?? 0));
+    } else if (this.sortMode === "recent") {
+      tools.sort(
+        (a, b) => (b.lastUsedAt ?? b.createdAt ?? 0) - (a.lastUsedAt ?? a.createdAt ?? 0),
+      );
+    } else if (this.sortMode === "name") {
+      tools.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    }
     this.emptyEl.hidden = tools.length > 0;
     this.listEl.hidden = tools.length === 0;
     for (const t of tools) {
@@ -232,6 +276,13 @@ export class ToolManageDialog {
         s.className = "tm-badge key";
         s.textContent = t.shortcut.toUpperCase();
         badges.appendChild(s);
+      }
+      if ((t.useCount ?? 0) > 0) {
+        const u = document.createElement("span");
+        u.className = "tm-badge";
+        u.title = `已使用 ${t.useCount} 次`;
+        u.textContent = `×${t.useCount}`;
+        badges.appendChild(u);
       }
       info.append(name, badges);
 
@@ -409,6 +460,41 @@ export class ToolManageDialog {
     } else {
       this.renderList();
     }
+  }
+
+  /** 清理从未使用过的自定义工具（useCount 为空即视为未使用），应用内确认后删除 */
+  private cleanupUnused() {
+    const unused = this.registry
+      .list()
+      .filter((t): t is CustomToolDef => t.source === "custom")
+      .filter((t) => !t.useCount);
+    if (!unused.length) {
+      this.setIoStatus("没有从未使用过的自定义工具", "");
+      return;
+    }
+    void showConfirm({
+      title: "清理未使用工具",
+      message: `确定删除 ${unused.length} 个从未使用过的自定义工具？此操作不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
+    }).then((ok) => {
+      if (!ok) {
+        return;
+      }
+      let removed = 0;
+      for (const t of unused) {
+        if (this.registry.removeCustom(t.id)) {
+          removed++;
+        }
+      }
+      this.setIoStatus(`已清理 ${removed} 个未使用工具`, "ok");
+      if (unused.some((t) => t.id === this.editingId)) {
+        this.editingId = "";
+        this.showList();
+      } else {
+        this.renderList();
+      }
+    });
   }
 
   private setIoStatus(text: string, cls: "" | "ok" | "error") {

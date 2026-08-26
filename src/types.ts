@@ -112,6 +112,10 @@ export type CustomToolDef = ToolDef & {
   generator: string;
   description?: string;
   createdAt: number;
+  /** 使用统计：用户用该工具完成绘制的次数（设置页排序/清理用） */
+  useCount?: number;
+  /** 最近一次使用的时间戳（排序用） */
+  lastUsedAt?: number;
 };
 
 /** 新增/修改自定义工具的入参（AI add_tool / update_tool 用） */

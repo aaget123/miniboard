@@ -1182,6 +1182,8 @@ export class Board {
           }
         }
         this.commitHistory();
+        // 使用统计：实际生成成功才计数（自定义工具用，内置忽略）
+        this.opts.registry.markUsed(this.tool);
       }
       return;
     }
@@ -1501,6 +1503,10 @@ export class Board {
       this.draftExtras = [];
       this.draftData = null;
       this.commitHistory();
+      // 使用统计：实际生成元素才计数（丢弃的微小草稿不计；自定义工具用，内置忽略）
+      if (created) {
+        this.opts.registry.markUsed(this.tool);
+      }
       // 绘制后自动回选择工具（Excalidraw 同款；设置可关）：仅在实际生成元素时
       // 切换（点击落空不切），双击空白建文本走 onTap 管线不受影响
       if (created && this.autoBackToSelect && this.tool !== "select") {

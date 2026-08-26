@@ -2678,6 +2678,30 @@ body.theme-light #statusbar.docked {
   gap: 6px;
 }
 
+/* 工具管理：使用统计工具行（排序 + 清理） */
+.tm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tm-sort-select {
+  flex: 1;
+  padding: 5px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.tm-cleanup-btn {
+  margin-left: auto;
+}
+
 /* ---------- 命令面板（Ctrl+K：搜索工具/操作） ---------- */
 .palette-mask {
   position: fixed;
