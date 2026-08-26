@@ -1,0 +1,7 @@
+# 本文件供 GitHub 在 git blame 中跳过纯机械化的批量提交（GitHub 原生支持，
+# 需完整 40 位哈希）。本地追责可执行：git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: biome format 一次性全量重排（空格缩进/宽 100）
+# BACKLOG P0-2 决策：formatter 强制进 CI，此提交为启用前的一次性格式统一，
+# 纯格式变更无逻辑改动。追查历史时 GitHub blame 会自动跳过本提交。
+c95834041070f3697fb13e07bd5bb0f8f3ce77bc
