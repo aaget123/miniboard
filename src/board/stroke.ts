@@ -1,5 +1,6 @@
 import { getStroke } from "perfect-freehand";
 import type { StrokeOptions } from "perfect-freehand";
+import type { ArrowHead } from "../types";
 
 /**
  * 压力敏感笔迹封装（perfect-freehand）：
@@ -29,7 +30,7 @@ function svgPathFromOutline(points: number[][], closed = true): string {
     b = points[i + 1];
     d += `${r2((a[0] + b[0]) / 2)},${r2((a[1] + b[1]) / 2)} `;
   }
-  return closed ? d + "Z" : d;
+  return closed ? `${d}Z` : d;
 }
 
 /** 将原始笔迹点列转为渲染轮廓 path；点太少返回空字符串 */
@@ -130,4 +131,25 @@ export function splitErasedPoints(
     segs.push(cur);
   }
   return segs;
+}
+
+/**
+ * 分段擦除的端点样式分配（纯函数）：首段继承起点箭头、末段继承终点箭头，
+ * 中间段两端均无端点（单段时原样保留两端）。count 为分段数量。
+ */
+export function splitArrowHeads(
+  count: number,
+  startHead: ArrowHead | undefined,
+  endHead: ArrowHead | undefined,
+): { start: ArrowHead | undefined; end: ArrowHead | undefined }[] {
+  if (count <= 0) {
+    return [];
+  }
+  if (count === 1) {
+    return [{ start: startHead, end: endHead }];
+  }
+  return Array.from({ length: count }, (_, i) => ({
+    start: i === 0 ? startHead : undefined,
+    end: i === count - 1 ? endHead : undefined,
+  }));
 }

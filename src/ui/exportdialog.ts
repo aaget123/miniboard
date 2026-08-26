@@ -1,7 +1,7 @@
 import { iconHTML, type IconName } from "./icons";
 
-/** 导出格式：PNG 位图 / SVG 矢量图 / PDF 文档 */
-export type ExportFormat = "png" | "svg" | "pdf";
+/** 导出格式：PNG 位图 / SVG 矢量图 / PDF 文档 / 复制到剪贴板 */
+export type ExportFormat = "png" | "svg" | "pdf" | "copy";
 
 /**
  * 导出弹窗：统一导出入口（右侧悬浮栏与命令面板共用），
@@ -52,6 +52,7 @@ export class ExportDialog {
     const options = document.createElement("div");
     options.className = "export-options";
     const OPTIONS: { fmt: ExportFormat; icon: IconName; label: string; desc: string }[] = [
+      { fmt: "copy", icon: "clipboard", label: "复制到剪贴板", desc: "直接粘贴到聊天 / 文档" },
       { fmt: "png", icon: "camera", label: "PNG 图片", desc: "位图，适合分享与插入文档" },
       { fmt: "svg", icon: "file", label: "SVG 矢量图", desc: "矢量，可无损缩放" },
       { fmt: "pdf", icon: "download", label: "PDF 文档", desc: "单页 PDF，适合打印与归档" },

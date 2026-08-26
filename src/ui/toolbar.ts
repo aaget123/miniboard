@@ -595,7 +595,7 @@ export class Toolbar {
     this.styleBtn.title =
       "样式：描边/填充颜色与粗细（选中元素时作用于选中，未选中时设为新绘制图形的默认样式）";
     this.styleBtn.innerHTML =
-      iconHTML("sliders", 15) + `<span class="style-dot"></span>`;
+      `${iconHTML("sliders", 15)}<span class="style-dot"></span>`;
     this.styleBtn.addEventListener("click", () => {
       this.handlers.onStyle?.(this.styleBtn.getBoundingClientRect());
     });

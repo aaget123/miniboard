@@ -1,4 +1,4 @@
-import { ProjectStore } from "../storage";
+import type { ProjectStore } from "../storage";
 import type { ProjectMeta } from "../types";
 import { iconHTML } from "./icons";
 

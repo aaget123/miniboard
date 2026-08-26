@@ -3,7 +3,7 @@ import { canvasToLocal, localToCanvas, round1 } from "./coords";
 
 describe("round1", () => {
   it("保留 1 位小数", () => {
-    expect(round1(3.14159)).toBe(3.1);
+    expect(round1(Math.PI)).toBe(3.1);
     expect(round1(2.05)).toBe(2.1);
     expect(round1(-1.04)).toBe(-1);
     expect(round1(0)).toBe(0);

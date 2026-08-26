@@ -2746,3 +2746,17 @@ body.theme-light #statusbar.docked {
   color: var(--fg-dim);
 }
 
+
+/* 自动保存成功轻提示：项目名旁短暂显示后淡出 */
+.sb-saved {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #7dd87d;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+
+.sb-saved.fade-out {
+  opacity: 0;
+}

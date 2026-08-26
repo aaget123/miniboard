@@ -414,7 +414,7 @@ export function describeCanvas(
         ? `${summary}（该区域内没有元素）`
         : `${summary}（画布是空的）`;
   }
-  let tail = "\n" + JSON.stringify(compact);
+  let tail = `\n${JSON.stringify(compact)}`;
   if (over > 0) {
     tail += `\n（另有 ${over} 个元素已省略：${gridIndex(full.slice(MAX_DESCRIBE))}）`;
   }
@@ -1284,7 +1284,7 @@ export async function executeTool(
         };
       }
       const el = board.serialize().find((e) => e.id === id);
-      if (!el || el.type !== "image") {
+      if (el?.type !== "image") {
         return {
           name: tool.name,
           args,

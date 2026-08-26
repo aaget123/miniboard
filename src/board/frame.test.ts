@@ -1,14 +1,17 @@
-// frame 内容容器纯函数测试：autoSize 尺寸估算 / 换行规范化 / 折行 / 折叠高度 / 滚动上限 / 夹紧平移量 / SVG 内容导出
+// frame 内容容器纯函数测试：autoSize 尺寸估算 / 换行规范化 / 折行 / 折叠高度 / 滚动上限 / 夹紧平移量 / SVG 内容导出 / 坐标契约往返
 import { describe, expect, it } from "vitest";
 import {
   FRAME_COLLAPSED_HEIGHT,
   clampShift,
   collapsedFrameHeight,
+  contractFrameContents,
+  expandFrameContents,
   frameContentSize,
   frameScrollMax,
   normalizeContent,
   wrapLine,
 } from "./frame";
+import type { ElementData } from "../types";
 import { elementsToSVG } from "./svg";
 
 describe("normalizeContent（换行符规范化）", () => {
@@ -210,5 +213,98 @@ describe("elementsToSVG frame 内容导出", () => {
       "#1e1f22",
     );
     expect(svg).toContain("a &lt; b &amp; c &gt; d");
+  });
+});
+
+describe("contractFrameContents / expandFrameContents（坐标契约往返）", () => {
+  const frame: ElementData = {
+    type: "frame",
+    id: "f1",
+    x: 100,
+    y: 50,
+    width: 400,
+    height: 300,
+    rotation: 30,
+  };
+
+  it("rect 内容：世界 → 相对 → 世界 完全还原（含旋转框架）", () => {
+    const world: ElementData = {
+      type: "rect",
+      x: 200,
+      y: 120,
+      width: 80,
+      height: 60,
+      frameId: "f1",
+    };
+    const local = contractFrameContents([frame, world]);
+    const rel = local[1];
+    expect(rel.x).not.toBe(200); // 确实转成了相对坐标
+    const back = expandFrameContents(local);
+    expect(back[1].x).toBeCloseTo(200, 6);
+    expect(back[1].y).toBeCloseTo(120, 6);
+    expect(back[1].frameId).toBeUndefined(); // 展开清 frameId
+  });
+
+  it("line 内容：points 并入相对坐标，x/y 归零；往返还原", () => {
+    const world: ElementData = {
+      type: "line",
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      points: [
+        { x: 150, y: 80 },
+        { x: 260, y: 140 },
+      ],
+      frameId: "f1",
+    };
+    const local = contractFrameContents([frame, world]);
+    expect(local[1].x).toBe(0);
+    expect(local[1].y).toBe(0);
+    const back = expandFrameContents(local);
+    expect(back[1].points![0].x).toBeCloseTo(150, 6);
+    expect(back[1].points![0].y).toBeCloseTo(80, 6);
+    expect(back[1].points![1].x).toBeCloseTo(260, 6);
+    expect(back[1].points![1].y).toBeCloseTo(140, 6);
+  });
+
+  it("path 内容：path 数据整体换算，往返还原", () => {
+    const world: ElementData = {
+      type: "path",
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      path: "M 150 80 L 260 140",
+      frameId: "f1",
+    };
+    const local = contractFrameContents([frame, world]);
+    expect(local[1].path).not.toBe(world.path);
+    const back = expandFrameContents(local);
+    // 往返后精确还原原始 path 数据
+    expect(back[1].path).toBe("M 150 80 L 260 140");
+  });
+
+  it("框架不在场景中：按自由元素输出（清 frameId 保留世界坐标）", () => {
+    const orphan: ElementData = {
+      type: "rect",
+      x: 42,
+      y: 43,
+      width: 10,
+      height: 10,
+      frameId: "missing",
+    };
+    const out = contractFrameContents([orphan]);
+    expect(out[0].frameId).toBeUndefined();
+    expect(out[0].x).toBe(42);
+    const back = expandFrameContents([{ ...orphan }]);
+    expect(back[0].frameId).toBeUndefined();
+    expect(back[0].x).toBe(42);
+  });
+
+  it("无 frameId 的元素原样返回（引用不变）", () => {
+    const free: ElementData = { type: "ellipse", x: 1, y: 2, width: 3, height: 4 };
+    const out = contractFrameContents([free]);
+    expect(out[0]).toBe(free);
   });
 });

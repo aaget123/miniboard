@@ -18,6 +18,8 @@ export type SelectionBarHandlers = {
   onStrokeChange: (color: string) => void;
   onFillColorChange: (color: string) => void;
   onWidthChange: (width: number) => void;
+  /** 橡皮半径变化（橡皮模式滑条拖动） */
+  onEraserRadiusChange: (radiusPx: number) => void;
   /** 字号变化（仅选中文字时） */
   onFontSizeChange: (size: number) => void;
   // ---- 文本排版扩展：对齐/字重/字体（仅选中文字时生效） ----
@@ -89,6 +91,10 @@ export class SelectionBar {
   private sketchifyBtn!: HTMLButtonElement;
   private cropBtn!: HTMLButtonElement;
   private styleBtn!: HTMLButtonElement;
+  // 橡皮模式行（半径滑条）
+  private eraserRow!: HTMLDivElement;
+  private eraserInput!: HTMLInputElement;
+  private eraserValue!: HTMLSpanElement;
   private sep!: HTMLElement;
   // 字号行（仅选中文字时显示）
   private fontRow!: HTMLElement;
@@ -159,6 +165,29 @@ export class SelectionBar {
       this.styleBtn,
     );
     container.appendChild(this.bar);
+
+    // ---- 橡皮模式行：半径滑条（直接挂在栏上，非样式浮层内）----
+    this.eraserRow = document.createElement("div");
+    this.eraserRow.className = "style-row sb-eraser-row";
+    this.eraserRow.hidden = true;
+    const eraserLabel = document.createElement("span");
+    eraserLabel.className = "panel-label";
+    eraserLabel.textContent = "半径";
+    this.eraserInput = document.createElement("input");
+    this.eraserInput.type = "range";
+    this.eraserInput.min = "2";
+    this.eraserInput.max = "80";
+    this.eraserInput.step = "1";
+    this.eraserInput.value = "10";
+    this.eraserInput.addEventListener("input", () => {
+      this.eraserValue.textContent = this.eraserInput.value;
+      handlers.onEraserRadiusChange(Number(this.eraserInput.value));
+    });
+    this.eraserValue = document.createElement("span");
+    this.eraserValue.className = "width-value";
+    this.eraserValue.textContent = this.eraserInput.value;
+    this.eraserRow.append(eraserLabel, this.eraserInput, this.eraserValue);
+    this.bar.appendChild(this.eraserRow);
 
     // ---- 样式浮层（色板 + 取色器 + 粗细）----
     this.popover = document.createElement("div");
@@ -524,13 +553,41 @@ export class SelectionBar {
    * penMode：画笔（freehand）工具激活时也显示左侧栏——无选中时只保留样式按钮，
    * 用于设置新笔迹的默认颜色/粗细（与选中元素时的“作用于选中”语义一致）。
    */
-  show(info: SelectionInfo | null, toolActive: boolean, penMode = false) {
+  show(
+    info: SelectionInfo | null,
+    toolActive: boolean,
+    penMode = false,
+    eraserMode = false,
+  ) {
     const hasSelection = !!info && info.ids.length > 0;
     const visible =
-      (penMode || hasSelection) && toolActive && !(info && info.allLocked);
+      (penMode || eraserMode || hasSelection) &&
+      toolActive &&
+      !(info?.allLocked);
     this.setBarVisible(visible);
     if (!visible) {
       this.hidePopover();
+      return;
+    }
+    if (eraserMode && !hasSelection) {
+      // 橡皮模式：只显示半径滑条
+      this.beautifyBtn.style.display = "none";
+      this.sketchifyBtn.style.display = "none";
+      this.cropBtn.style.display = "none";
+      this.styleBtn.style.display = "none";
+      this.sep.style.display = "none";
+      this.eraserRow.hidden = false;
+      this.fontRow.hidden = true;
+      this.alignRow.hidden = true;
+      this.weightRow.hidden = true;
+      this.fontFamilyRow.hidden = true;
+      this.widthRow.hidden = true;
+      this.dashRow.hidden = true;
+      this.opacityRow.hidden = true;
+      this.cornerRow.hidden = true;
+      this.roughRow.hidden = true;
+      this.arrowRow.hidden = true;
+      this.hidePopover(false);
       return;
     }
     if (penMode && !hasSelection) {
@@ -540,6 +597,7 @@ export class SelectionBar {
       this.cropBtn.style.display = "none";
       this.sep.style.display = "";
       this.styleBtn.style.display = "";
+      this.eraserRow.hidden = true;
       this.fontRow.hidden = true;
       this.alignRow.hidden = true;
       this.weightRow.hidden = true;
@@ -562,6 +620,7 @@ export class SelectionBar {
     this.cropBtn.style.display = singleImage ? "" : "none";
     this.styleBtn.style.display = hasEditable ? "" : "none";
     this.sep.style.display = hasEditable ? "" : "none";
+    this.eraserRow.hidden = true;
     this.fontRow.hidden = !info2.hasText;
     this.alignRow.hidden = !info2.hasText;
     this.weightRow.hidden = !info2.hasText;
@@ -715,6 +774,12 @@ export class SelectionBar {
     this.widthValue.textContent = String(width);
   }
 
+  /** 橡皮半径滑条跟随（滚轮 / [ ] 键调节时反向同步） */
+  setEraserRadius(radiusPx: number) {
+    this.eraserInput.value = String(radiusPx);
+    this.eraserValue.textContent = String(radiusPx);
+  }
+
   setFontSize(size: number) {
     this.fontSizeInput.value = String(size);
     this.fontSizeLabel.textContent = String(size);
@@ -723,7 +788,9 @@ export class SelectionBar {
   /** 对齐按钮高亮跟随（单选未锁定文字时） */
   setTextAlign(align: "left" | "center" | "right") {
     const idx = align === "left" ? 0 : align === "center" ? 1 : 2;
-    this.alignBtns.forEach((b, i) => b.classList.toggle("active", i === idx));
+    this.alignBtns.forEach((b, i) => {
+      b.classList.toggle("active", i === idx);
+    });
   }
 
   /** 字重滑条跟随（单选未锁定文字时；100 取整到档位） */
@@ -746,7 +813,9 @@ export class SelectionBar {
     const btns = end === "start" ? this.startArrowBtns : this.endArrowBtns;
     const order = ["none", "arrow", "triangle", "circle", "dot"];
     const idx = order.indexOf(head);
-    btns.forEach((b, i) => b.classList.toggle("active", i === idx));
+    btns.forEach((b, i) => {
+      b.classList.toggle("active", i === idx);
+    });
   }
 
   /** 透明度滑条跟随（单选未锁定元素时由 SelectionInfo 驱动） */

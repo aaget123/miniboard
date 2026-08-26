@@ -36,7 +36,7 @@ export function translatePath(path: string, dx: number, dy: number): string {
     const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
       parseFloat(n[0]),
     );
-    out += cmd + " ";
+    out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
     let k = 0;
@@ -72,7 +72,7 @@ export function translatePath(path: string, dx: number, dy: number): string {
         for (let j = 0; j < group.length; j += 2) {
           out +=
             (j || k ? " " : "") + fmt(isAbs ? group[j] + dx : group[j]);
-          out += " " + fmt(isAbs ? group[j + 1] + dy : group[j + 1]);
+          out += ` ${fmt(isAbs ? group[j + 1] + dy : group[j + 1])}`;
         }
       }
       k += per;
@@ -117,7 +117,7 @@ export function scalePath(
     const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
       parseFloat(n[0]),
     );
-    out += cmd + " ";
+    out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
     const scaleX = (v: number) => ox + (v - ox) * sx;
@@ -161,7 +161,7 @@ export function scalePath(
           out +=
             (j || k ? " " : "") + fmt(isAbs ? scaleX(group[j]) : group[j]);
           out +=
-            " " + fmt(isAbs ? scaleY(group[j + 1]) : group[j + 1]);
+            ` ${fmt(isAbs ? scaleY(group[j + 1]) : group[j + 1])}`;
         }
       }
       k += per;
@@ -201,7 +201,7 @@ export function mirrorPath(
     const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
       parseFloat(n[0]),
     );
-    out += cmd + " ";
+    out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
     const mirrorX = isAbs && axis === "h";
@@ -248,7 +248,7 @@ export function mirrorPath(
             (j || k ? " " : "") +
             fmt(mirrorX ? 2 * center - group[j] : group[j]);
           out +=
-            " " + fmt(mirrorY ? 2 * center - group[j + 1] : group[j + 1]);
+            ` ${fmt(mirrorY ? 2 * center - group[j + 1] : group[j + 1])}`;
         }
       }
       k += per;
@@ -288,7 +288,7 @@ export function transformPath(
     const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
       parseFloat(n[0]),
     );
-    out += cmd + " ";
+    out += `${cmd} `;
     const upper = cmd.toUpperCase();
     let k = 0;
     while (k < nums.length) {
@@ -320,7 +320,7 @@ export function transformPath(
         for (let j = 0; j < group.length; j += 2) {
           const p = fn({ x: group[j], y: group[j + 1] });
           out += (j || k ? " " : "") + fmt(p.x);
-          out += " " + fmt(p.y);
+          out += ` ${fmt(p.y)}`;
         }
       }
       k += per;

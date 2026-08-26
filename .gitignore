@@ -26,3 +26,6 @@ tmp-*.mjs
 tmp-*.js
 tmp-*.cjs
 tmp-*.html
+
+# Agent 会话记忆（工作区本地，不入库）
+.workbuddy/

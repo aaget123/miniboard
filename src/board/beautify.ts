@@ -48,7 +48,7 @@ function round1(v: number): number {
 
 /** 路径是否只含画笔命令（M/L/Q）；含 A/C/S/T/Z 的路径视为已完成的标准图形，不整理 */
 function isPenPath(path: string): boolean {
-  return /^[MLQ\s\d.\-]+$/.test(path);
+  return /^[MLQ\s\d.-]+$/.test(path);
 }
 
 /** 重建拉直后的 freehand 元素：新采样点（元素局部基准）+ 重新生成轮廓 path */
@@ -161,7 +161,7 @@ function pathOf(pts: number[][], closed = false): string {
   for (let i = 1; i < pts.length; i++) {
     d += ` L ${pts[i][0]} ${pts[i][1]}`;
   }
-  return closed ? d + " Z" : d;
+  return closed ? `${d} Z` : d;
 }
 
 // ================= 形状识别与标准图形生成 =================

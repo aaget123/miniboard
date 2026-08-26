@@ -53,6 +53,48 @@ function isEditableTarget(target: EventTarget | null) {
   );
 }
 
+// ---- 默认样式持久化：跨启动记住上次使用的颜色/粗细/填充 ----
+const LS_STYLE = "miniboard:last-style";
+type DefaultStyle = {
+  stroke: string;
+  strokeWidth: number;
+  fillEnabled: boolean;
+  fillColor: string;
+};
+function loadDefaultStyle(): DefaultStyle {
+  const fallback: DefaultStyle = {
+    stroke: "#4f8cff",
+    strokeWidth: 2,
+    fillEnabled: false,
+    fillColor: "#4f8cff",
+  };
+  try {
+    const raw = localStorage.getItem(LS_STYLE);
+    if (!raw) {
+      return fallback;
+    }
+    const s = JSON.parse(raw) as Partial<DefaultStyle>;
+    return {
+      stroke: typeof s.stroke === "string" ? s.stroke : fallback.stroke,
+      strokeWidth:
+        typeof s.strokeWidth === "number" && s.strokeWidth >= 1 && s.strokeWidth <= 40
+          ? s.strokeWidth
+          : fallback.strokeWidth,
+      fillEnabled: s.fillEnabled === true,
+      fillColor: typeof s.fillColor === "string" ? s.fillColor : fallback.fillColor,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// ---- 橡皮半径持久化（滑条 / [ ] 键 / 滚轮共用）----
+const LS_ERASER_RADIUS = "miniboard:eraser-radius";
+function loadEraserRadius(): number {
+  const v = Number(localStorage.getItem(LS_ERASER_RADIUS));
+  return Number.isFinite(v) && v >= 2 && v <= 80 ? Math.round(v) : 10;
+}
+
 async function main() {
   const canvasEl = document.getElementById("board") as HTMLElement;
   const toolbarEl = document.getElementById("toolbar") as HTMLDivElement;
@@ -100,12 +142,16 @@ async function main() {
   // 顶部悬浮工具栏（创建于下方；board 双击自动切换工具与设置弹窗工具栏页签的回调闭包引用）
   let toolbar: Toolbar;
 
-  const style = {
-    stroke: "#4f8cff",
-    strokeWidth: 2,
-    fillEnabled: false,
-    fillColor: "#4f8cff",
+  const style = loadDefaultStyle();
+  const saveStyle = () => {
+    try {
+      localStorage.setItem(LS_STYLE, JSON.stringify(style));
+    } catch {
+      // 存储不可用时静默失败（仅影响下次启动的记忆）
+    }
   };
+  // 橡皮半径滑条反向同步（Board 回调先于 selectionBar 创建触发时安全空实现）
+  let syncEraserSlider: (radiusPx: number) => void = () => {};
 
   const board = new Board(canvasEl, {
     getStyle: () => ({ ...style }),
@@ -150,7 +196,16 @@ async function main() {
       toolbar.setTool(tool);
       refreshSelectionBar(lastSelectionInfo);
     },
+    // 橡皮半径变化（滚轮/[ ] 键）：反向同步左侧栏滑条（滑条拖动走 onEraserRadiusChange 回调）
+    onEraserRadiusChange: (radiusPx) => {
+      localStorage.setItem(LS_ERASER_RADIUS, String(radiusPx));
+      syncEraserSlider(radiusPx);
+    },
+    // 首次约束夹紧（拖动撞墙）：一次性提示 Alt 豁免
+    onConstraintHint: () => toast("已吸附在约束框架内 · 按住 Alt 可拖出"),
   });
+  // 恢复上次使用的橡皮半径
+  board.setEraserRadius(loadEraserRadius());
 
   // 左侧选中栏显隐判定：非 select 工具/文本编辑中整体隐藏（工具切换时同步刷新）
   let lastSelectionInfo: SelectionInfo | null = null;
@@ -159,13 +214,16 @@ async function main() {
     const tool = board.currentTool;
     // 画笔激活：左侧栏显示样式按钮，用于设置新笔迹的默认颜色/粗细
     const penMode = tool === "pen";
+    // 橡皮激活：左侧栏只显示半径滑条
+    const eraserMode = tool === "eraser";
     if (penMode) {
       selectionBar.setWidth(style.strokeWidth);
     }
     selectionBar.show(
       info,
-      (tool === "select" || penMode) && !textEditing,
+      (tool === "select" || penMode || eraserMode) && !textEditing,
       penMode,
+      eraserMode,
     );
   };
 
@@ -190,6 +248,8 @@ async function main() {
   };
 
   const storage = new ProjectStore(board, dataDir);
+  // 自动保存失败提示（连续失败只报一次，恢复后自动复位）
+  storage.onStorageError = (message) => toast(`⚠️ ${message}`);
 
   // 项目管理弹窗（☰ → 📁 项目）：新建/切换/重命名/删除；独立于设置弹窗
   // 项目变更回调：刷新状态栏项目名 + 元素数（切换/新建/删除后场景内容已变）
@@ -255,6 +315,7 @@ async function main() {
     toolbar.setFill(enabled);
     // 有选中元素时同步开/关填充
     board.applyStyleToSelection({ fillEnabled: enabled });
+    saveStyle();
   };
 
   // ---- 顶部悬浮工具栏：工具组（含形状下拉）+ 样式/填充开关 ----
@@ -282,18 +343,21 @@ async function main() {
       toolbar.setStyleColor(color);
       // 有选中元素时同步应用新描边色（不再联动填充）
       board.applyStyleToSelection({ stroke: color });
+      saveStyle();
     },
     onFillColorChange: (color) => {
       style.fillColor = color;
       selectionBar.setFillColor(color);
       // 有选中元素时应用独立填充色（自动开启填充）
       board.applyStyleToSelection({ fillColor: color });
+      saveStyle();
     },
     onWidthChange: (width) => {
       style.strokeWidth = width;
       selectionBar.setWidth(width);
       // 有选中元素时同步应用新粗细（画笔笔迹会按新粗细重算轮廓）
       board.applyStyleToSelection({ strokeWidth: width });
+      saveStyle();
     },
     onFontSizeChange: (size) => {
       // 仅对选中文字即时生效（新文字字号固定默认值，不进默认样式）
@@ -329,6 +393,11 @@ async function main() {
     onRoughnessChange: (roughness) => {
       board.setRoughness(roughness);
     },
+    // 橡皮半径滑条：拖动即调 Board 半径并持久化
+    onEraserRadiusChange: (radiusPx) => {
+      board.setEraserRadius(radiusPx);
+      localStorage.setItem(LS_ERASER_RADIUS, String(board.eraserRadiusPx));
+    },
     onCrop: () => {
       const ok = board.startCrop();
       if (!ok) {
@@ -336,29 +405,38 @@ async function main() {
       }
     },
   });
+  // 滑条初值对齐已恢复的半径；滚轮/[ ] 调节时经此反向同步滑条
+  selectionBar.setEraserRadius(board.eraserRadiusPx);
+  syncEraserSlider = (radiusPx) => selectionBar.setEraserRadius(radiusPx);
 
   // 统一导出弹窗（右侧悬浮栏/命令面板共用）：选格式后执行实际导出
   const exportDialog = new ExportDialog(document.body);
   exportDialog.onExport((fmt) => {
-    if (fmt === "pdf" && board.elementCount === 0) {
+    if ((fmt === "pdf" || fmt === "png" || fmt === "copy") && board.elementCount === 0) {
       toast("画布是空的，没有内容可导出");
       return;
     }
     const p =
-      fmt === "png"
-        ? storage.exportPNG()
-        : fmt === "svg"
-          ? storage.exportSVG()
-          : storage.exportPDF();
+      fmt === "copy"
+        ? storage.exportPNGClipboard()
+        : fmt === "png"
+          ? storage.exportPNG()
+          : fmt === "svg"
+            ? storage.exportSVG()
+            : storage.exportPDF();
     p.then((ok) => {
       if (ok) {
         toast(
-          fmt === "png"
-            ? "📷 已导出 PNG"
-            : fmt === "svg"
-              ? "📄 已导出 SVG"
-              : "📕 已导出 PDF",
+          fmt === "copy"
+            ? "📋 已复制画布图片，可直接粘贴"
+            : fmt === "png"
+              ? "📷 已导出 PNG"
+              : fmt === "svg"
+                ? "📄 已导出 SVG"
+                : "📕 已导出 PDF",
         );
+      } else if (fmt === "copy") {
+        toast("复制失败：浏览器不支持或权限被拒");
       }
     }).catch((err) => toast(`导出失败：${err}`));
   });
@@ -564,6 +642,8 @@ async function main() {
     onZoomOut: () => board.zoomOut(),
     onZoomReset: () => board.zoomReset(),
   });
+  // 自动保存成功轻提示（失败走 toast，成功走这里形成安全闭环）
+  storage.onSaved = () => statusBar.flashSaved();
 
   // AI 助手面板（交流 + 编辑双模式）；配置缺失时唤起设置弹窗并定位到模型页签
   aiPanel = new AiPanel(board, registry, toolbar, () => settingsDialog.open("model"));
@@ -595,6 +675,15 @@ async function main() {
     { id: "image", section: "操作", title: "插入图片", icon: "image", run: insertImage },
     { id: "import", section: "操作", title: "导入文件（内容框架）", icon: "file", keywords: "MD Markdown 代码 文本 导入", run: importFile },
     { id: "export", section: "操作", title: "导出画布", icon: "download", keywords: "PNG SVG 图片 矢量", run: () => exportDialog.open() },
+    { id: "copyImage", section: "操作", title: "复制画布图片到剪贴板", icon: "clipboard", keywords: "clipboard 剪贴板 粘贴 复制图片", run: () => {
+      if (board.elementCount === 0) {
+        toast("画布是空的");
+        return;
+      }
+      storage.exportPNGClipboard().then((ok) => {
+        toast(ok ? "📋 已复制画布图片，可直接粘贴" : "复制失败：浏览器不支持或权限被拒");
+      }).catch(() => toast("复制失败"));
+    } },
     { id: "projects", section: "操作", title: "项目管理", icon: "folder", keywords: "项目 切换 重命名", run: () => projectDialog.open() },
     { id: "settings", section: "操作", title: "设置", icon: "settings", keywords: "AI 模型 主题 网格 提示词", run: () => settingsDialog.open() },
     { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: formatCombo(shortcuts.getKeys("aiPanel")[0]), run: () => aiPanel.toggle() },
@@ -692,6 +781,11 @@ async function main() {
     selectionBar.hidePopover();
     toolsFloat.collapse();
   };
+  const nudgeOrToast = (dx: number, dy: number) => {
+    if (!board.nudgeSelected(dx, dy)) {
+      toast("没有选中的元素");
+    }
+  };
   // 快捷键（配置驱动）：keymap 查表分发；工具键切换画布工具，操作键执行动作处理器
   const ACTION_HANDLERS: Record<string, () => void> = {
     save: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)),
@@ -724,7 +818,35 @@ async function main() {
     zoomIn: () => board.zoomIn(),
     zoomOut: () => board.zoomOut(),
     zoomReset: () => board.zoomReset(),
+    // 方向键微移（1px；按住方向键由系统重复连续移动）
+    nudgeUp: () => nudgeOrToast(0, -1),
+    nudgeDown: () => nudgeOrToast(0, 1),
+    nudgeLeft: () => nudgeOrToast(-1, 0),
+    nudgeRight: () => nudgeOrToast(1, 0),
+    // 缩放适配：定位选中/全部内容，大画布不再盲逛
+    zoomFitSelection: () => {
+      if (!board.zoomToFitSelection()) {
+        toast("请先选中元素");
+      }
+    },
+    zoomFitAll: () => {
+      if (!board.zoomToFitAll()) {
+        toast("画布是空的");
+      }
+    },
+    // 橡皮半径步进（[ ] 键）
+    eraserSmaller: () => board.adjustEraserRadius(-2),
+    eraserBigger: () => board.adjustEraserRadius(2),
   };
+  // ---- 长按临时橡皮：按住快捷键借用橡皮，松手还原原工具；快拍则持久选中 ----
+  const ERASER_HOLD_MS = 250;
+  let eraserHold: { prevTool: string; start: number } | null = null;
+  const switchTool = (tool: string) => {
+    board.setTool(tool);
+    toolbar.setTool(tool);
+    refreshSelectionBar(lastSelectionInfo);
+  };
+
   window.addEventListener("keydown", (e) => {
     if (isEditableTarget(e.target)) {
       return;
@@ -737,15 +859,43 @@ async function main() {
     if (id !== "escape") {
       e.preventDefault();
     }
+    if (id === "tool:eraser") {
+      // 长按临时橡皮：按住借用橡皮擦除，松手回到原工具；
+      // 快拍（<250ms 未产生擦除）视为常规切换，持久选中橡皮
+      if (!eraserHold && board.currentTool !== "eraser" && !e.repeat) {
+        eraserHold = { prevTool: board.currentTool, start: Date.now() };
+        switchTool("eraser");
+      }
+      return;
+    }
     if (id.startsWith("tool:")) {
-      const tool = id.slice("tool:".length);
-      board.setTool(tool);
-      toolbar.setTool(tool);
-      // 同步刷新左侧选中栏（画笔模式显示样式按钮）
-      refreshSelectionBar(lastSelectionInfo);
+      switchTool(id.slice("tool:".length));
       return;
     }
     ACTION_HANDLERS[id]?.();
+  });
+  // 松开橡皮快捷键：按住使用过则还原原工具；手势进行中不切换（避免打断撤销合成）
+  window.addEventListener("keyup", (e) => {
+    if (!eraserHold || isEditableTarget(e.target)) {
+      return;
+    }
+    const combo = comboFromEvent(e);
+    if (keymap[combo] !== "tool:eraser") {
+      return;
+    }
+    const held = eraserHold;
+    eraserHold = null;
+    if (board.isErasing) {
+      // 正在拖拽擦除：保持橡皮，本次不还原
+      return;
+    }
+    if (Date.now() - held.start >= ERASER_HOLD_MS) {
+      const prev = held.prevTool;
+      if (prev && prev !== "eraser") {
+        switchTool(prev);
+      }
+    }
+    // 快拍：保持橡皮选中（与旧版单击 E 行为一致）
   });
 
   // 状态栏 zoom 轮询（画布手势为 leafer 内置，无事件回调）

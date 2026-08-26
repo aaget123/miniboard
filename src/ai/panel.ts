@@ -136,13 +136,13 @@ function trimLongString(s: string, maxTokens: number): string {
       const cand = cut.slice(0, i + 1) + close;
       try {
         JSON.parse(cand);
-        return cand + "\n…（内容过长已截断）";
+        return `${cand}\n…（内容过长已截断）`;
       } catch {
         // 该处不是完整边界，继续向前回溯
       }
     }
   }
-  return cut + "\n…（内容过长已截断）";
+  return `${cut}\n…（内容过长已截断）`;
 }
 
 function renderInline(text: string): string {

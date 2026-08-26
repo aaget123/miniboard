@@ -1,5 +1,8 @@
 // frame 内容容器纯函数：尺寸估算与夹紧平移（无 leafer 依赖，画布与单测共用）
 
+import { rotatePoint, transformPath } from "./path";
+import type { ElementData } from "../types";
+
 /** 内容内边距（px） */
 export const FRAME_PADDING = 16;
 /** 内容字号（px） */
@@ -139,4 +142,99 @@ export function clampShift(
     dy = fb.minY - box.minY;
   }
   return { dx, dy };
+}
+
+/**
+ * 序列化坐标换算（世界 → 相对）：带 frameId 的元素转相对框架原点/旋转的坐标
+ * （数据契约：内容存“框架 id + 相对位置”，框架移动/旋转后相对坐标不变）。
+ * 框架不在同一场景（数据异常）时按自由元素输出（清 frameId 保留世界坐标）。
+ */
+export function contractFrameContents(data: ElementData[]): ElementData[] {
+  const frames = new Map<string, ElementData>();
+  for (const d of data) {
+    if (d.type === "frame" && d.id) {
+      frames.set(d.id, d);
+    }
+  }
+  return data.map((d) => {
+    if (!d.frameId) {
+      return d;
+    }
+    const f = frames.get(d.frameId);
+    if (!f) {
+      return { ...d, frameId: undefined };
+    }
+    const fx = f.x ?? 0;
+    const fy = f.y ?? 0;
+    const rot = f.rotation ?? 0;
+    const toLocal = (p: { x: number; y: number }) =>
+      rotatePoint({ x: p.x - fx, y: p.y - fy }, -rot);
+    if (d.type === "line" || d.type === "arrow") {
+      return {
+        ...d,
+        x: 0,
+        y: 0,
+        points: (d.points ?? []).map(toLocal),
+      };
+    }
+    if (d.type === "path") {
+      return {
+        ...d,
+        x: 0,
+        y: 0,
+        path: transformPath(d.path ?? "", toLocal),
+      };
+    }
+    const p = toLocal({ x: d.x, y: d.y });
+    return { ...d, x: p.x, y: p.y };
+  });
+}
+
+/**
+ * 导出/整理坐标还原（相对 → 世界）：SVG 导出与整理计算前把带 frameId 的
+ * 内容展开为画布世界坐标（清 frameId），保证输出位置正确。
+ */
+export function expandFrameContents(data: ElementData[]): ElementData[] {
+  const frames = new Map<string, ElementData>();
+  for (const d of data) {
+    if (d.type === "frame" && d.id) {
+      frames.set(d.id, d);
+    }
+  }
+  return data.map((d) => {
+    if (!d.frameId) {
+      return d;
+    }
+    const f = frames.get(d.frameId);
+    if (!f) {
+      return { ...d, frameId: undefined };
+    }
+    const fx = f.x ?? 0;
+    const fy = f.y ?? 0;
+    const rot = f.rotation ?? 0;
+    const toWorld = (p: { x: number; y: number }) => {
+      const q = rotatePoint(p, rot);
+      return { x: q.x + fx, y: q.y + fy };
+    };
+    if (d.type === "line" || d.type === "arrow") {
+      return {
+        ...d,
+        x: 0,
+        y: 0,
+        points: (d.points ?? []).map(toWorld),
+        frameId: undefined,
+      };
+    }
+    if (d.type === "path") {
+      return {
+        ...d,
+        x: 0,
+        y: 0,
+        path: transformPath(d.path ?? "", toWorld),
+        frameId: undefined,
+      };
+    }
+    const p = toWorld({ x: d.x, y: d.y });
+    return { ...d, x: p.x, y: p.y, frameId: undefined };
+  });
 }

@@ -65,6 +65,8 @@ The AI assistant uses OpenAI-compatible APIs (works with local Ollama / vLLM / r
 3. Click "Test Connection", then activate the profile
 
 > **Privacy**: API keys and profiles are stored locally only; conversation content is sent only to the API URL **you** configure. The app itself collects nothing.
+>
+> **Security note**: API keys are stored as plaintext in the WebView's localStorage (on disk under the app data dir, `EBWebView`) without additional encryption. Avoid saving sensitive keys on shared computers; if you need stronger protection, prefer a local service (e.g. Ollama) that requires no real key.
 
 ## Data Storage
 

@@ -1,4 +1,5 @@
 import rough from "roughjs";
+import type { Drawable } from "roughjs/bin/core";
 import type { ElementData } from "../types";
 
 /**
@@ -17,7 +18,7 @@ export function isSketchable(d: ElementData): boolean {
   }
   if (d.type === "path" && d.path) {
     // 标准多边形（beautify 输出的 M/L/Z）：仅含 M/L/Z 命令；画笔 M/L/Q、曲线含 C/A 均不可转换
-    return /^[MLZ\s\d.\-]+$/.test(d.path) && d.path.includes("Z");
+    return /^[MLZ\s\d.-]+$/.test(d.path) && d.path.includes("Z");
   }
   return false;
 }
@@ -69,7 +70,7 @@ export function redrawRough(
 ): { path: string } | null {
   const generator = rough.generator();
   const options = roughOptions(d, meta.seed, roughness);
-  let drawable;
+  let drawable: Drawable;
   const orig = meta.original ?? d.type;
   switch (orig) {
     case "rect": {

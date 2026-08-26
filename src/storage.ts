@@ -1,18 +1,18 @@
 import type { Board } from "./board/canvas";
 import { dataURLToJpeg, jpegToPdf, PDF_EXPORT_MAX_SIDE } from "./board/pdf";
-import type { ProjectMeta, SceneFile } from "./types";
+import { parseProjectIndex, parseScene, resolveActiveIndex } from "./storage-core";
+import type { ProjectIndex } from "./storage-core";
+import type { ProjectMeta } from "./types";
 
 /**
  * 存储层（多项目）：项目索引 + 每项目独立场景，自动保存 / 切换 / 增删改查；
  * 另存为 / 打开 / 导出 PNG / 导出 SVG 文件级操作保留（与项目管理并存）。
  * 桌面环境走 Tauri 原生对话框与文件系统；浏览器环境回退到 localStorage + 下载。
+ * 桌面端写入统一走原子化路径（临时文件 + 上一版备份），中断不产生半截主文件。
  */
 
 export const isDesktop = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-/** 项目索引（localStorage / 桌面 index.json）：激活项目 + 项目列表 */
-type ProjectIndex = { activeId: string; projects: ProjectMeta[] };
 
 const LS_INDEX_KEY = "miniboard:projects";
 const LS_SCENE_PREFIX = "miniboard:project:";
@@ -58,6 +58,44 @@ function dateStamp() {
 
 function newProjectId(): string {
   return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 原子化写文本文件：先写 .tmp 临时文件 → 旧版本复制为 .bak 备份 → 原子重命名落盘。
+ * 任一步骤中断最多丢本次写入（主文件或 .bak 仍为完整上一版），不会产生半截主文件；
+ * 载入侧 loadScene 对应提供 .bak 回退。
+ */
+async function writeTextAtomic(path: string, text: string) {
+  const fs = await import("@tauri-apps/plugin-fs");
+  const tmp = `${path}.tmp`;
+  await fs.writeTextFile(tmp, text);
+  try {
+    if (await fs.exists(path)) {
+      try {
+        await fs.remove(`${path}.bak`);
+      } catch {
+        // 无旧备份可忽略
+      }
+      await fs.copyFile(path, `${path}.bak`);
+    }
+  } catch {
+    // 备份失败不阻塞写入（上一版仍留在主文件）
+  }
+  await fs.rename(tmp, path);
+}
+
+/** 读文本文件，失败（不存在/无权限）返回 null */
+async function readTextAt(path: string): Promise<string | null> {
+  try {
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    return await readTextFile(path);
+  } catch {
+    return null;
+  }
 }
 
 function downloadText(text: string, filename: string) {
@@ -119,13 +157,13 @@ export class ProjectStore {
    * 最后加载激活项目场景到画布，返回是否恢复成功。
    */
   async init(): Promise<boolean> {
-    const idx = await this.readIndex();
-    if (idx) {
+    const parsed = await this.readIndex();
+    if (parsed) {
+      const idx = resolveActiveIndex(parsed);
       this.projects = idx.projects;
       this.currentId = idx.activeId;
-      // 激活项目失效时回退到第一个
-      if (!this.current && this.projects.length) {
-        this.currentId = this.projects[0].id;
+      // 激活项目失效发生回退时立即持久化，避免每次启动重复回退
+      if (idx.activeId !== parsed.activeId) {
         await this.saveIndex();
       }
     } else {
@@ -216,13 +254,33 @@ export class ProjectStore {
 
   // ================= 自动保存 =================
 
+  /** 存储层错误回调：自动保存失败等需用户感知的场景（main.ts 接 toast） */
+  onStorageError: ((message: string) => void) | null = null;
+
+  /** 自动保存成功回调（main.ts 接状态栏轻提示） */
+  onSaved: (() => void) | null = null;
+
+  /** 自动保存连续失败标记：失败只提示一次，成功后复位（避免持续变更时刷屏） */
+  private autosaveFailing = false;
+
   /** 元素变化后调用：防抖自动保存到当前项目 */
   scheduleAutosave() {
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
-      this.saveCurrent().catch((err) =>
-        console.error("[storage] autosave failed", err),
-      );
+      this.saveCurrent()
+        .then(() => {
+          this.autosaveFailing = false;
+          this.onSaved?.();
+        })
+        .catch((err) => {
+          console.error("[storage] autosave failed", err);
+          if (!this.autosaveFailing) {
+            this.autosaveFailing = true;
+            this.onStorageError?.(
+              `自动保存失败：${errMessage(err)}（问题恢复后将继续自动保存）`,
+            );
+          }
+        });
     }, 800);
   }
 
@@ -333,6 +391,23 @@ export class ProjectStore {
     });
   }
 
+  /**
+   * 导出 PNG 到剪贴板（Web Clipboard API，浏览器与 WebView2 均支持）：
+   * 复制后可直接粘贴到聊天/文档；不支持或授权拒绝返回 false。
+   */
+  async exportPNGClipboard(): Promise<boolean> {
+    try {
+      const dataURL = await this.board.exportPNG();
+      const blob = await (await fetch(dataURL)).blob();
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": blob }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** 导出 PNG 图片 */
   async exportPNG(): Promise<boolean> {
     const dataURL = await this.board.exportPNG();
@@ -407,45 +482,36 @@ export class ProjectStore {
   // ================= 内部：场景读写 =================
 
   private applyJSON(json: string): boolean {
-    try {
-      const scene = JSON.parse(json) as SceneFile;
-      if (scene.app !== "miniboard" || !Array.isArray(scene.elements)) {
-        return false;
-      }
-      this.board.loadElements(scene.elements);
-      return true;
-    } catch {
+    const scene = parseScene(json);
+    if (!scene) {
       return false;
     }
+    this.board.loadElements(scene.elements);
+    return true;
   }
 
-  /** 读取项目场景并载入画布；成功时重置历史 */
+  /** 读取项目场景并载入画布；成功时重置历史。主文件缺失/损坏时回退上一版 .bak 备份 */
   private async loadScene(id: string): Promise<boolean> {
-    try {
-      let json: string | null = null;
-      if (isDesktop()) {
-        const { readTextFile } = await import("@tauri-apps/plugin-fs");
-        json = await readTextFile(await this.scenePath(id));
-      } else {
-        json = localStorage.getItem(LS_SCENE_PREFIX + id);
-      }
-      if (!json) {
-        return false;
-      }
-      const ok = this.applyJSON(json);
-      if (ok) {
-        this.board.resetHistory();
-      }
-      return ok;
-    } catch {
+    let json: string | null = null;
+    if (isDesktop()) {
+      const path = await this.scenePath(id);
+      json = (await readTextAt(path)) ?? (await readTextAt(`${path}.bak`));
+    } else {
+      json = localStorage.getItem(LS_SCENE_PREFIX + id);
+    }
+    if (!json) {
       return false;
     }
+    const ok = this.applyJSON(json);
+    if (ok) {
+      this.board.resetHistory();
+    }
+    return ok;
   }
 
   private async writeScene(id: string, json: string) {
     if (isDesktop()) {
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      await writeTextFile(await this.scenePath(id), json);
+      await writeTextAtomic(await this.scenePath(id), json);
     } else {
       localStorage.setItem(LS_SCENE_PREFIX + id, json);
     }
@@ -459,6 +525,12 @@ export class ProjectStore {
       } catch {
         // 场景文件不存在可忽略
       }
+      try {
+        const { remove } = await import("@tauri-apps/plugin-fs");
+        await remove(`${await this.scenePath(id)}.bak`);
+      } catch {
+        // 无备份可忽略
+      }
     } else {
       localStorage.removeItem(LS_SCENE_PREFIX + id);
     }
@@ -467,33 +539,20 @@ export class ProjectStore {
   // ================= 内部：索引读写 =================
 
   private async readIndex(): Promise<ProjectIndex | null> {
-    try {
-      let text: string | null = null;
-      if (isDesktop()) {
-        const { readTextFile } = await import("@tauri-apps/plugin-fs");
-        text = await readTextFile(await this.indexPath());
-      } else {
-        text = localStorage.getItem(LS_INDEX_KEY);
-      }
-      if (!text) {
-        return null;
-      }
-      const idx = JSON.parse(text) as ProjectIndex;
-      if (!Array.isArray(idx.projects)) {
-        return null;
-      }
-      return idx;
-    } catch {
-      return null;
+    let text: string | null = null;
+    if (isDesktop()) {
+      text = await readTextAt(await this.indexPath());
+    } else {
+      text = localStorage.getItem(LS_INDEX_KEY);
     }
+    return parseProjectIndex(text);
   }
 
   private async saveIndex() {
     const idx: ProjectIndex = { activeId: this.currentId, projects: this.projects };
     const text = JSON.stringify(idx);
     if (isDesktop()) {
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      await writeTextFile(await this.indexPath(), text);
+      await writeTextAtomic(await this.indexPath(), text);
     } else {
       localStorage.setItem(LS_INDEX_KEY, text);
     }

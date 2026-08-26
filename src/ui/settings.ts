@@ -734,7 +734,7 @@ export class SettingsDialog {
     for (const p of this.store.profiles) {
       const row = document.createElement("div");
       row.className =
-        "profile-item" + (p.id === this.store.activeId ? " active" : "");
+        `profile-item${p.id === this.store.activeId ? " active" : ""}`;
       row.title = "点击选用此配置并载入编辑";
       row.addEventListener("click", () => this.selectProfile(p.id));
       const radio = document.createElement("span");
@@ -1182,7 +1182,7 @@ export class SettingsDialog {
     addBtn.type = "button";
     addBtn.className = "tb-add-group-btn";
     addBtn.title = "新建分组：创建后把工具行拖到分组头上即可归入";
-    addBtn.innerHTML = iconHTML("plus", 12) + "新建分组";
+    addBtn.innerHTML = `${iconHTML("plus", 12)}新建分组`;
     addBtn.addEventListener("click", () => this.createCustomGroup());
     groupsTitle.appendChild(addBtn);
     this.toolbarListEl.appendChild(groupsTitle);
@@ -1200,7 +1200,7 @@ export class SettingsDialog {
       section.className = "tb-section";
       const open = this.toolbarGroupOpen.get(g) ?? false;
       const head = document.createElement("div");
-      head.className = "tb-group-head" + (open ? " open" : "");
+      head.className = `tb-group-head${open ? " open" : ""}`;
       head.dataset.groupHead = g;
       head.title = isCustom
         ? "点击展开/折叠组内工具；＋从平铺区添加工具；拖拽调整顺序；右侧可重命名/删除"
@@ -1258,7 +1258,7 @@ export class SettingsDialog {
           ? "再次点击确认删除（组内工具回到原分组，＋添加的还回平铺区）"
           : "删除分组（组内工具回到原分组，＋添加的还回平铺区）";
         del.innerHTML = deleting
-          ? iconHTML("trash", 11) + "确认删除"
+          ? `${iconHTML("trash", 11)}确认删除`
           : iconHTML("trash", 11);
         del.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -1675,7 +1675,7 @@ export class SettingsDialog {
   ): HTMLElement {
     const row = document.createElement("div");
     row.className =
-      "tb-row tb-group-pinned" + (auto ? " tb-group-pinned-auto" : "");
+      `tb-row tb-group-pinned${auto ? " tb-group-pinned-auto" : ""}`;
     row.dataset.group = groupMarker(g);
     row.dataset.pinned = "1";
     row.title = auto

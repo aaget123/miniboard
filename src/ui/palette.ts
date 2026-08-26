@@ -252,7 +252,9 @@ export function showShortcutHelp(rows: { keys: string; desc: string }[]) {
   }
   // 每次打开重建行内容（配置可能已变更）
   const modal = helpMask.firstElementChild as HTMLElement;
-  modal.querySelectorAll(".shortcut-row").forEach((el) => el.remove());
+  modal.querySelectorAll(".shortcut-row").forEach((el) => {
+    el.remove();
+  });
   for (const s of rows) {
     const row = document.createElement("div");
     row.className = "shortcut-row";

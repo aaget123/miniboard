@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitErasedPoints } from "./stroke";
+import { splitArrowHeads, splitErasedPoints } from "./stroke";
 
 /** 生成水平直线点列：0 到 (n-1)*step */
 const line = (n: number, step = 10): number[][] =>
@@ -89,5 +89,28 @@ describe("splitErasedPoints（橡皮分段擦除）", () => {
   it("空输入：空点列/空轨迹安全返回", () => {
     expect(splitErasedPoints([], [{ x: 0, y: 0 }], 6)).toEqual([]);
     expect(splitErasedPoints(line(3), [], 6).length).toBe(1);
+  });
+});
+
+describe("splitArrowHeads（分段擦除的端点样式分配）", () => {
+  it("单段：两端原样保留", () => {
+    expect(splitArrowHeads(1, "triangle", "dot")).toEqual([
+      { start: "triangle", end: "dot" },
+    ]);
+  });
+
+  it("多段：首段保起点、末段保终点、中间无端点", () => {
+    const heads = splitArrowHeads(3, "triangle", "arrow");
+    expect(heads[0]).toEqual({ start: "triangle", end: undefined });
+    expect(heads[1]).toEqual({ start: undefined, end: undefined });
+    expect(heads[2]).toEqual({ start: undefined, end: "arrow" });
+  });
+
+  it("两段与空输入边界", () => {
+    const two = splitArrowHeads(2, "circle", undefined);
+    expect(two[0].start).toBe("circle");
+    expect(two[1].end).toBeUndefined();
+    expect(two[0].end).toBeUndefined();
+    expect(splitArrowHeads(0, "arrow", "arrow")).toEqual([]);
   });
 });

@@ -39,6 +39,8 @@ export class StatusBar {
   private zoomBtn!: HTMLButtonElement;
   private infoEl!: HTMLElement;
   private projectBtn!: HTMLButtonElement;
+  private savedHint!: HTMLSpanElement;
+  private savedTimer = 0;
 
   constructor(
     container: HTMLElement,
@@ -74,6 +76,27 @@ export class StatusBar {
     right.append(makeBtn("zoomIn", "放大 (Ctrl+＋)", () => handlers.onZoomIn()));
 
     this.el.append(this.projectBtn, this.infoEl, right);
+
+    // 自动保存成功轻提示：项目名旁短暂显示后淡出（失败走 toast，成功走这里形成闭环）
+    this.savedHint = document.createElement("span");
+    this.savedHint.className = "sb-saved";
+    this.savedHint.textContent = "已保存 ✓";
+    this.savedHint.hidden = true;
+    this.el.appendChild(this.savedHint);
+  }
+
+  /** 自动保存成功轻提示：显示约 900ms 后淡出；连续保存时节流重置 */
+  flashSaved() {
+    this.savedHint.hidden = false;
+    this.savedHint.classList.remove("fade-out");
+    clearTimeout(this.savedTimer);
+    this.savedTimer = window.setTimeout(() => {
+      this.savedHint.classList.add("fade-out");
+      this.savedTimer = window.setTimeout(() => {
+        this.savedHint.hidden = true;
+        this.savedHint.classList.remove("fade-out");
+      }, 400);
+    }, 900);
   }
 
   /** 左下角项目名按钮（空串隐藏），与元素信息同栏展示；名称经文本节点渲染防注入 */

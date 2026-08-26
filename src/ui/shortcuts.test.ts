@@ -105,12 +105,12 @@ describe("ShortcutManager", () => {
     const sm = new ShortcutManager();
     const registry = new ToolRegistry();
     const bindings = sm.allBindings(registry);
-    expect(bindings["v"]).toBe("tool:select");
-    expect(bindings["p"]).toBe("tool:pen");
-    expect(bindings["k"]).toBe("aiPanel"); // 操作覆盖工具同名键
+    expect(bindings.v).toBe("tool:select");
+    expect(bindings.p).toBe("tool:pen");
+    expect(bindings.k).toBe("aiPanel"); // 操作覆盖工具同名键
     expect(bindings["ctrl+s"]).toBe("save");
-    expect(bindings["delete"]).toBe("delete");
-    expect(bindings["backspace"]).toBe("delete");
+    expect(bindings.delete).toBe("delete");
+    expect(bindings.backspace).toBe("delete");
     expect(bindings["ctrl+plus"]).toBe("zoomIn");
   });
 
@@ -119,8 +119,8 @@ describe("ShortcutManager", () => {
     const registry = new ToolRegistry();
     sm.setKeys("tool:select", ["s"]);
     const bindings = sm.allBindings(registry);
-    expect(bindings["s"]).toBe("tool:select");
-    expect(bindings["v"]).toBeUndefined();
+    expect(bindings.s).toBe("tool:select");
+    expect(bindings.v).toBeUndefined();
   });
 
   it("findConflict 报告占用者并支持排除自身", () => {

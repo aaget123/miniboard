@@ -29,6 +29,14 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "zoomIn", label: "放大", defaultKeys: ["ctrl+=", "ctrl+plus"] },
   { id: "zoomOut", label: "缩小", defaultKeys: ["ctrl+-"] },
   { id: "zoomReset", label: "重置缩放", defaultKeys: ["ctrl+0"] },
+  { id: "zoomFitSelection", label: "缩放到选中", defaultKeys: ["shift+2"] },
+  { id: "zoomFitAll", label: "缩放至全部内容", defaultKeys: ["shift+1"] },
+  { id: "nudgeUp", label: "上移选中（1px）", defaultKeys: ["arrowup"] },
+  { id: "nudgeDown", label: "下移选中（1px）", defaultKeys: ["arrowdown"] },
+  { id: "nudgeLeft", label: "左移选中（1px）", defaultKeys: ["arrowleft"] },
+  { id: "nudgeRight", label: "右移选中（1px）", defaultKeys: ["arrowright"] },
+  { id: "eraserSmaller", label: "橡皮变小", defaultKeys: ["["] },
+  { id: "eraserBigger", label: "橡皮变大", defaultKeys: ["]"] },
 ];
 
 const LS_KEY = "miniboard:shortcuts";
@@ -141,7 +149,7 @@ export class ShortcutManager {
   /** 某操作的生效键位（用户配置优先，否则默认值） */
   getKeys(id: string): string[] {
     const custom = this.config[id];
-    if (custom && custom.length) {
+    if (custom?.length) {
       return [...custom];
     }
     const def = SHORTCUT_ACTIONS.find((a) => a.id === id)?.defaultKeys;
@@ -151,7 +159,7 @@ export class ShortcutManager {
   /** 工具的生效键位：用户配置（tool:<id>）优先，否则用注册表 shortcut（内置工具默认键来自 BUILTIN） */
   toolKeys(tool: { id: string; shortcut?: string }): string[] {
     const custom = this.config[`tool:${tool.id}`];
-    if (custom && custom.length) {
+    if (custom?.length) {
       return [...custom];
     }
     return tool.shortcut ? [tool.shortcut.trim().toLowerCase()] : [];
