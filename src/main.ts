@@ -629,7 +629,7 @@ async function main() {
     onImport: importFile,
     onInsertImage: insertImage,
     onExport: () => exportDialog.open(),
-    onToggleAI: toggleAiPanel,
+    onToggleAI: () => toggleAiPanel(),
     onClear: clearCanvas,
     onSettings: () => settingsDialog.open(),
   });
@@ -677,7 +677,9 @@ async function main() {
     return aiPanelLoading;
   };
   const toggleAiPanelImpl = () => {
-    void ensureAiPanel().then((p) => p.toggle());
+    void ensureAiPanel()
+      .then((p) => p.toggle())
+      .catch((err) => toast(`AI 面板加载失败：${err}`));
   };
   toggleAiPanel = toggleAiPanelImpl;
 
