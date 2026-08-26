@@ -23,7 +23,7 @@ import { ShortcutManager, comboFromEvent, formatCombo } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
-import { AiPanel } from "./ai/panel";
+import type { AiPanel } from "./ai/panel";
 import { PointerEvent } from "leafer-ui";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { SelectionInfo } from "./board/canvas";
@@ -256,8 +256,8 @@ async function main() {
   const projectDialog = new ProjectDialog(storage, () => {
     statusBar.setProject(storage.current?.name ?? "");
     updateStatus();
-    // AI 对话随项目切换：先落盘旧项目分桶，再恢复新项目对应分桶
-    aiPanel.setProject(storage.current?.id ?? "");
+    // AI 对话随项目切换：先落盘旧项目分桶，再恢复新项目对应分桶（面板未加载则由工厂兜底）
+    aiPanel?.setProject(storage.current?.id ?? "");
   });
 
   // 快捷键配置中心：操作 + 内置工具键位可自定义（⚙ 设置 →「快捷键」页签，localStorage 持久化），
@@ -307,7 +307,10 @@ async function main() {
   // 画布网格设置（显示/吸附/间距，默认关闭）
   board.applyGrid(loadGrid());
 
-  let aiPanel!: AiPanel;
+  // AI 面板懒加载：panel/tools/client 约 2900 行仅在首次唤起时加载（主包瘦身）。
+  // 未加载期间所有引用点安全空转；工厂创建时兜底同步当前项目对话分桶
+  let aiPanel: AiPanel | null = null;
+  let toggleAiPanel: () => void = () => {};
 
   // 填充开关统一处理：顶部与左侧栏共用（同步默认样式、按钮态与选中元素）
   const applyFillChange = (enabled: boolean) => {
@@ -626,9 +629,7 @@ async function main() {
     onImport: importFile,
     onInsertImage: insertImage,
     onExport: () => exportDialog.open(),
-    onToggleAI: () => {
-      aiPanel.toggle();
-    },
+    onToggleAI: toggleAiPanel,
     onClear: clearCanvas,
     onSettings: () => settingsDialog.open(),
   });
@@ -645,8 +646,40 @@ async function main() {
   // 自动保存成功轻提示（失败走 toast，成功走这里形成安全闭环）
   storage.onSaved = () => statusBar.flashSaved();
 
-  // AI 助手面板（交流 + 编辑双模式）；配置缺失时唤起设置弹窗并定位到模型页签
-  aiPanel = new AiPanel(board, registry, toolbar, () => settingsDialog.open("model"));
+  // AI 助手面板（交流 + 编辑双模式）懒加载工厂；配置缺失时唤起设置弹窗并定位到模型页签。
+  // 创建时兜底同步当前项目对话分桶，并接管「面板开合 → 圆形栏激活态/状态栏避让/浮层互斥」联动
+  let aiPanelLoading: Promise<AiPanel> | null = null;
+  const ensureAiPanel = (): Promise<AiPanel> => {
+    if (aiPanel) {
+      return Promise.resolve(aiPanel);
+    }
+    aiPanelLoading ??= import("./ai/panel").then((m) => {
+      const panel = new m.AiPanel(
+        board,
+        registry,
+        toolbar,
+        () => settingsDialog.open("model"),
+      );
+      panel.setProject(storage.current?.id ?? "");
+      aiPanel = panel;
+      const aiEl = document.getElementById("ai-panel") as HTMLElement;
+      new MutationObserver(() => {
+        const open = !aiEl.hidden;
+        toolsFloat.setAIActive(open);
+        statusEl.classList.toggle("ai-open", open);
+        // AI 面板打开时收起其他悬浮内容（互斥，避免遮挡重叠）
+        if (open) {
+          closeAllFloating();
+        }
+      }).observe(aiEl, { attributes: true, attributeFilter: ["hidden"] });
+      return panel;
+    });
+    return aiPanelLoading;
+  };
+  const toggleAiPanelImpl = () => {
+    void ensureAiPanel().then((p) => p.toggle());
+  };
+  toggleAiPanel = toggleAiPanelImpl;
 
   // 主题切换（命令面板用）：应用并持久化偏好
   const setThemePref = (pref: ThemePref) => {
@@ -686,7 +719,7 @@ async function main() {
     } },
     { id: "projects", section: "操作", title: "项目管理", icon: "folder", keywords: "项目 切换 重命名", run: () => projectDialog.open() },
     { id: "settings", section: "操作", title: "设置", icon: "settings", keywords: "AI 模型 主题 网格 提示词", run: () => settingsDialog.open() },
-    { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: formatCombo(shortcuts.getKeys("aiPanel")[0]), run: () => aiPanel.toggle() },
+    { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: formatCombo(shortcuts.getKeys("aiPanel")[0]), run: () => toggleAiPanel() },
     { id: "clear", section: "操作", title: "清空画布", icon: "trash", run: clearCanvas },
     { id: "theme-dark", section: "操作", title: "主题：深色", icon: "moon", keywords: "dark 深色", run: () => setThemePref("dark") },
     { id: "theme-light", section: "操作", title: "主题：浅色", icon: "sun", keywords: "light 浅色", run: () => setThemePref("light") },
@@ -814,7 +847,7 @@ async function main() {
       closeAllFloating();
       palette.toggle();
     },
-    aiPanel: () => aiPanel.toggle(),
+    aiPanel: () => toggleAiPanel(),
     zoomIn: () => board.zoomIn(),
     zoomOut: () => board.zoomOut(),
     zoomReset: () => board.zoomReset(),
@@ -908,23 +941,12 @@ async function main() {
     }
   }, 400);
 
-  // AI 面板开合同步：圆形栏按钮激活态 + 状态栏避开右侧面板（面板内部关闭按钮也生效）
-  const aiEl = document.getElementById("ai-panel") as HTMLElement;
-  new MutationObserver(() => {
-    const open = !aiEl.hidden;
-    toolsFloat.setAIActive(open);
-    statusEl.classList.toggle("ai-open", open);
-    // AI 面板打开时收起其他悬浮内容（互斥，避免遮挡重叠）
-    if (open) {
-      closeAllFloating();
-    }
-  }).observe(aiEl, { attributes: true, attributeFilter: ["hidden"] });
+  // AI 面板开合同步已移入懒加载工厂（创建时挂 MutationObserver）
 
     // 项目恢复（多项目：初始化迁移旧数据并载入激活项目场景）
   const restored = await storage.init();
   statusBar.setProject(storage.current?.name ?? "");
-  // AI 对话按激活项目恢复（项目×模式分桶存档，切模式/刷新/换项目均不丢）
-  aiPanel.setProject(storage.current?.id ?? "");
+  // AI 面板懒加载：对话分桶由工厂创建时按当前项目恢复，启动时无需加载
   // 压入会话基线快照：保证本会话首个操作（含 AI 画的流程图）可直接撤销
   board.pushSnapshot(board.serialize());
   statusBar.setUndoRedo(board.canUndo, board.canRedo);

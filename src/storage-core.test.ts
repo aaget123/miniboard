@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseProjectIndex, parseScene, resolveActiveIndex } from "./storage-core";
+import {
+  detectExternalModification,
+  parseProjectIndex,
+  parseScene,
+  resolveActiveIndex,
+} from "./storage-core";
 import type { ProjectIndex } from "./storage-core";
 
 const meta = (id: string, name = `项目-${id}`) => ({
@@ -106,5 +111,24 @@ describe("parseScene", () => {
     expect(parseScene("nope{")).toBeNull();
     expect(parseScene(JSON.stringify({ ...scene, app: "other" }))).toBeNull();
     expect(parseScene(JSON.stringify({ ...scene, elements: undefined }))).toBeNull();
+  });
+});
+
+describe("detectExternalModification（多开写入竞争检测）", () => {
+  it("mtime 与基线不一致：判定外部修改", () => {
+    expect(detectExternalModification(1000, 2000)).toBe(true);
+  });
+
+  it("mtime 与基线一致：无竞争", () => {
+    expect(detectExternalModification(1000, 1000)).toBe(false);
+  });
+
+  it("文件不存在（current=null）：首次写入放行", () => {
+    expect(detectExternalModification(1000, null)).toBe(false);
+  });
+
+  it("无基线（recorded=null）：宁可不拦截也不误报", () => {
+    expect(detectExternalModification(null, 2000)).toBe(false);
+    expect(detectExternalModification(null, null)).toBe(false);
   });
 });

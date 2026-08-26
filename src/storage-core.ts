@@ -84,3 +84,20 @@ export function parseScene(text: string | null): SceneFile | null {
 function numOf(v: number): number {
   return typeof v === "number" && Number.isFinite(v) ? v : Date.now();
 }
+
+/**
+ * 多开写入竞争检测（纯函数）：把"上次自己写入/读取时的 mtime 基线"与
+ * 当前文件 mtime 对比——不一致即视为被其他窗口或程序改过，调用方应拒绝覆盖。
+ * - current 为 null（文件不存在）：首次写入，放行；
+ * - recorded 为 null（无基线，如首次保存或 stat 失败）：宁可不拦截也不误报；
+ * - 比较基于等值而非绝对时间，对系统时钟漂移免疫。
+ */
+export function detectExternalModification(
+  recorded: number | null,
+  current: number | null,
+): boolean {
+  if (current === null || recorded === null) {
+    return false;
+  }
+  return current !== recorded;
+}

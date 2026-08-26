@@ -1,6 +1,7 @@
 import type { Board } from "./board/canvas";
 import { dataURLToJpeg, jpegToPdf, PDF_EXPORT_MAX_SIDE } from "./board/pdf";
 import { parseProjectIndex, parseScene, resolveActiveIndex } from "./storage-core";
+import { detectExternalModification } from "./storage-core";
 import type { ProjectIndex } from "./storage-core";
 import type { ProjectMeta } from "./types";
 
@@ -64,28 +65,40 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** 滚动备份保留代数（bak.1 最新 … bak.N 最旧） */
+const BAK_KEEP = 5;
+
 /**
- * 原子化写文本文件：先写 .tmp 临时文件 → 旧版本复制为 .bak 备份 → 原子重命名落盘。
- * 任一步骤中断最多丢本次写入（主文件或 .bak 仍为完整上一版），不会产生半截主文件；
- * 载入侧 loadScene 对应提供 .bak 回退。
+ * 原子化写文本文件（滚动备份）：
+ * 1. 写 .tmp 临时文件；
+ * 2. 旧版本滚动为 bak.1..N（主文件让位为 bak.1，最旧一代淘汰）；
+ * 3. .tmp 原子重命名为主文件。
+ * 任一步骤中断最多丢本次写入；载入侧按 主文件 → bak.1..N 回退。
+ * 返回写入后主文件的 mtime（毫秒），供多开竞争检测记录基线；stat 失败返回 null。
  */
-async function writeTextAtomic(path: string, text: string) {
+async function writeTextAtomic(path: string, text: string): Promise<number | null> {
   const fs = await import("@tauri-apps/plugin-fs");
   const tmp = `${path}.tmp`;
   await fs.writeTextFile(tmp, text);
-  try {
-    if (await fs.exists(path)) {
-      try {
-        await fs.remove(`${path}.bak`);
-      } catch {
-        // 无旧备份可忽略
-      }
-      await fs.copyFile(path, `${path}.bak`);
+  for (let i = BAK_KEEP; i >= 2; i--) {
+    try {
+      await fs.rename(`${path}.bak.${i - 1}`, `${path}.bak.${i}`);
+    } catch {
+      // 该代备份不存在，跳过
     }
+  }
+  try {
+    await fs.rename(path, `${path}.bak.1`);
   } catch {
-    // 备份失败不阻塞写入（上一版仍留在主文件）
+    // 主文件尚不存在（首次写入）
   }
   await fs.rename(tmp, path);
+  try {
+    const info = await fs.stat(path);
+    return info.mtime?.getTime() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** 读文本文件，失败（不存在/无权限）返回 null */
@@ -93,6 +106,31 @@ async function readTextAt(path: string): Promise<string | null> {
   try {
     const { readTextFile } = await import("@tauri-apps/plugin-fs");
     return await readTextFile(path);
+  } catch {
+    return null;
+  }
+}
+
+/** 读主文件，缺失时沿滚动备份回退（bak.1 最新 → bak.N 最旧） */
+async function readTextWithFallback(path: string): Promise<string | null> {
+  const main = await readTextAt(path);
+  if (main !== null) {
+    return main;
+  }
+  for (let i = 1; i <= BAK_KEEP; i++) {
+    const bak = await readTextAt(`${path}.bak.${i}`);
+    if (bak !== null) {
+      return bak;
+    }
+  }
+  return null;
+}
+
+/** 读文件 mtime（毫秒），失败返回 null */
+async function mtimeOf(path: string): Promise<number | null> {
+  try {
+    const { stat } = await import("@tauri-apps/plugin-fs");
+    return (await stat(path)).mtime?.getTime() ?? null;
   } catch {
     return null;
   }
@@ -159,6 +197,10 @@ export class ProjectStore {
   async init(): Promise<boolean> {
     const parsed = await this.readIndex();
     if (parsed) {
+      // 记录索引读取基线（多开竞争检测用）
+      if (isDesktop()) {
+        this.indexMtime = await mtimeOf(await this.indexPath());
+      }
       const idx = resolveActiveIndex(parsed);
       this.projects = idx.projects;
       this.currentId = idx.activeId;
@@ -260,8 +302,23 @@ export class ProjectStore {
   /** 自动保存成功回调（main.ts 接状态栏轻提示） */
   onSaved: (() => void) | null = null;
 
+  /** 场景文件的本地写入基线 mtime：写前比对，检测其他窗口/程序的并发修改 */
+  private sceneMtimes = new Map<string, number | null>();
+  /** 索引文件的写入基线 mtime（语义同上） */
+  private indexMtime: number | null = null;
+
   /** 自动保存连续失败标记：失败只提示一次，成功后复位（避免持续变更时刷屏） */
   private autosaveFailing = false;
+
+  /** 写前竞争检测：文件 mtime 与本地基线不一致即视为外部修改，抛错拒绝覆盖 */
+  private async assertNoExternalWrite(path: string, recorded: number | null) {
+    const current = await mtimeOf(path);
+    if (detectExternalModification(recorded, current)) {
+      throw new Error(
+        "文件已被其他窗口或程序修改，本次保存已取消（请先在另一窗口保存或关闭后重试）",
+      );
+    }
+  }
 
   /** 元素变化后调用：防抖自动保存到当前项目 */
   scheduleAutosave() {
@@ -490,12 +547,13 @@ export class ProjectStore {
     return true;
   }
 
-  /** 读取项目场景并载入画布；成功时重置历史。主文件缺失/损坏时回退上一版 .bak 备份 */
+  /** 读取项目场景并载入画布；成功时重置历史。主文件缺失/损坏时沿滚动备份回退 */
   private async loadScene(id: string): Promise<boolean> {
     let json: string | null = null;
+    let path: string | null = null;
     if (isDesktop()) {
-      const path = await this.scenePath(id);
-      json = (await readTextAt(path)) ?? (await readTextAt(`${path}.bak`));
+      path = await this.scenePath(id);
+      json = await readTextWithFallback(path);
     } else {
       json = localStorage.getItem(LS_SCENE_PREFIX + id);
     }
@@ -505,13 +563,19 @@ export class ProjectStore {
     const ok = this.applyJSON(json);
     if (ok) {
       this.board.resetHistory();
+      // 记录读取基线（可能来自备份，此时主文件 mtime 为 null → 不设防，首次写入后恢复设防）
+      if (path) {
+        this.sceneMtimes.set(id, await mtimeOf(path));
+      }
     }
     return ok;
   }
 
   private async writeScene(id: string, json: string) {
     if (isDesktop()) {
-      await writeTextAtomic(await this.scenePath(id), json);
+      const path = await this.scenePath(id);
+      await this.assertNoExternalWrite(path, this.sceneMtimes.get(id) ?? null);
+      this.sceneMtimes.set(id, await writeTextAtomic(path, json));
     } else {
       localStorage.setItem(LS_SCENE_PREFIX + id, json);
     }
@@ -519,18 +583,21 @@ export class ProjectStore {
 
   private async deleteScene(id: string) {
     if (isDesktop()) {
+      const { remove } = await import("@tauri-apps/plugin-fs");
+      const path = await this.scenePath(id);
       try {
-        const { remove } = await import("@tauri-apps/plugin-fs");
-        await remove(await this.scenePath(id));
+        await remove(path);
       } catch {
         // 场景文件不存在可忽略
       }
-      try {
-        const { remove } = await import("@tauri-apps/plugin-fs");
-        await remove(`${await this.scenePath(id)}.bak`);
-      } catch {
-        // 无备份可忽略
+      for (let i = 1; i <= BAK_KEEP; i++) {
+        try {
+          await remove(`${path}.bak.${i}`);
+        } catch {
+          // 无该代备份可忽略
+        }
       }
+      this.sceneMtimes.delete(id);
     } else {
       localStorage.removeItem(LS_SCENE_PREFIX + id);
     }
@@ -552,7 +619,9 @@ export class ProjectStore {
     const idx: ProjectIndex = { activeId: this.currentId, projects: this.projects };
     const text = JSON.stringify(idx);
     if (isDesktop()) {
-      await writeTextAtomic(await this.indexPath(), text);
+      const path = await this.indexPath();
+      await this.assertNoExternalWrite(path, this.indexMtime);
+      this.indexMtime = await writeTextAtomic(path, text);
     } else {
       localStorage.setItem(LS_INDEX_KEY, text);
     }
