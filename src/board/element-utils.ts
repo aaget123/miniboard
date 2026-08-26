@@ -1,11 +1,4 @@
-import {
-  Ellipse,
-  Image,
-  Line,
-  Path,
-  Rect,
-  Text,
-} from "leafer-ui";
+import { Ellipse, Image, Line, Path, Rect, Text } from "leafer-ui";
 import type { UI } from "leafer-ui";
 import type { IArrowStyle, IUI } from "@leafer-ui/interface";
 import type { ArrowHead, ElementData } from "../types";
@@ -19,9 +12,7 @@ import type { ArrowHead, ElementData } from "../types";
  * 箭头端点：元素数据 → leafer 渲染值。
  * "none"/undefined → 无端点；"dot" → 小号实心圆（leafer 无独立圆点形状）。
  */
-export function toLeaferArrow(
-  head: ArrowHead | undefined,
-): IArrowStyle | undefined {
+export function toLeaferArrow(head: ArrowHead | undefined): IArrowStyle | undefined {
   if (!head || head === "none") {
     return undefined;
   }
@@ -86,10 +77,7 @@ export function numOf(value: unknown): number | undefined {
 
 /** 判断 leafer 元素是否为 freehand 笔迹（Path 渲染 + 采样点元数据） */
 export function isFreehandEl(el: UI): boolean {
-  return (
-    (el as unknown as { __freehandPoints?: unknown }).__freehandPoints !==
-    undefined
-  );
+  return (el as unknown as { __freehandPoints?: unknown }).__freehandPoints !== undefined;
 }
 
 /**

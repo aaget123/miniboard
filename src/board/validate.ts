@@ -4,15 +4,7 @@
 import type { ElementData, FontWeight } from "../types";
 
 /** AI 自定义工具可生成的元素类型（图片需 url 数据源，交互类不走生成器，均不支持） */
-const GENERATABLE_TYPES = new Set([
-  "rect",
-  "ellipse",
-  "line",
-  "arrow",
-  "path",
-  "text",
-  "frame",
-]);
+const GENERATABLE_TYPES = new Set(["rect", "ellipse", "line", "arrow", "path", "text", "frame"]);
 
 function isFiniteNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -157,8 +149,7 @@ export function validateElementData(
     // 字重：100-900 数字档位（字重滑条/快捷键），兼容旧数据 "normal"/"bold" 字符串
     if (obj.fontWeight !== undefined) {
       const fw = obj.fontWeight;
-      const numericOk =
-        typeof fw === "number" && fw >= 100 && fw <= 900 && fw % 100 === 0;
+      const numericOk = typeof fw === "number" && fw >= 100 && fw <= 900 && fw % 100 === 0;
       if (!numericOk && fw !== "normal" && fw !== "bold") {
         return {
           ok: false,
@@ -166,9 +157,7 @@ export function validateElementData(
         };
       }
       // 旧格式归一化为数字档位（normal→400，bold→700）
-      data.fontWeight = (
-        typeof fw === "number" ? fw : fw === "bold" ? 700 : 400
-      ) as FontWeight;
+      data.fontWeight = (typeof fw === "number" ? fw : fw === "bold" ? 700 : 400) as FontWeight;
     }
   }
   if (type === "frame") {
@@ -199,7 +188,8 @@ export function validateElementData(
     if (obj.name !== undefined && typeof obj.name !== "string") {
       return { ok: false, error: "frame 的 name 必须是字符串" };
     }
-    if (obj.contentType !== undefined) data.contentType = obj.contentType as "markdown" | "code" | "text";
+    if (obj.contentType !== undefined)
+      data.contentType = obj.contentType as "markdown" | "code" | "text";
     if (obj.content !== undefined) data.content = obj.content as string;
     if (obj.autoSize !== undefined) data.autoSize = obj.autoSize as boolean;
     if (obj.constrain !== undefined) data.constrain = obj.constrain as boolean;
@@ -217,7 +207,10 @@ export function validateElementList(
     return { ok: false, error: "生成器返回了空数组（至少需要 1 个元素）" };
   }
   if (list.length > 8) {
-    return { ok: false, error: `单次生成元素过多（${list.length} 个，上限 8 个），请精简为必要的组合` };
+    return {
+      ok: false,
+      error: `单次生成元素过多（${list.length} 个，上限 8 个），请精简为必要的组合`,
+    };
   }
   const out: ElementData[] = [];
   for (let i = 0; i < list.length; i++) {

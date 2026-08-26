@@ -48,25 +48,17 @@ function describePath(path: string, w: number, h: number): string {
   }
   const lines = (counts.l ?? 0) + (counts.h ?? 0) + (counts.v ?? 0);
   const curves =
-    (counts.q ?? 0) +
-    (counts.c ?? 0) +
-    (counts.s ?? 0) +
-    (counts.t ?? 0) +
-    (counts.a ?? 0);
+    (counts.q ?? 0) + (counts.c ?? 0) + (counts.s ?? 0) + (counts.t ?? 0) + (counts.a ?? 0);
   // 无 Z 时按首尾距离判断近似闭合（容差 = 尺寸 5%，最小 6px）；H/V 结尾无法取终点则跳过
   let gap = -1;
   const lastCmd = letters[letters.length - 1]?.toLowerCase() ?? "";
   if (/[lqctsa]/.test(lastCmd)) {
     const nums = (path.match(/-?\d*\.?\d+(?:e-?\d+)?/gi) ?? []).map(Number);
     if (nums.length >= 4) {
-      gap = Math.hypot(
-        nums[nums.length - 2] - nums[0],
-        nums[nums.length - 1] - nums[1],
-      );
+      gap = Math.hypot(nums[nums.length - 2] - nums[0], nums[nums.length - 1] - nums[1]);
     }
   }
-  const closed =
-    (counts.z ?? 0) > 0 || (gap >= 0 && gap < Math.max(6, Math.max(w, h) * 0.05));
+  const closed = (counts.z ?? 0) > 0 || (gap >= 0 && gap < Math.max(6, Math.max(w, h) * 0.05));
 
   if (closed) {
     if (curves === 0) {
@@ -106,9 +98,7 @@ function inRegion(
   b: { minX: number; minY: number; maxX: number; maxY: number },
   r: CanvasRegion,
 ): boolean {
-  return (
-    b.minX <= r.maxX && b.maxX >= r.minX && b.minY <= r.maxY && b.maxY >= r.minY
-  );
+  return b.minX <= r.maxX && b.maxX >= r.minX && b.minY <= r.maxY && b.maxY >= r.minY;
 }
 
 /** 九宫格区域名（固定展示顺序：行优先，左上 → 右下） */
@@ -185,9 +175,7 @@ function gridIndex(elements: ElementData[]): string {
     const row = Math.floor(key / cols);
     const x0 = Math.round(minX + col * CELL);
     const y0 = Math.round(minY + row * CELL);
-    const desc = [...cell.entries()]
-      .map(([t, n]) => `${TYPE_LABELS[t] ?? t}${n}`)
-      .join("、");
+    const desc = [...cell.entries()].map(([t, n]) => `${TYPE_LABELS[t] ?? t}${n}`).join("、");
     parts.push(`[x${x0},y${y0}]区：${desc}`);
   }
   return `被省略元素的分布（每格 ${CELL}px，格角坐标为区域最小值）：${parts.join("；")}。`;
@@ -205,11 +193,7 @@ function gridIndex(elements: ElementData[]): string {
  * - 每个元素附 region 字段：中心在内容包围盒 3×3 均分中的位置（如“左上/中心/右下”），
  *   把原始坐标抽象为空间词汇，降低模型心算坐标差的负担（借鉴手绘代理的空间上下文做法）
  */
-export function describeCanvas(
-  board: Board,
-  ids?: string[],
-  region?: CanvasRegion | null,
-): string {
+export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegion | null): string {
   // 世界坐标序列化：frame 内元素展开为画布绝对坐标，保证坐标/region 计算基准一致
   const full = board.serializeWorld();
   const all = ids?.length
@@ -237,7 +221,9 @@ export function describeCanvas(
   }
   // 相对位置摘要（text 找最近图形元素）：数量适中时才生成，避免文本过长与 O(n²) 开销
   const withNear = els.length <= 120;
-  const centers = new Map(els.map((e) => [e, { x: e.x + (e.width ?? 0) / 2, y: e.y + (e.height ?? 0) / 2 }]));
+  const centers = new Map(
+    els.map((e) => [e, { x: e.x + (e.width ?? 0) / 2, y: e.y + (e.height ?? 0) / 2 }]),
+  );
   const nearestAnchor = (el: ElementData): string | null => {
     if (!withNear) {
       return null;
@@ -283,9 +269,7 @@ export function describeCanvas(
         label: `${TYPE_LABELS[other.type] ?? other.type}(${other.id ?? "?"})`,
       };
     }
-    return best
-      ? `${best.label} ${best.dir} ${Math.round(best.d)}px`
-      : null;
+    return best ? `${best.label} ${best.dir} ${Math.round(best.d)}px` : null;
   };
   const compact = els.map((el) => {
     const d: Record<string, unknown> = {
@@ -351,9 +335,7 @@ export function describeCanvas(
   for (const e of full) {
     counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
   }
-  const typeDesc = [...counts.entries()]
-    .map(([t, n]) => `${TYPE_LABELS[t] ?? t} ${n}`)
-    .join("、");
+  const typeDesc = [...counts.entries()].map(([t, n]) => `${TYPE_LABELS[t] ?? t} ${n}`).join("、");
   let summary = `画布共 ${full.length} 个元素：${typeDesc}。`;
   // 分组信息：列出每组 id 列表（arrange_elements 会按组联动，模型无需自己推算）
   const groups = new Map<string, string[]>();
@@ -367,7 +349,9 @@ export function describeCanvas(
   if (groups.size) {
     summary += ` 分组：${[...groups.entries()]
       .map(([g, list]) => `组 ${g}（${list.length} 个成员：${list.join("、")}）`)
-      .join("；")}。同组元素在排列/层序/删除操作中整组联动，元素数据里的 groupId 仅供识别、不可写入。`;
+      .join(
+        "；",
+      )}。同组元素在排列/层序/删除操作中整组联动，元素数据里的 groupId 仅供识别、不可写入。`;
   }
   if (ids?.length) {
     summary += `（本次返回其中 ${all.length} 个）`;
@@ -426,15 +410,7 @@ export function describeCanvas(
 // 规则：白名单字段、无 id（系统分配）、禁止 fill:"none"（leafer 渲染黑色实心）、
 // points 传画布绝对坐标（自动换算回局部坐标）。
 
-const LEAFFER_TYPES = [
-  "rect",
-  "ellipse",
-  "line",
-  "arrow",
-  "path",
-  "text",
-  "image",
-] as const;
+const LEAFFER_TYPES = ["rect", "ellipse", "line", "arrow", "path", "text", "image"] as const;
 
 function numOf(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -445,9 +421,7 @@ function strOf(value: unknown): string | undefined {
 }
 
 /** 解析单个官方格式元素为 ElementData（非法返回错误原因，不抛异常） */
-function parseLeaferElement(
-  obj: Record<string, unknown>,
-): { data?: ElementData; error?: string } {
+function parseLeaferElement(obj: Record<string, unknown>): { data?: ElementData; error?: string } {
   const type = strOf(obj.type);
   if (!type || !(LEAFFER_TYPES as readonly string[]).includes(type)) {
     return { error: `type 必须是 ${LEAFFER_TYPES.join("/")} 之一` };
@@ -820,7 +794,7 @@ function chatTools(): AiTool[] {
     {
       name: "create_elements",
       description:
-        "用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation；可选 intent（简短中文自报创建意图，如\"流程起点\"、\"标题\"——系统会保存并在 get_canvas 返回，供后续轮次理解你的设计意图）。禁止 fill 传字符串 \"none\"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠",
+        '用 leafer 官方 JSON 格式在画布上创建元素（rect/ellipse/line/arrow/path/text/image），返回创建的 id。字段规则：x/y 必填；rect/ellipse 可省略 width/height（默认 100）；text 需要 text 字符串（可选 fontSize）；path 需要 path 字符串（相对元素左上角的局部坐标）；image 需要 url；可选 stroke/strokeWidth/fill/rotation；可选 intent（简短中文自报创建意图，如"流程起点"、"标题"——系统会保存并在 get_canvas 返回，供后续轮次理解你的设计意图）。禁止 fill 传字符串 "none"（会渲染成黑色实心），无填充时省略 fill。line/arrow 的 points 传画布绝对坐标（至少 2 个点，系统自动换算）。不需要传 id（系统分配）。一次创建多个元素时请自行规划好坐标避免重叠',
       parameters: {
         type: "object",
         properties: {
@@ -854,7 +828,10 @@ function editTools(): AiTool[] {
         type: "object",
         properties: {
           id: { type: "string", description: "可选：只查这一个工具（自动附带其 generator 源码）" },
-          includeSource: { type: "boolean", description: "可选：true 时为所有自定义工具附带 generator 源码" },
+          includeSource: {
+            type: "boolean",
+            description: "可选：true 时为所有自定义工具附带 generator 源码",
+          },
         },
       },
     },
@@ -874,16 +851,19 @@ function editTools(): AiTool[] {
           kind: {
             type: "string",
             enum: ["drag", "click"],
-            description: "行为类别：drag 拖拽生成（默认，根据拖拽范围动态计算形状）；click 点击即生成固定大小元素（如印章、便利贴）",
+            description:
+              "行为类别：drag 拖拽生成（默认，根据拖拽范围动态计算形状）；click 点击即生成固定大小元素（如印章、便利贴）",
           },
           group: {
             type: "string",
             enum: ["shape"],
-            description: "可选：工具分组。与已有同类型工具归入同一分组：形状类工具（拖拽生成闭合形状，如三角形/五角星/多边形/圆角矩形等）必须传 \"shape\" 归入“形状▾”下拉；其他类型省略",
+            description:
+              '可选：工具分组。与已有同类型工具归入同一分组：形状类工具（拖拽生成闭合形状，如三角形/五角星/多边形/圆角矩形等）必须传 "shape" 归入“形状▾”下拉；其他类型省略',
           },
           generator: {
             type: "string",
-            description: "生成器函数体源码：(ctx) => ElementData 或 ElementData[]（组合工具），ctx={x0,y0,x1,y1,style}",
+            description:
+              "生成器函数体源码：(ctx) => ElementData 或 ElementData[]（组合工具），ctx={x0,y0,x1,y1,style}",
           },
           description: { type: "string", description: "工具用途说明" },
         },
@@ -893,7 +873,8 @@ function editTools(): AiTool[] {
     },
     {
       name: "update_tool",
-      description: "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明/分组/行为类别）；内置工具只读不可修改。修改生成器时同样会验证（危险代码/超时/返回值格式），未通过不会生效",
+      description:
+        "修改已存在的自定义工具（名称/图标/快捷键/生成器/说明/分组/行为类别）；内置工具只读不可修改。修改生成器时同样会验证（危险代码/超时/返回值格式），未通过不会生效",
       parameters: {
         type: "object",
         properties: {
@@ -992,19 +973,13 @@ const IMAGE_READ_MAX_SIDE = 1024;
  * 把图片 url（dataURL 或允许跨域的远程 url）等比压缩为 JPEG dataURL，
  * 供视觉模型读图：原图 dataURL 体积大，直接发送浪费 token/流量；失败返回 null。
  */
-export async function compressImageDataURL(
-  url: string,
-  maxSide: number,
-): Promise<string | null> {
+export async function compressImageDataURL(url: string, maxSide: number): Promise<string | null> {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
       try {
-        const scale = Math.min(
-          1,
-          maxSide / Math.max(img.naturalWidth, img.naturalHeight),
-        );
+        const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
         const w = Math.max(1, Math.round(img.naturalWidth * scale));
         const h = Math.max(1, Math.round(img.naturalHeight * scale));
         const canvas = document.createElement("canvas");
@@ -1041,15 +1016,11 @@ const V_GAP = 90;
 
 /** 把想法画成流程图：分层布局 + 矩形节点 + 文字 + 箭头，写入主画布空白区 */
 function drawFlowchart(board: Board, args: Record<string, unknown>): string {
-  const nodes = Array.isArray(args.nodes)
-    ? (args.nodes as { id?: string; label?: string }[])
-    : [];
+  const nodes = Array.isArray(args.nodes) ? (args.nodes as { id?: string; label?: string }[]) : [];
   if (!nodes.length) {
     return "错误：nodes 不能为空";
   }
-  const edges = Array.isArray(args.edges)
-    ? (args.edges as { from?: string; to?: string }[])
-    : [];
+  const edges = Array.isArray(args.edges) ? (args.edges as { from?: string; to?: string }[]) : [];
   const validNodes = nodes.filter((n) => typeof n.id === "string" && n.id);
   if (!validNodes.length) {
     return "错误：节点缺少 id";
@@ -1168,10 +1139,7 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
     const horizontal = level.get(e.to) === level.get(e.from) ? 1 : 0;
     const sx = from.x + NODE_W / 2;
     const sy = from.y + (horizontal ? NODE_H / 2 : NODE_H);
-    const tx =
-      to.x +
-      NODE_W / 2 +
-      (horizontal ? (dx > 0 ? -NODE_W / 2 : NODE_W / 2) : 0);
+    const tx = to.x + NODE_W / 2 + (horizontal ? (dx > 0 ? -NODE_W / 2 : NODE_W / 2) : 0);
     const ty = to.y + (horizontal ? NODE_H / 2 : 0);
     const fromRect = idMap.get(e.from);
     const toRect = idMap.get(e.to);
@@ -1196,9 +1164,7 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
     });
   }
 
-  const mapping = [...idMap.entries()]
-    .map(([nid, eid]) => `${nid}=${eid}`)
-    .join("，");
+  const mapping = [...idMap.entries()].map(([nid, eid]) => `${nid}=${eid}`).join("，");
   return `已生成流程图：${validNodes.length} 个节点、${edges.length} 条连线，起点位于画布 (${Math.round(originX)}, ${Math.round(originY)})。节点 id 映射：${mapping}（后续可用这些 id 引用）`;
 }
 
@@ -1311,11 +1277,7 @@ export async function executeTool(
           const minY = typeof b.minY === "number" ? b.minY : NaN;
           const maxX = typeof b.maxX === "number" ? b.maxX : NaN;
           const maxY = typeof b.maxY === "number" ? b.maxY : NaN;
-          if (
-            ![minX, minY, maxX, maxY].every(Number.isFinite) ||
-            minX >= maxX ||
-            minY >= maxY
-          ) {
+          if (![minX, minY, maxX, maxY].every(Number.isFinite) || minX >= maxX || minY >= maxY) {
             return {
               name: tool.name,
               args,
@@ -1370,9 +1332,7 @@ export async function executeTool(
           changed: false,
         };
       }
-      const rot = el.rotation
-        ? `（画布上旋转 ${Math.round(el.rotation)}°）`
-        : "";
+      const rot = el.rotation ? `（画布上旋转 ${Math.round(el.rotation)}°）` : "";
       return {
         name: tool.name,
         args,
@@ -1478,10 +1438,7 @@ export async function executeTool(
           changed: false,
         };
       }
-      const { done, skipped } = board.arrangeByIds(
-        ids,
-        action as ArrangeAction,
-      );
+      const { done, skipped } = board.arrangeByIds(ids, action as ArrangeAction);
       if (!done) {
         return {
           name: tool.name,
@@ -1728,7 +1685,8 @@ export async function executeTool(
       const query = args as { id?: unknown; includeSource?: unknown };
       const filterId = typeof query.id === "string" ? query.id : "";
       const withSource = query.includeSource === true || !!filterId;
-      const tools = registry.list()
+      const tools = registry
+        .list()
         .filter((t) => !filterId || t.id === filterId)
         .map((t) => ({
           id: t.id,

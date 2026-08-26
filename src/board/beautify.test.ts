@@ -57,7 +57,14 @@ function wobblyRect(w: number, h: number, nPer: number): number[][] {
 
 describe("describeFreehandShape", () => {
   it("采样点不足 3 个时无法识别", () => {
-    expect(describeFreehandShape(freehand([[0, 0], [10, 10]]))).toBeNull();
+    expect(
+      describeFreehandShape(
+        freehand([
+          [0, 0],
+          [10, 10],
+        ]),
+      ),
+    ).toBeNull();
   });
 
   it("识别闭合的圆形（含 x/y 偏移）", () => {
@@ -78,7 +85,11 @@ describe("describeFreehandShape", () => {
   });
 
   it("开放笔迹简化后仅剩两点 → 近似直线", () => {
-    const e = freehand([[0, 0], [50, 2], [100, 1]]);
+    const e = freehand([
+      [0, 0],
+      [50, 2],
+      [100, 1],
+    ]);
     expect(describeFreehandShape(e)).toBe("近似直线的手绘笔迹");
   });
 

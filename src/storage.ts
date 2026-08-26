@@ -17,8 +17,7 @@ import type { ProjectMeta } from "./types";
  * 桌面端写入统一走原子化路径（临时文件 + 上一版备份），中断不产生半截主文件。
  */
 
-export const isDesktop = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const isDesktop = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 const LS_INDEX_KEY = "miniboard:projects";
 const LS_SCENE_PREFIX = "miniboard:project:";
@@ -41,9 +40,9 @@ export async function resolveDataDir(): Promise<string | null> {
   try {
     const { appDataDir, join } = await import("@tauri-apps/api/path");
     const { readTextFile } = await import("@tauri-apps/plugin-fs");
-    const cfg = JSON.parse(
-      await readTextFile(await join(await appDataDir(), DATA_DIR_CFG)),
-    ) as { dir?: string };
+    const cfg = JSON.parse(await readTextFile(await join(await appDataDir(), DATA_DIR_CFG))) as {
+      dir?: string;
+    };
     if (cfg.dir?.trim()) {
       return cfg.dir.trim();
     }
@@ -338,9 +337,7 @@ export class ProjectStore {
           console.error("[storage] autosave failed", err);
           if (!this.autosaveFailing) {
             this.autosaveFailing = true;
-            this.onStorageError?.(
-              `自动保存失败：${errMessage(err)}（问题恢复后将继续自动保存）`,
-            );
+            this.onStorageError?.(`自动保存失败：${errMessage(err)}（问题恢复后将继续自动保存）`);
           }
         });
     }, 800);
@@ -421,10 +418,38 @@ export class ProjectStore {
           {
             name: "文本/代码文件",
             extensions: [
-              "md", "markdown", "txt", "text", "json", "csv", "xml", "html",
-              "css", "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp",
-              "h", "go", "rs", "rb", "php", "sh", "bat", "ps1", "sql",
-              "yaml", "yml", "toml", "ini", "vue", "svelte",
+              "md",
+              "markdown",
+              "txt",
+              "text",
+              "json",
+              "csv",
+              "xml",
+              "html",
+              "css",
+              "js",
+              "ts",
+              "tsx",
+              "jsx",
+              "py",
+              "java",
+              "c",
+              "cpp",
+              "h",
+              "go",
+              "rs",
+              "rb",
+              "php",
+              "sh",
+              "bat",
+              "ps1",
+              "sql",
+              "yaml",
+              "yml",
+              "toml",
+              "ini",
+              "vue",
+              "svelte",
             ],
           },
           { name: "所有文件", extensions: ["*"] },
@@ -461,9 +486,7 @@ export class ProjectStore {
     try {
       const dataURL = await this.board.exportPNG();
       const blob = await (await fetch(dataURL)).blob();
-      await navigator.clipboard.write([
-        new ClipboardItem({ "image/png": blob }),
-      ]);
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
       return true;
     } catch {
       return false;

@@ -94,9 +94,7 @@ describe("splitErasedPoints（橡皮分段擦除）", () => {
 
 describe("splitArrowHeads（分段擦除的端点样式分配）", () => {
   it("单段：两端原样保留", () => {
-    expect(splitArrowHeads(1, "triangle", "dot")).toEqual([
-      { start: "triangle", end: "dot" },
-    ]);
+    expect(splitArrowHeads(1, "triangle", "dot")).toEqual([{ start: "triangle", end: "dot" }]);
   });
 
   it("多段：首段保起点、末段保终点、中间无端点", () => {

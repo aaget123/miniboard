@@ -27,11 +27,7 @@ export function normalizeContent(content: string): string {
  * 单行按可用宽度折行（字符宽度近似：半角 0.55em / 等宽 0.62em / 全角 1em）。
  * 返回折行后的片段列表（空行返回 [""] 保留行位）。
  */
-export function wrapLine(
-  line: string,
-  availWidth: number,
-  charW: number,
-): string[] {
+export function wrapLine(line: string, availWidth: number, charW: number): string[] {
   if (!line) {
     return [""];
   }
@@ -75,10 +71,7 @@ export function frameContentSize(
     }
     maxLen = Math.max(maxLen, len);
   }
-  const width = Math.max(
-    FRAME_MIN_WIDTH,
-    maxLen * FRAME_CONTENT_SIZE + FRAME_PADDING * 2,
-  );
+  const width = Math.max(FRAME_MIN_WIDTH, maxLen * FRAME_CONTENT_SIZE + FRAME_PADDING * 2);
   const avail = width - FRAME_PADDING * 2;
   let totalLines = 0;
   for (const line of lines) {
@@ -95,10 +88,7 @@ export function frameContentSize(
  * 内容框架折叠后的高度：autoSize 估算高度与折叠上限取小（内容不足一屏时
  * 折叠不生效，保持全部展示）；返回 null 表示内容未超限无需折叠。
  */
-export function collapsedFrameHeight(
-  content: string,
-  type: string | undefined,
-): number | null {
+export function collapsedFrameHeight(content: string, type: string | undefined): number | null {
   const h = frameContentSize(content, type).height;
   return h > FRAME_COLLAPSED_HEIGHT ? FRAME_COLLAPSED_HEIGHT : null;
 }

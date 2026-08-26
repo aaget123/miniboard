@@ -128,16 +128,7 @@ export type CustomToolInput = {
 };
 
 export type ElementData = {
-  type:
-    | "rect"
-    | "ellipse"
-    | "line"
-    | "arrow"
-    | "path"
-    | "freehand"
-    | "text"
-    | "image"
-    | "frame";
+  type: "rect" | "ellipse" | "line" | "arrow" | "path" | "freehand" | "text" | "image" | "frame";
   /** 稳定标识（AI 编辑模式按 id 引用元素），序列化时自动分配 */
   id?: string;
   x: number;

@@ -33,9 +33,7 @@ export function translatePath(path: string, dx: number, dy: number): string {
   for (let i = 0; i < cmds.length; i++) {
     const { idx, cmd } = cmds[i];
     const end = i + 1 < cmds.length ? cmds[i + 1].idx : path.length;
-    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
-      parseFloat(n[0]),
-    );
+    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) => parseFloat(n[0]));
     out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
@@ -55,23 +53,17 @@ export function translatePath(path: string, dx: number, dy: number): string {
       const group = nums.slice(k, k + per);
       if (upper === "A") {
         // rx ry rotation large-arc sweep 不参与平移，仅末尾 x/y 平移
-        out += (k ? " " : "") + group
-          .slice(0, 5)
-          .map(fmt)
-          .join(" ");
+        out += (k ? " " : "") + group.slice(0, 5).map(fmt).join(" ");
         out += " ";
         out += group
           .slice(5)
           .map((v, j) => fmt(isAbs ? v + (j === 0 ? dx : dy) : v))
           .join(" ");
       } else if (per === 1) {
-        out +=
-          (k ? " " : "") +
-          fmt(isAbs ? group[0] + (upper === "H" ? dx : dy) : group[0]);
+        out += (k ? " " : "") + fmt(isAbs ? group[0] + (upper === "H" ? dx : dy) : group[0]);
       } else {
         for (let j = 0; j < group.length; j += 2) {
-          out +=
-            (j || k ? " " : "") + fmt(isAbs ? group[j] + dx : group[j]);
+          out += (j || k ? " " : "") + fmt(isAbs ? group[j] + dx : group[j]);
           out += ` ${fmt(isAbs ? group[j + 1] + dy : group[j + 1])}`;
         }
       }
@@ -90,13 +82,7 @@ export function translatePath(path: string, dx: number, dy: number): string {
  * 相对命令（小写）原样保留（数据契约保证绝对坐标）。
  * sx/sy 均为 1 或 path 为空时原样返回。
  */
-export function scalePath(
-  path: string,
-  sx: number,
-  sy: number,
-  ox: number,
-  oy: number,
-): string {
+export function scalePath(path: string, sx: number, sy: number, ox: number, oy: number): string {
   if ((sx === 1 && sy === 1) || !path) {
     return path;
   }
@@ -114,9 +100,7 @@ export function scalePath(
   for (let i = 0; i < cmds.length; i++) {
     const { idx, cmd } = cmds[i];
     const end = i + 1 < cmds.length ? cmds[i + 1].idx : path.length;
-    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
-      parseFloat(n[0]),
-    );
+    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) => parseFloat(n[0]));
     out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
@@ -139,29 +123,27 @@ export function scalePath(
       if (upper === "A") {
         // rx ry 随轴缩放、rotation 不变、sweep 在负缩放时翻转，仅末尾 x/y 缩放
         const [rx, ry, rot, laf, sf, x, y] = group;
-        out += (k ? " " : "") + [
-          rx * sx,
-          ry * sy,
-          rot,
-          laf,
-          flip ? (sf === 1 ? 0 : 1) : sf,
-          isAbs ? scaleX(x) : x,
-          isAbs ? scaleY(y) : y,
-        ]
-          .map(fmt)
-          .join(" ");
+        out +=
+          (k ? " " : "") +
+          [
+            rx * sx,
+            ry * sy,
+            rot,
+            laf,
+            flip ? (sf === 1 ? 0 : 1) : sf,
+            isAbs ? scaleX(x) : x,
+            isAbs ? scaleY(y) : y,
+          ]
+            .map(fmt)
+            .join(" ");
       } else if (per === 1) {
         // H 只有 x 坐标、V 只有 y 坐标：仅对应轴缩放生效
         const v = group[0];
-        out +=
-          (k ? " " : "") +
-          fmt(isAbs ? (upper === "H" ? scaleX(v) : scaleY(v)) : v);
+        out += (k ? " " : "") + fmt(isAbs ? (upper === "H" ? scaleX(v) : scaleY(v)) : v);
       } else {
         for (let j = 0; j < group.length; j += 2) {
-          out +=
-            (j || k ? " " : "") + fmt(isAbs ? scaleX(group[j]) : group[j]);
-          out +=
-            ` ${fmt(isAbs ? scaleY(group[j + 1]) : group[j + 1])}`;
+          out += (j || k ? " " : "") + fmt(isAbs ? scaleX(group[j]) : group[j]);
+          out += ` ${fmt(isAbs ? scaleY(group[j + 1]) : group[j + 1])}`;
         }
       }
       k += per;
@@ -177,11 +159,7 @@ export function scalePath(
  * （镜像反转弧的扫描方向）；相对命令（小写）原样保留（数据契约保证绝对坐标）。
  * path 为空时原样返回。
  */
-export function mirrorPath(
-  path: string,
-  axis: "h" | "v",
-  center: number,
-): string {
+export function mirrorPath(path: string, axis: "h" | "v", center: number): string {
   if (!path) {
     return path;
   }
@@ -198,9 +176,7 @@ export function mirrorPath(
   for (let i = 0; i < cmds.length; i++) {
     const { idx, cmd } = cmds[i];
     const end = i + 1 < cmds.length ? cmds[i + 1].idx : path.length;
-    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
-      parseFloat(n[0]),
-    );
+    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) => parseFloat(n[0]));
     out += `${cmd} `;
     const upper = cmd.toUpperCase();
     const isAbs = cmd === upper;
@@ -223,32 +199,27 @@ export function mirrorPath(
       if (upper === "A") {
         // rx ry rotation large-arc sweep 不参与镜像（sweep 翻转），仅末尾 x/y 镜像
         const [rx, ry, rot, laf, sf, x, y] = group;
-        out += (k ? " " : "") + [
-          rx,
-          ry,
-          -rot,
-          laf,
-          sf === 1 ? 0 : 1,
-          mirrorX ? 2 * center - x : x,
-          mirrorY ? 2 * center - y : y,
-        ]
-          .map(fmt)
-          .join(" ");
+        out +=
+          (k ? " " : "") +
+          [
+            rx,
+            ry,
+            -rot,
+            laf,
+            sf === 1 ? 0 : 1,
+            mirrorX ? 2 * center - x : x,
+            mirrorY ? 2 * center - y : y,
+          ]
+            .map(fmt)
+            .join(" ");
       } else if (per === 1) {
         // H 只有 x 坐标、V 只有 y 坐标：仅对应轴的镜像生效，另一轴原样保留
         const v = group[0];
-        out +=
-          (k ? " " : "") +
-          fmt(
-            (upper === "H" ? mirrorX : mirrorY) ? 2 * center - v : v,
-          );
+        out += (k ? " " : "") + fmt((upper === "H" ? mirrorX : mirrorY) ? 2 * center - v : v);
       } else {
         for (let j = 0; j < group.length; j += 2) {
-          out +=
-            (j || k ? " " : "") +
-            fmt(mirrorX ? 2 * center - group[j] : group[j]);
-          out +=
-            ` ${fmt(mirrorY ? 2 * center - group[j + 1] : group[j + 1])}`;
+          out += (j || k ? " " : "") + fmt(mirrorX ? 2 * center - group[j] : group[j]);
+          out += ` ${fmt(mirrorY ? 2 * center - group[j + 1] : group[j + 1])}`;
         }
       }
       k += per;
@@ -285,9 +256,7 @@ export function transformPath(
   for (let i = 0; i < cmds.length; i++) {
     const { idx, cmd } = cmds[i];
     const end = i + 1 < cmds.length ? cmds[i + 1].idx : path.length;
-    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) =>
-      parseFloat(n[0]),
-    );
+    const nums = [...path.slice(idx + 1, end).matchAll(NUM_RE)].map((n) => parseFloat(n[0]));
     out += `${cmd} `;
     const upper = cmd.toUpperCase();
     let k = 0;
@@ -308,14 +277,11 @@ export function transformPath(
         // rx ry rotation large-arc sweep 不参与逐点变换，仅末尾 x/y 变换
         const [rx, ry, rot, laf, sf, x, y] = group;
         const p = fn({ x, y });
-        out +=
-          (k ? " " : "") +
-          [rx, ry, rot, laf, sf, p.x, p.y].map(fmt).join(" ");
+        out += (k ? " " : "") + [rx, ry, rot, laf, sf, p.x, p.y].map(fmt).join(" ");
       } else if (per === 1) {
         const v = group[0];
         const p = fn({ x: upper === "H" ? v : 0, y: upper === "V" ? v : 0 });
-        out +=
-          (k ? " " : "") + fmt(upper === "H" ? p.x : p.y);
+        out += (k ? " " : "") + fmt(upper === "H" ? p.x : p.y);
       } else {
         for (let j = 0; j < group.length; j += 2) {
           const p = fn({ x: group[j], y: group[j + 1] });

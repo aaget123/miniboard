@@ -1,11 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  ShortcutManager,
-  comboFromEvent,
-  formatCombo,
-  formatKeys,
-  normKey,
-} from "./shortcuts";
+import { ShortcutManager, comboFromEvent, formatCombo, formatKeys, normKey } from "./shortcuts";
 import { ToolRegistry } from "../board/registry";
 
 /** localStorage mock（Node 测试环境无 localStorage，与 toolbar.test 一致） */
@@ -26,9 +20,7 @@ describe("comboFromEvent", () => {
   });
 
   it("Ctrl/Shift/Alt 组合按固定顺序拼接", () => {
-    expect(comboFromEvent({ key: "Z", ctrlKey: true, shiftKey: true })).toBe(
-      "ctrl+shift+z",
-    );
+    expect(comboFromEvent({ key: "Z", ctrlKey: true, shiftKey: true })).toBe("ctrl+shift+z");
     expect(comboFromEvent({ key: "s", ctrlKey: true })).toBe("ctrl+s");
   });
 
@@ -37,9 +29,7 @@ describe("comboFromEvent", () => {
   });
 
   it("符号键不再单计 shift（Ctrl+Shift+= 的 key 是 +）", () => {
-    expect(comboFromEvent({ key: "+", ctrlKey: true, shiftKey: true })).toBe(
-      "ctrl+plus",
-    );
+    expect(comboFromEvent({ key: "+", ctrlKey: true, shiftKey: true })).toBe("ctrl+plus");
     expect(comboFromEvent({ key: "=", ctrlKey: true })).toBe("ctrl+=");
     expect(comboFromEvent({ key: "-", ctrlKey: true })).toBe("ctrl+-");
   });
@@ -126,9 +116,7 @@ describe("ShortcutManager", () => {
   it("findConflict 报告占用者并支持排除自身", () => {
     const sm = new ShortcutManager();
     const registry = new ToolRegistry();
-    expect(sm.findConflict("ctrl+s", "tool:x", registry)?.label).toBe(
-      "操作「保存文件」",
-    );
+    expect(sm.findConflict("ctrl+s", "tool:x", registry)?.label).toBe("操作「保存文件」");
     expect(sm.findConflict("v", "tool:x", registry)?.label).toContain("选择");
     expect(sm.findConflict("ctrl+s", "save", registry)).toBeNull();
     expect(sm.findConflict("q", "tool:lasso", registry)).toBeNull();

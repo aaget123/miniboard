@@ -19,10 +19,32 @@ describe("isSketchable 类型判定", () => {
   it("标准几何可转换，已手绘/画笔/文本/图片/frame 不可转换", () => {
     expect(isSketchable(shape({ type: "rect" }))).toBe(true);
     expect(isSketchable(shape({ type: "ellipse" }))).toBe(true);
-    expect(isSketchable(shape({ type: "line", points: [{ x: 0, y: 0 }, { x: 10, y: 10 }] }))).toBe(true);
-    expect(isSketchable(shape({ type: "arrow", points: [{ x: 0, y: 0 }, { x: 10, y: 10 }] }))).toBe(true);
+    expect(
+      isSketchable(
+        shape({
+          type: "line",
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 10 },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isSketchable(
+        shape({
+          type: "arrow",
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 10 },
+          ],
+        }),
+      ),
+    ).toBe(true);
     // 已手绘：rough 元数据存在即跳过
-    expect(isSketchable(shape({ type: "path", path: "M0 0 L1 1 Z", rough: { seed: 1 } }))).toBe(false);
+    expect(isSketchable(shape({ type: "path", path: "M0 0 L1 1 Z", rough: { seed: 1 } }))).toBe(
+      false,
+    );
     expect(isSketchable(shape({ type: "text", text: "hi" }))).toBe(false);
     expect(isSketchable(shape({ type: "freehand", penPoints: [[0, 0]] }))).toBe(false);
     expect(isSketchable(shape({ type: "image", url: "x" }))).toBe(false);
@@ -44,7 +66,13 @@ describe("sketchifyData 手绘化", () => {
     const cases: ElementData[] = [
       shape({ type: "rect" }),
       shape({ type: "ellipse" }),
-      shape({ type: "line", points: [{ x: 0, y: 0 }, { x: 80, y: 40 }] }),
+      shape({
+        type: "line",
+        points: [
+          { x: 0, y: 0 },
+          { x: 80, y: 40 },
+        ],
+      }),
       shape({ type: "path", path: "M0 0 L50 0 L50 50 Z" }),
     ];
     for (const d of cases) {
@@ -77,7 +105,11 @@ describe("redrawRough 按 seed/粗糙度重绘", () => {
     const d = shape({ type: "rect", width: 200, height: 80 });
     const out = redrawRough(d, { seed: 7, original: "rect" }, 1);
     expect(out).not.toBeNull();
-    const wide = redrawRough(shape({ type: "rect", width: 400, height: 80 }), { seed: 7, original: "rect" }, 1);
+    const wide = redrawRough(
+      shape({ type: "rect", width: 400, height: 80 }),
+      { seed: 7, original: "rect" },
+      1,
+    );
     expect(out!.path).not.toBe(wide!.path); // 尺寸变化 → 路径不同
   });
 
@@ -98,7 +130,13 @@ describe("redrawRough 按 seed/粗糙度重绘", () => {
   });
 
   it("line/arrow 用 points 重绘；点数不足返回 null", () => {
-    const d = shape({ type: "arrow", points: [{ x: 0, y: 0 }, { x: 60, y: 30 }] });
+    const d = shape({
+      type: "arrow",
+      points: [
+        { x: 0, y: 0 },
+        { x: 60, y: 30 },
+      ],
+    });
     expect(redrawRough(d, { seed: 3, original: "arrow" }, 1)).not.toBeNull();
     expect(redrawRough(d, { seed: 3, original: "line" }, 1)).not.toBeNull();
     const noPts = shape({ type: "line" });

@@ -43,11 +43,7 @@ export type SelectionBarHandlers = {
   onRoughnessChange: (roughness: number) => void;
 };
 
-function makeButton(
-  icon: IconName,
-  title: string,
-  onClick: () => void,
-): HTMLButtonElement {
+function makeButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = "tool-btn sel-btn";
   btn.title = title;
@@ -137,33 +133,21 @@ export class SelectionBar {
     this.bar.id = "selection-bar";
     this.bar.hidden = true;
 
-    this.beautifyBtn = makeButton(
-      "sparkle",
-      "整理选中：识别手绘笔迹并完善为标准图形/拉直",
-      () => handlers.onBeautify(),
+    this.beautifyBtn = makeButton("sparkle", "整理选中：识别手绘笔迹并完善为标准图形/拉直", () =>
+      handlers.onBeautify(),
     );
-    this.sketchifyBtn = makeButton(
-      "scribble",
-      "手绘风格：选中图形转手绘外观（rough.js）",
-      () => handlers.onSketchify(),
+    this.sketchifyBtn = makeButton("scribble", "手绘风格：选中图形转手绘外观（rough.js）", () =>
+      handlers.onSketchify(),
     );
-    this.cropBtn = makeButton(
-      "crop",
-      "裁剪图片：拖动手柄调整区域，松手即应用",
-      () => handlers.onCrop(),
+    this.cropBtn = makeButton("crop", "裁剪图片：拖动手柄调整区域，松手即应用", () =>
+      handlers.onCrop(),
     );
     this.sep = document.createElement("div");
     this.sep.className = "tool-sep";
     this.styleBtn = makeButton("sliders", "样式：描边/填充颜色与粗细", () =>
       this.toggleStyle(this.bar.getBoundingClientRect()),
     );
-    this.bar.append(
-      this.beautifyBtn,
-      this.sketchifyBtn,
-      this.cropBtn,
-      this.sep,
-      this.styleBtn,
-    );
+    this.bar.append(this.beautifyBtn, this.sketchifyBtn, this.cropBtn, this.sep, this.styleBtn);
     container.appendChild(this.bar);
 
     // ---- 橡皮模式行：半径滑条（直接挂在栏上，非样式浮层内）----
@@ -196,12 +180,8 @@ export class SelectionBar {
 
     const channelGroup = document.createElement("div");
     channelGroup.className = "channel-group";
-    this.strokeChannelBtn = this.makeChannelBtn("描边", () =>
-      this.setChannel("stroke"),
-    );
-    this.fillChannelBtn = this.makeChannelBtn("填充", () =>
-      this.setChannel("fill"),
-    );
+    this.strokeChannelBtn = this.makeChannelBtn("描边", () => this.setChannel("stroke"));
+    this.fillChannelBtn = this.makeChannelBtn("填充", () => this.setChannel("fill"));
     channelGroup.append(this.strokeChannelBtn, this.fillChannelBtn);
     this.popover.appendChild(channelGroup);
 
@@ -314,9 +294,7 @@ export class SelectionBar {
       ["textAlignRight", "右对齐", "right"],
     ];
     for (const [icon, tip, align] of alignOptions) {
-      const b = this.makeIconBtn(icon, tip, () =>
-        handlers.onTextAlignChange(align),
-      );
+      const b = this.makeIconBtn(icon, tip, () => handlers.onTextAlignChange(align));
       b.classList.add("align-btn");
       this.alignBtns.push(b);
       alignGroup.appendChild(b);
@@ -391,11 +369,7 @@ export class SelectionBar {
       ["arrowHeadCircle", "圆", "circle"],
       ["arrowHeadDot", "点", "dot"],
     ];
-    const makeEndRow = (
-      end: "start" | "end",
-      labelText: string,
-      btns: HTMLButtonElement[],
-    ) => {
+    const makeEndRow = (end: "start" | "end", labelText: string, btns: HTMLButtonElement[]) => {
       const row = document.createElement("div");
       row.className = "style-row";
       const label = document.createElement("span");
@@ -436,9 +410,7 @@ export class SelectionBar {
       ["dottedLine", "点线", [2, 4]],
     ];
     for (const [icon, tip, dash] of dashOptions) {
-      const b = this.makeIconBtn(icon, tip, () =>
-        handlers.onStrokeDashChange(dash),
-      );
+      const b = this.makeIconBtn(icon, tip, () => handlers.onStrokeDashChange(dash));
       b.classList.add("dash-btn");
       this.dashBtns.push(b);
       dashGroup.appendChild(b);
@@ -467,11 +439,7 @@ export class SelectionBar {
     this.opacityValue = document.createElement("span");
     this.opacityValue.className = "font-size-value";
     this.opacityValue.textContent = "100%";
-    this.opacityRow.append(
-      opacityLabel,
-      this.opacityInput,
-      this.opacityValue,
-    );
+    this.opacityRow.append(opacityLabel, this.opacityInput, this.opacityValue);
     this.popover.appendChild(this.opacityRow);
 
     // P3 圆角行：滑条 0-100（仅单选 rect 时显示）
@@ -495,11 +463,7 @@ export class SelectionBar {
     this.cornerValue = document.createElement("span");
     this.cornerValue.className = "font-size-value";
     this.cornerValue.textContent = "0";
-    this.cornerRow.append(
-      cornerLabel,
-      this.cornerInput,
-      this.cornerValue,
-    );
+    this.cornerRow.append(cornerLabel, this.cornerInput, this.cornerValue);
     this.popover.appendChild(this.cornerRow);
 
     // 粗糙度行：滑条 0-2（rough.js roughness，0 平滑 / 2 重度抖动），
@@ -524,11 +488,7 @@ export class SelectionBar {
     this.roughValue = document.createElement("span");
     this.roughValue.className = "font-size-value";
     this.roughValue.textContent = "1.0";
-    this.roughRow.append(
-      roughLabel,
-      this.roughInput,
-      this.roughValue,
-    );
+    this.roughRow.append(roughLabel, this.roughInput, this.roughValue);
     this.popover.appendChild(this.roughRow);
     document.body.appendChild(this.popover);
 
@@ -553,17 +513,9 @@ export class SelectionBar {
    * penMode：画笔（freehand）工具激活时也显示左侧栏——无选中时只保留样式按钮，
    * 用于设置新笔迹的默认颜色/粗细（与选中元素时的“作用于选中”语义一致）。
    */
-  show(
-    info: SelectionInfo | null,
-    toolActive: boolean,
-    penMode = false,
-    eraserMode = false,
-  ) {
+  show(info: SelectionInfo | null, toolActive: boolean, penMode = false, eraserMode = false) {
     const hasSelection = !!info && info.ids.length > 0;
-    const visible =
-      (penMode || eraserMode || hasSelection) &&
-      toolActive &&
-      !(info?.allLocked);
+    const visible = (penMode || eraserMode || hasSelection) && toolActive && !info?.allLocked;
     this.setBarVisible(visible);
     if (!visible) {
       this.hidePopover();
@@ -612,8 +564,7 @@ export class SelectionBar {
     }
     const info2 = info!;
     // 按钮差异化：✨ 仅手绘笔迹、✎ 仅可手绘图形、✂ 仅单选图片、🎨 有可编辑元素
-    const singleImage =
-      info2.types.length === 1 && info2.types[0] === "image";
+    const singleImage = info2.types.length === 1 && info2.types[0] === "image";
     const hasEditable = info2.types.some((t) => t !== "image");
     this.beautifyBtn.style.display = info2.hasFreehand ? "" : "none";
     this.sketchifyBtn.style.display = info2.hasSketchable ? "" : "none";
@@ -646,12 +597,7 @@ export class SelectionBar {
     // P3 样式扩展行：线型（含可描边形状）、透明度（可编辑元素）、圆角（仅单选 rect）；
     // 单选未锁定元素时滑条跟随当前值（多选/锁定值混杂不跟随）
     const hasStrokeShape = info2.types.some(
-      (t) =>
-        t === "rect" ||
-        t === "ellipse" ||
-        t === "line" ||
-        t === "arrow" ||
-        t === "path",
+      (t) => t === "rect" || t === "ellipse" || t === "line" || t === "arrow" || t === "path",
     );
     this.dashRow.hidden = !hasStrokeShape;
     this.opacityRow.hidden = !hasEditable;
@@ -664,8 +610,7 @@ export class SelectionBar {
     }
     // 箭头端点：仅单选 line/arrow 时显示，端点按钮高亮跟随当前值
     const singleLine =
-      info2.ids.length === 1 &&
-      (info2.types[0] === "line" || info2.types[0] === "arrow");
+      info2.ids.length === 1 && (info2.types[0] === "line" || info2.types[0] === "arrow");
     this.arrowRow.hidden = !singleLine;
     if (info2.startArrow !== undefined) {
       this.setArrowHead("start", info2.startArrow);
@@ -687,9 +632,7 @@ export class SelectionBar {
     if (visible) {
       this.bar.hidden = false;
       // 双帧延迟：hidden 移除后下一帧再加 visible，确保 transition 从初始态播放
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => this.bar.classList.add("visible")),
-      );
+      requestAnimationFrame(() => requestAnimationFrame(() => this.bar.classList.add("visible")));
     } else {
       this.bar.classList.remove("visible");
       this.hideTimer = window.setTimeout(() => {
@@ -702,7 +645,8 @@ export class SelectionBar {
    * 开关样式浮层（左侧栏 🎨 与顶栏默认样式入口共用）。
    * 锚点在上半屏（顶栏）时显示在锚点下方居中；否则（左侧栏）显示在锚点右侧。
    */
-  toggleStyle(anchor: DOMRect) {    if (this.popover.classList.contains("visible")) {
+  toggleStyle(anchor: DOMRect) {
+    if (this.popover.classList.contains("visible")) {
       this.hidePopover();
       return;
     }
@@ -710,9 +654,7 @@ export class SelectionBar {
     this.hidePopover(false);
     this.popover.hidden = false;
     this.positionPopover(this.popover, anchor);
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => this.popover.classList.add("visible")),
-    );
+    requestAnimationFrame(() => requestAnimationFrame(() => this.popover.classList.add("visible")));
   }
 
   /** 浮层定位：锚点在上半屏时显示在下方居中，否则显示在右侧（底部越界上移） */
@@ -843,9 +785,7 @@ export class SelectionBar {
     this.strokeChannelBtn.classList.toggle("active", channel === "stroke");
     this.fillChannelBtn.classList.toggle("active", channel === "fill");
     // 切换后色板高亮与取色器跟随当前通道颜色
-    this.setActiveColor(
-      channel === "stroke" ? this.strokeChannelColor : this.fillChannelColor,
-    );
+    this.setActiveColor(channel === "stroke" ? this.strokeChannelColor : this.fillChannelColor);
   }
 
   // ---------- 最近使用颜色 ----------
@@ -856,7 +796,9 @@ export class SelectionBar {
       const raw = localStorage.getItem(RECENT_KEY);
       const list = raw ? (JSON.parse(raw) as unknown) : [];
       return Array.isArray(list)
-        ? list.filter((c): c is string => typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c)).slice(0, MAX_RECENT)
+        ? list
+            .filter((c): c is string => typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c))
+            .slice(0, MAX_RECENT)
         : [];
     } catch {
       return [];
@@ -923,11 +865,7 @@ export class SelectionBar {
   }
 
   /** 通用图标小按钮（样式浮层内各选项按钮组共用） */
-  private makeIconBtn(
-    icon: IconName,
-    title: string,
-    onClick: () => void,
-  ): HTMLButtonElement {
+  private makeIconBtn(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "arrange-btn";
     btn.title = title;

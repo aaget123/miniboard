@@ -7,13 +7,7 @@ import { elementBounds, unionBounds } from "./bounds";
 import { offsetElementData } from "./offset";
 import { mirrorPath } from "./path";
 
-export type AlignMode =
-  | "left"
-  | "centerX"
-  | "right"
-  | "top"
-  | "centerY"
-  | "bottom";
+export type AlignMode = "left" | "centerX" | "right" | "top" | "centerY" | "bottom";
 export type DistributeMode = "horizontal" | "vertical";
 export type FlipAxis = "h" | "v";
 export type ReorderMode = "front" | "back" | "forward" | "backward";
@@ -36,10 +30,7 @@ export type ArrangeAction =
   | "backward";
 
 /** 对齐：以选区 AABB 为基准，把每个元素的包围盒边/中心对齐到基准边/中心 */
-export function alignElements(
-  els: ElementData[],
-  mode: AlignMode,
-): ElementData[] {
+export function alignElements(els: ElementData[], mode: AlignMode): ElementData[] {
   if (els.length < 2) {
     return els;
   }
@@ -73,18 +64,13 @@ export function alignElements(
 }
 
 /** 分布：按中心排序，首尾保持原位、中间元素按步长均分（少于 3 个元素无操作） */
-export function distributeElements(
-  els: ElementData[],
-  mode: DistributeMode,
-): ElementData[] {
+export function distributeElements(els: ElementData[], mode: DistributeMode): ElementData[] {
   if (els.length < 3) {
     return els;
   }
   const center = (el: ElementData) => {
     const b = elementBounds(el);
-    return mode === "horizontal"
-      ? (b.minX + b.maxX) / 2
-      : (b.minY + b.maxY) / 2;
+    return mode === "horizontal" ? (b.minX + b.maxX) / 2 : (b.minY + b.maxY) / 2;
   };
   const sorted = [...els].sort((a, b) => center(a) - center(b));
   const first = center(sorted[0]);
@@ -133,8 +119,8 @@ export function flipElements(
       const h = el.height ?? 0;
       return {
         ...el,
-        x: axis === "h" ? 2 * cx - (el.x ?? 0) - w : el.x ?? 0,
-        y: axis === "v" ? 2 * cy - (el.y ?? 0) - h : el.y ?? 0,
+        x: axis === "h" ? 2 * cx - (el.x ?? 0) - w : (el.x ?? 0),
+        y: axis === "v" ? 2 * cy - (el.y ?? 0) - h : (el.y ?? 0),
         path: mirrorPath(el.path ?? "", axis, axis === "h" ? w / 2 : h / 2),
         penPoints: el.penPoints?.map((p) => [
           axis === "h" ? 2 * cx - p[0] : p[0],
@@ -147,8 +133,8 @@ export function flipElements(
     // rect/ellipse/text/image：左上角补偿 = 2*center - x - 尺寸
     return {
       ...el,
-      x: axis === "h" ? 2 * cx - (el.x ?? 0) - (el.width ?? 0) : el.x ?? 0,
-      y: axis === "v" ? 2 * cy - (el.y ?? 0) - (el.height ?? 0) : el.y ?? 0,
+      x: axis === "h" ? 2 * cx - (el.x ?? 0) - (el.width ?? 0) : (el.x ?? 0),
+      y: axis === "v" ? 2 * cy - (el.y ?? 0) - (el.height ?? 0) : (el.y ?? 0),
       rotation: -rot,
     };
   });
@@ -200,10 +186,7 @@ export function reorderElements<T extends { id?: string }>(
  * 组感知归一化：任一成员被选中时，把整组所有成员并入参与集合。
  * 锁定元素由调用方过滤（本模块假定输入均允许操作）。
  */
-export function expandGroupMembers(
-  elements: ElementData[],
-  selectedIds: string[],
-): Set<string> {
+export function expandGroupMembers(elements: ElementData[], selectedIds: string[]): Set<string> {
   const sel = new Set(selectedIds);
   // 一次遍历建索引：id → 组 id、组 id → 成员列表（避免逐 id 查找的 O(n²)）
   const groupOf = new Map<string, string>();

@@ -10,11 +10,7 @@ import type { ElementData } from "../types";
 import { translatePath } from "./path";
 
 /** 平移元素数据 (dx, dy)，返回新对象（零位移时原样返回） */
-export function offsetElementData(
-  d: ElementData,
-  dx: number,
-  dy: number,
-): ElementData {
+export function offsetElementData(d: ElementData, dx: number, dy: number): ElementData {
   if ((!dx && !dy) || !d) {
     return d;
   }

@@ -37,7 +37,9 @@ describe("validateElementData", () => {
   });
 
   it("line/arrow 需要至少 2 个 points 点", () => {
-    expect(validateElementData({ type: "line", x: 0, y: 0, points: [{ x: 1, y: 1 }] }).ok).toBe(false);
+    expect(validateElementData({ type: "line", x: 0, y: 0, points: [{ x: 1, y: 1 }] }).ok).toBe(
+      false,
+    );
     expect(
       validateElementData({
         type: "arrow",
@@ -54,7 +56,14 @@ describe("validateElementData", () => {
   it("path 需要 path 字符串，text 需要 text 字符串", () => {
     expect(validateElementData({ type: "path", x: 0, y: 0, width: 10, height: 10 }).ok).toBe(false);
     expect(
-      validateElementData({ type: "path", x: 0, y: 0, width: 10, height: 10, path: "M 0 0 L 10 10" }).ok,
+      validateElementData({
+        type: "path",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        path: "M 0 0 L 10 10",
+      }).ok,
     ).toBe(true);
     expect(validateElementData({ type: "text", x: 0, y: 0 }).ok).toBe(false);
     expect(validateElementData({ type: "text", x: 0, y: 0, text: "你好" }).ok).toBe(true);
@@ -79,9 +88,7 @@ describe("validateElementData", () => {
     if (!lineBad.ok) {
       expect(lineBad.error).toContain("x/y 必须为 0");
     }
-    expect(
-      validateElementData({ type: "path", x: 0, y: 0, path: "M 0 0 L 10 10" }).ok,
-    ).toBe(true);
+    expect(validateElementData({ type: "path", x: 0, y: 0, path: "M 0 0 L 10 10" }).ok).toBe(true);
   });
 
   it("strokeWidth 负数/NaN 被拒绝", () => {
@@ -89,7 +96,14 @@ describe("validateElementData", () => {
       validateElementData({ type: "rect", x: 0, y: 0, width: 10, height: 10, strokeWidth: -1 }).ok,
     ).toBe(false);
     expect(
-      validateElementData({ type: "rect", x: 0, y: 0, width: 10, height: 10, strokeWidth: Number.NaN }).ok,
+      validateElementData({
+        type: "rect",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        strokeWidth: Number.NaN,
+      }).ok,
     ).toBe(false);
   });
 
@@ -123,9 +137,9 @@ describe("validateElementData", () => {
     if (old.ok) {
       expect(old.data.fontWeight).toBe(700);
     }
-    expect(
-      validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: 950 }).ok,
-    ).toBe(false);
+    expect(validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: 950 }).ok).toBe(
+      false,
+    );
     expect(
       validateElementData({ type: "text", x: 0, y: 0, text: "x", fontWeight: "heavy" }).ok,
     ).toBe(false);
@@ -169,7 +183,8 @@ describe("validateElementData", () => {
       }).ok,
     ).toBe(false);
     expect(
-      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, contentType: "code" }).ok,
+      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, contentType: "code" })
+        .ok,
     ).toBe(false);
     expect(
       validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, content: 123 }).ok,
@@ -197,7 +212,15 @@ describe("validateElementData", () => {
       }).ok,
     ).toBe(false);
     expect(
-      validateElementData({ type: "frame", x: 0, y: 0, width: 10, height: 10, content: "x", name: 5 }).ok,
+      validateElementData({
+        type: "frame",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        content: "x",
+        name: 5,
+      }).ok,
     ).toBe(false);
   });
 
@@ -226,11 +249,21 @@ describe("validateElementList", () => {
   it("接受组合工具数组，拒绝空数组与超上限", () => {
     const ok = validateElementList([
       { type: "text", x: 0, y: 0, text: "标题" },
-      { type: "line", x: 0, y: 0, points: [{ x: 0, y: 5 }, { x: 50, y: 5 }] },
+      {
+        type: "line",
+        x: 0,
+        y: 0,
+        points: [
+          { x: 0, y: 5 },
+          { x: 50, y: 5 },
+        ],
+      },
     ]);
     expect(ok.ok).toBe(true);
     expect(validateElementList([]).ok).toBe(false);
-    expect(validateElementList(Array.from({ length: 9 }, () => ({ type: "rect", x: 0, y: 0 }))).ok).toBe(false);
+    expect(
+      validateElementList(Array.from({ length: 9 }, () => ({ type: "rect", x: 0, y: 0 }))).ok,
+    ).toBe(false);
   });
 
   it("数组内某个元素非法时给出序号", () => {
@@ -253,8 +286,12 @@ describe("scanGeneratorSource", () => {
 
   it("拒绝 while 循环 / fetch / DOM 访问", () => {
     expect(scanGeneratorSource(`(ctx) => { while (true) {} }`)).toContain("while 循环");
-    expect(scanGeneratorSource(`(ctx) => { return fetch("https://x") }`)).toContain("fetch（网络请求）");
-    expect(scanGeneratorSource(`(ctx) => { document.body.style }`)).toContain("document（DOM API）");
+    expect(scanGeneratorSource(`(ctx) => { return fetch("https://x") }`)).toContain(
+      "fetch（网络请求）",
+    );
+    expect(scanGeneratorSource(`(ctx) => { document.body.style }`)).toContain(
+      "document（DOM API）",
+    );
     expect(scanGeneratorSource(`(ctx) => { eval("1+1") }`)).toContain("eval");
   });
 

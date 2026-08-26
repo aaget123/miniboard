@@ -32,9 +32,7 @@ function nodeLabel(n: ToolbarLayoutNode): string {
 }
 
 function groupTools(nodes: ToolbarLayoutNode[], group: string): string[] {
-  const g = nodes.find(
-    (n) => n.kind === "group" && n.group === group,
-  );
+  const g = nodes.find((n) => n.kind === "group" && n.group === group);
   return g && g.kind === "group" ? g.tools.map((t) => t.id) : [];
 }
 
@@ -54,11 +52,7 @@ describe("computeToolbarNodes 分组顺序", () => {
       "text",
     ]);
     // 选择组收纳 选择/框选/套索；形状组收纳 矩形/椭圆/框架
-    expect(groupTools(nodes, "select")).toEqual([
-      "select",
-      "marquee",
-      "lasso",
-    ]);
+    expect(groupTools(nodes, "select")).toEqual(["select", "marquee", "lasso"]);
     expect(groupTools(nodes, "shape")).toEqual(["rect", "ellipse", "frame"]);
   });
 
@@ -95,13 +89,7 @@ describe("computeToolbarNodes 分组顺序", () => {
   it("自定义布局：未勾选的分组工具收进对应下拉，组按钮按偏好顺序排在末尾", () => {
     saveGroupOrderPref(["ai", "shape", "select"]);
     const nodes = computeToolbarNodes(registry, ["hand", "pen", "text"]);
-    expect(nodes.map(nodeLabel)).toEqual([
-      "hand",
-      "pen",
-      "text",
-      "[shape]",
-      "[select]",
-    ]);
+    expect(nodes.map(nodeLabel)).toEqual(["hand", "pen", "text", "[shape]", "[select]"]);
   });
 
   it("有 AI 工具时：ai 组按钮按偏好位置输出", () => {
@@ -133,46 +121,20 @@ describe("computeToolbarNodes 分组顺序", () => {
   it("分组标记插入序列：该位置输出完整分组按钮（不拆开），组内工具收进下拉", () => {
     saveGroupOrderPref(null);
     const nodes = computeToolbarNodes(registry, ["hand", "g:select", "pen"]);
-    expect(nodes.map(nodeLabel)).toEqual([
-      "hand",
-      "[select]",
-      "pen",
-      "[shape]",
-    ]);
+    expect(nodes.map(nodeLabel)).toEqual(["hand", "[select]", "pen", "[shape]"]);
     // 选择组按钮完整收纳 选择/框选/套索（未被拆开平铺）
-    expect(groupTools(nodes, "select")).toEqual([
-      "select",
-      "marquee",
-      "lasso",
-    ]);
+    expect(groupTools(nodes, "select")).toEqual(["select", "marquee", "lasso"]);
   });
 
   it("分组标记 + 组内部分工具已平铺：组按钮只收纳未平铺工具", () => {
     const nodes = computeToolbarNodes(registry, ["marquee", "g:select", "hand"]);
-    expect(nodes.map(nodeLabel)).toEqual([
-      "marquee",
-      "[select]",
-      "hand",
-      "[shape]",
-    ]);
+    expect(nodes.map(nodeLabel)).toEqual(["marquee", "[select]", "hand", "[shape]"]);
     expect(groupTools(nodes, "select")).toEqual(["select", "lasso"]);
   });
 
   it("组内工具全部平铺时：序列中的分组标记不再生成按钮", () => {
-    const nodes = computeToolbarNodes(registry, [
-      "select",
-      "marquee",
-      "lasso",
-      "g:select",
-      "hand",
-    ]);
-    expect(nodes.map(nodeLabel)).toEqual([
-      "select",
-      "marquee",
-      "lasso",
-      "hand",
-      "[shape]",
-    ]);
+    const nodes = computeToolbarNodes(registry, ["select", "marquee", "lasso", "g:select", "hand"]);
+    expect(nodes.map(nodeLabel)).toEqual(["select", "marquee", "lasso", "hand", "[shape]"]);
   });
 
   it("自定义分组：空组也生成顶栏按钮（可拖入工具归组）", () => {
@@ -218,16 +180,9 @@ describe("computeToolbarNodes 分组顺序", () => {
     saveGroupOverrides({ eraser: "cg-abc" });
     const nodes = computeToolbarNodes(registry, ["hand", "g:cg-abc"]);
     // 序列中 [cg-abc] 收纳 eraser；未出现在序列中的组按偏好顺序追加末尾
-    expect(nodes.map(nodeLabel)).toEqual([
-      "hand",
-      "[cg-abc]",
-      "[select]",
-      "[shape]",
-    ]);
+    expect(nodes.map(nodeLabel)).toEqual(["hand", "[cg-abc]", "[select]", "[shape]"]);
     expect(groupTools(nodes, "cg-abc")).toEqual(["eraser"]);
-    expect(groupLabel("cg-abc", [{ id: "cg-abc", name: "常用" }])).toBe(
-      "常用",
-    );
+    expect(groupLabel("cg-abc", [{ id: "cg-abc", name: "常用" }])).toBe("常用");
     expect(groupLabel("cg-xyz", [])).toBe("cg-xyz"); // 未知组回退 id
   });
 });

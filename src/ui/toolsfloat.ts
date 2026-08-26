@@ -58,10 +58,7 @@ export class ToolsFloat {
   private originLeft = 0;
   private originTop = 0;
 
-  constructor(
-    container: HTMLElement,
-    handlers: ToolsFloatHandlers,
-  ) {
+  constructor(container: HTMLElement, handlers: ToolsFloatHandlers) {
     this.root = document.createElement("div");
     this.root.id = "tools-float";
 
@@ -81,7 +78,9 @@ export class ToolsFloat {
     this.panel.appendChild(makeDivider());
     this.panel.appendChild(makeItem("trash", "清空画布", () => handlers.onClear()));
     this.panel.appendChild(
-      makeItem("settings", "设置（外观 / AI 模型 / AI 工具 / 系统提示词）", () => handlers.onSettings()),
+      makeItem("settings", "设置（外观 / AI 模型 / AI 工具 / 系统提示词）", () =>
+        handlers.onSettings(),
+      ),
     );
     this.root.appendChild(this.panel);
 

@@ -51,10 +51,9 @@ export function loadProfiles(): AiProfileStore {
           )
         : [];
       const activeId =
-        typeof parsed.activeId === "string" &&
-        profiles.some((p) => p.id === parsed.activeId)
+        typeof parsed.activeId === "string" && profiles.some((p) => p.id === parsed.activeId)
           ? parsed.activeId
-          : profiles[0]?.id ?? "";
+          : (profiles[0]?.id ?? "");
       return { activeId, profiles };
     }
     // 旧版单配置迁移
@@ -80,8 +79,7 @@ export function saveProfiles(store: AiProfileStore) {
 /** 当前激活配置（无任何配置时返回空默认） */
 export function loadConfig(): AiConfig {
   const { activeId, profiles } = loadProfiles();
-  const active =
-    profiles.find((p) => p.id === activeId) ?? profiles[0] ?? null;
+  const active = profiles.find((p) => p.id === activeId) ?? profiles[0] ?? null;
   if (!active) {
     return { baseURL: "", apiKey: "", model: "", multimodal: false };
   }
@@ -92,8 +90,7 @@ export function loadConfig(): AiConfig {
 /** 更新当前激活配置（无配置时自动创建"默认配置"条目） */
 export function saveConfig(cfg: AiConfig) {
   const store = loadProfiles();
-  const active =
-    store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
+  const active = store.profiles.find((p) => p.id === store.activeId) ?? store.profiles[0];
   if (active) {
     Object.assign(active, cfg);
   } else {
@@ -111,9 +108,7 @@ export function saveConfig(cfg: AiConfig) {
 /** 配置是否完整可用 */
 export function isConfigReady(cfg: AiConfig): boolean {
   return (
-    cfg.baseURL.trim().length > 0 &&
-    cfg.apiKey.trim().length > 0 &&
-    cfg.model.trim().length > 0
+    cfg.baseURL.trim().length > 0 && cfg.apiKey.trim().length > 0 && cfg.model.trim().length > 0
   );
 }
 

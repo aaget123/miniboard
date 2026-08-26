@@ -12,11 +12,7 @@ describe("offsetElementData", () => {
       offsetElementData({ type: "rect", x: 10, y: 20, width: 30, height: 40 }, 5, 7),
     ).toMatchObject({ x: 15, y: 27, width: 30, height: 40 });
     expect(
-      offsetElementData(
-        { type: "text", x: 1, y: 2, width: 10, height: 10, text: "hi" },
-        -1,
-        3,
-      ),
+      offsetElementData({ type: "text", x: 1, y: 2, width: 10, height: 10, text: "hi" }, -1, 3),
     ).toMatchObject({ x: 0, y: 5, text: "hi" });
     expect(
       offsetElementData({ type: "ellipse", x: 0, y: 0, width: 5, height: 5 }, 2, 2),

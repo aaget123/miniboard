@@ -13,12 +13,7 @@ import {
 } from "./tools";
 import { iconHTML } from "../ui/icons";
 import type { ElementData } from "../types";
-import type {
-  AiContentPart,
-  AiMode,
-  AiToolExecution,
-  ChatMessage,
-} from "./types";
+import type { AiContentPart, AiMode, AiToolExecution, ChatMessage } from "./types";
 import { LS_CHAT_PREFIX, sanitizeForStorage, textOf } from "./history";
 
 const MAX_TOOL_ROUNDS = 4;
@@ -72,10 +67,7 @@ const TOOL_LABELS: Record<string, string> = {
 // ---------- 轻量 markdown 渲染 ----------
 
 function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /**
@@ -245,11 +237,8 @@ export class AiPanel {
     headerBtn.innerHTML = iconHTML("clipboard", 13);
     headerBtn.title = "复制最后回复";
     headerBtn.addEventListener("click", () => {
-      const last = [...this.st.history]
-        .reverse()
-        .find((m) => m.role === "assistant");
-      const text =
-        typeof last?.content === "string" && last.content ? last.content : "";
+      const last = [...this.st.history].reverse().find((m) => m.role === "assistant");
+      const text = typeof last?.content === "string" && last.content ? last.content : "";
       if (!text) {
         headerBtn.title = "暂无可复制的回复";
         return;
@@ -298,16 +287,12 @@ export class AiPanel {
   // ---------- 事件 ----------
 
   private bindEvents() {
-    document
-      .querySelectorAll<HTMLButtonElement>(".ai-mode-tab")
-      .forEach((btn) => {
-        const mode = btn.dataset.mode as AiMode;
-        this.modeTabs.set(mode, btn);
-        btn.addEventListener("click", () => this.setMode(mode));
-      });
-    document
-      .getElementById("ai-close-btn")!
-      .addEventListener("click", () => this.close());
+    document.querySelectorAll<HTMLButtonElement>(".ai-mode-tab").forEach((btn) => {
+      const mode = btn.dataset.mode as AiMode;
+      this.modeTabs.set(mode, btn);
+      btn.addEventListener("click", () => this.setMode(mode));
+    });
+    document.getElementById("ai-close-btn")!.addEventListener("click", () => this.close());
     this.sendBtn.addEventListener("click", () => {
       if (this.busy) {
         // 生成中：按钮变为“停止”，中断当前请求
@@ -413,9 +398,7 @@ export class AiPanel {
     const out: ChatMessage[] = [];
     for (const m of msgs) {
       if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length) {
-        const names = m.tool_calls.map(
-          (c) => c.function?.name ?? "?",
-        );
+        const names = m.tool_calls.map((c) => c.function?.name ?? "?");
         out.push({
           role: "assistant",
           content: `［工具调用：${names.join("、")}］`,
@@ -438,10 +421,7 @@ export class AiPanel {
       if (!cleaned.length) {
         localStorage.removeItem(this.storageKey());
       } else {
-        localStorage.setItem(
-          this.storageKey(),
-          JSON.stringify({ history: cleaned }),
-        );
+        localStorage.setItem(this.storageKey(), JSON.stringify({ history: cleaned }));
       }
     } catch {
       // localStorage 不可用时忽略持久化（对话仍在内存中）
@@ -460,15 +440,11 @@ export class AiPanel {
               (m): m is ChatMessage =>
                 !!m &&
                 typeof m === "object" &&
-                ((m as ChatMessage).role === "user" ||
-                  (m as ChatMessage).role === "assistant"),
+                ((m as ChatMessage).role === "user" || (m as ChatMessage).role === "assistant"),
             ),
           );
           this.st.history = cleaned;
-          this.st.historyTokens = cleaned.reduce(
-            (n, m) => n + estimateTokens(m.content),
-            0,
-          );
+          this.st.historyTokens = cleaned.reduce((n, m) => n + estimateTokens(m.content), 0);
         }
       }
     } catch {
@@ -564,8 +540,7 @@ export class AiPanel {
   private renderToolReceipt(exec: AiToolExecution) {
     const el = document.createElement("div");
     el.className = "ai-msg ai-receipt";
-    const isToolCard =
-      exec.tool && !exec.result.startsWith("错误：") && exec.name !== "list_tools";
+    const isToolCard = exec.tool && !exec.result.startsWith("错误：") && exec.name !== "list_tools";
     if (isToolCard) {
       el.classList.add("tool-card");
       const titleMap: Record<string, string> = {
@@ -606,8 +581,7 @@ export class AiPanel {
       const label = TOOL_LABELS[exec.name] ?? exec.name;
       // 读图结果含图片 dataURL：面板不展示 base64，仅保留说明前缀
       const shown = exec.result.includes("data:image/")
-        ? exec.result.slice(0, exec.result.indexOf("data:image/")) +
-          "[图片数据已发送给模型]"
+        ? exec.result.slice(0, exec.result.indexOf("data:image/")) + "[图片数据已发送给模型]"
         : exec.result;
       el.textContent = `${label}：${shown}`;
     }
@@ -680,7 +654,10 @@ export class AiPanel {
         break;
       }
     }
-    if (this.st.historyTokens + this.st.systemTokens > MAX_HISTORY_TOKENS && !this.st.compressNotified) {
+    if (
+      this.st.historyTokens + this.st.systemTokens > MAX_HISTORY_TOKENS &&
+      !this.st.compressNotified
+    ) {
       this.st.compressNotified = true;
       this.appendSystem("对话较长，较早的内容已按长度自动压缩，AI 可能不清楚最早的信息。");
     }
@@ -795,8 +772,7 @@ export class AiPanel {
     // 否则交流模式附带整画布截图供理解整体布局
     if (cfg.multimodal === true) {
       const atImages = (atData ?? []).filter(
-        (d): d is ElementData & { url: string } =>
-          d.type === "image" && !!d.url,
+        (d): d is ElementData & { url: string } => d.type === "image" && !!d.url,
       );
       if (atImages.length) {
         const parts: AiContentPart[] = [{ type: "text", text: userContent }];
@@ -819,19 +795,28 @@ export class AiPanel {
               : "";
           parts[0] = {
             type: "text",
-            text: userContent +
+            text:
+              userContent +
               `\n\n随本消息附带画布中以下图片的实际内容（请直接看图）：\n${attached.join("\n")}${extra}`,
           };
           const msg = this.st.history[this.st.history.length - 1];
-          this.st.historyTokens +=
-            estimateTokens(parts) - estimateTokens(msg.content as string);
+          this.st.historyTokens += estimateTokens(parts) - estimateTokens(msg.content as string);
           msg.content = parts;
         }
       } else if (this.mode === "chat") {
         try {
           // 视口渲染截图：模型看到"使用者当前看到的画面"（含手绘风格与缩放观感），
           // 附世界坐标范围便于与 get_canvas 数据对齐；导出失败时降级为内容包围盒截图
-          let shot: { url: string; viewport: { minX: number; minY: number; maxX: number; maxY: number; scale: number } | null } | null = null;
+          let shot: {
+            url: string;
+            viewport: {
+              minX: number;
+              minY: number;
+              maxX: number;
+              maxY: number;
+              scale: number;
+            } | null;
+          } | null = null;
           const vpShot = await this.board.exportViewportImage(1024);
           if (vpShot) {
             shot = vpShot;
@@ -903,13 +888,19 @@ export class AiPanel {
               "注意：画布内容在对话期间发生了变化（可能是工具执行或使用者手动编辑导致），如需准确数据请重新调用 get_canvas。",
           });
         }
-        const res = await chatTurn(cfg, [system, ...this.st.history], openAiTools, {
-          onText: (delta) => {
-            fullText += delta;
-            this.renderBubble(bubble, fullText);
-            this.scrollBottom();
+        const res = await chatTurn(
+          cfg,
+          [system, ...this.st.history],
+          openAiTools,
+          {
+            onText: (delta) => {
+              fullText += delta;
+              this.renderBubble(bubble, fullText);
+              this.scrollBottom();
+            },
           },
-        }, this.abortCtrl.signal);
+          this.abortCtrl.signal,
+        );
         if (!res.toolCalls.length) {
           if (res.text) {
             this.pushHistory({ role: "assistant", content: res.text });
@@ -923,16 +914,12 @@ export class AiPanel {
           tool_calls: res.toolCalls,
         });
         for (const call of res.toolCalls) {
-          const tool = toolsForMode(mode).find(
-            (t) => t.name === call.function.name,
-          );
+          const tool = toolsForMode(mode).find((t) => t.name === call.function.name);
           // 批量操作闸门：影响元素数超过阈值时需用户确认（防提示注入/模型误操作的最后一道防线）
           if (tool?.mutating) {
             let affected = 0;
             try {
-              const parsedArgs = JSON.parse(
-                call.function.arguments || "{}",
-              ) as {
+              const parsedArgs = JSON.parse(call.function.arguments || "{}") as {
                 ids?: unknown[];
                 elements?: unknown[];
                 updates?: unknown[];
@@ -947,9 +934,7 @@ export class AiPanel {
             }
             if (
               affected > BATCH_CONFIRM_THRESHOLD &&
-              !window.confirm(
-                `该操作将影响 ${affected} 个元素，确认执行？`,
-              )
+              !window.confirm(`该操作将影响 ${affected} 个元素，确认执行？`)
             ) {
               this.pushHistory({
                 role: "tool",
@@ -997,16 +982,21 @@ export class AiPanel {
       if (exhausted) {
         this.pushHistory({
           role: "user",
-          content:
-            "工具调用轮次已达上限，请基于已执行的结果直接给出总结回答，不要再调用任何工具。",
+          content: "工具调用轮次已达上限，请基于已执行的结果直接给出总结回答，不要再调用任何工具。",
         });
-        const res = await chatTurn(cfg, [system, ...this.st.history], [], {
-          onText: (delta) => {
-            fullText += delta;
-            this.renderBubble(bubble, fullText);
-            this.scrollBottom();
+        const res = await chatTurn(
+          cfg,
+          [system, ...this.st.history],
+          [],
+          {
+            onText: (delta) => {
+              fullText += delta;
+              this.renderBubble(bubble, fullText);
+              this.scrollBottom();
+            },
           },
-        }, this.abortCtrl.signal);
+          this.abortCtrl.signal,
+        );
         if (res.text) {
           this.pushHistory({ role: "assistant", content: res.text });
         }
@@ -1028,8 +1018,7 @@ export class AiPanel {
       commitCanvasChange();
       this.renderBubble(bubble, fullText ? fullText : "");
       const stopped =
-        err instanceof Error &&
-        (err.name === "AbortError" || err.name === "TimeoutError");
+        err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
       if (stopped) {
         this.appendError(fullText ? "已停止生成（已输出的内容保留）" : "已停止");
       } else {

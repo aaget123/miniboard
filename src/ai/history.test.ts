@@ -51,10 +51,7 @@ describe("sanitizeForStorage", () => {
       assistant("画布上有 3 个元素"),
     ];
     const cleaned = sanitizeForStorage(history);
-    expect(cleaned).toEqual([
-      user("看一下画布"),
-      assistant("画布上有 3 个元素"),
-    ]);
+    expect(cleaned).toEqual([user("看一下画布"), assistant("画布上有 3 个元素")]);
   });
 
   it("工具调用轮有总结文本时保留纯文本，无文本整条丢弃", () => {
@@ -63,7 +60,9 @@ describe("sanitizeForStorage", () => {
       {
         role: "assistant",
         content: "正在画流程图",
-        tool_calls: [{ id: "c", type: "function", function: { name: "draw_flowchart", arguments: "{}" } }],
+        tool_calls: [
+          { id: "c", type: "function", function: { name: "draw_flowchart", arguments: "{}" } },
+        ],
       },
       { role: "tool", tool_call_id: "c", content: "已生成" },
     ];
@@ -76,7 +75,9 @@ describe("sanitizeForStorage", () => {
       {
         role: "assistant",
         content: null,
-        tool_calls: [{ id: "c", type: "function", function: { name: "get_canvas", arguments: "{}" } }],
+        tool_calls: [
+          { id: "c", type: "function", function: { name: "get_canvas", arguments: "{}" } },
+        ],
       },
     ];
     expect(sanitizeForStorage(noText)).toEqual([user("u")]);
@@ -100,10 +101,7 @@ describe("sanitizeForStorage", () => {
       user("有效消息"),
       assistant("有效回复"),
     ];
-    expect(sanitizeForStorage(history)).toEqual([
-      user("有效消息"),
-      assistant("有效回复"),
-    ]);
+    expect(sanitizeForStorage(history)).toEqual([user("有效消息"), assistant("有效回复")]);
   });
 
   it("超过轮次上限时保留最近 MAX_PERSIST_TURNS 轮，开头必须为 user", () => {
@@ -119,8 +117,6 @@ describe("sanitizeForStorage", () => {
     expect(cleaned.length).toBe(MAX_PERSIST_TURNS * 2);
     expect(cleaned[0].role).toBe("user");
     expect(cleaned[0].content).toBe(`问题${5}`);
-    expect(cleaned[cleaned.length - 1].content).toBe(
-      `回答${MAX_PERSIST_TURNS + 4}`,
-    );
+    expect(cleaned[cleaned.length - 1].content).toBe(`回答${MAX_PERSIST_TURNS + 4}`);
   });
 });

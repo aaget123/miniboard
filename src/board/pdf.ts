@@ -45,11 +45,7 @@ function concat(...parts: Uint8Array[]): Uint8Array {
  * 结构：Catalog / Pages / Page / Image XObject（DCTDecode）/ Contents。
  * 返回完整 PDF 字节；图片与 PDF 本身均为纯二进制，偏移精确计算。
  */
-export function jpegToPdf(
-  jpegDataUrl: string,
-  width: number,
-  height: number,
-): Uint8Array {
+export function jpegToPdf(jpegDataUrl: string, width: number, height: number): Uint8Array {
   const jpeg = dataUrlToBytes(jpegDataUrl);
   const w = Math.max(1, Math.round(width));
   const h = Math.max(1, Math.round(height));
@@ -108,10 +104,7 @@ export async function pdfFirstPageToImage(
     const doc = await pdfjs.getDocument({ data }).promise;
     const page = await doc.getPage(1);
     const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(
-      1,
-      maxSide / Math.max(base.width, base.height),
-    );
+    const scale = Math.min(1, maxSide / Math.max(base.width, base.height));
     const vp = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(vp.width));
@@ -150,10 +143,7 @@ export async function dataURLToJpeg(
     if (!img) {
       return null;
     }
-    const scale = Math.min(
-      1,
-      maxSide / Math.max(img.naturalWidth, img.naturalHeight),
-    );
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
     const w = Math.max(1, Math.round(img.naturalWidth * scale));
     const h = Math.max(1, Math.round(img.naturalHeight * scale));
     const canvas = document.createElement("canvas");

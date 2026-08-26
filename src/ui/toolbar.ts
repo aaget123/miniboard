@@ -59,8 +59,7 @@ export function loadCustomGroups(): CustomGroupDef[] {
       return [];
     }
     return parsed.filter(
-      (d): d is CustomGroupDef =>
-        !!d && typeof d.id === "string" && typeof d.name === "string",
+      (d): d is CustomGroupDef => !!d && typeof d.id === "string" && typeof d.name === "string",
     );
   } catch {
     return [];
@@ -91,9 +90,7 @@ export function loadGroupOverrides(): Record<string, string> {
       return {};
     }
     const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, string>)
-      : {};
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
   } catch {
     return {};
   }
@@ -174,9 +171,7 @@ export function loadToolbarPref(): string[] | null {
     if (!Array.isArray(parsed.visible)) {
       return null;
     }
-    const list = parsed.visible.filter(
-      (v): v is string => typeof v === "string",
-    );
+    const list = parsed.visible.filter((v): v is string => typeof v === "string");
     return list.length ? list : null;
   } catch {
     return null;
@@ -242,10 +237,7 @@ export function saveGroupOrderPref(order: ToolGroup[] | null) {
 }
 
 /** 注册表首次出现顺序（分组默认顺序；pref 未包含的组按此追加到末尾） */
-function defaultGroupOrder(
-  tools: ToolDef[],
-  overrides: Record<string, string> = {},
-): ToolGroup[] {
+function defaultGroupOrder(tools: ToolDef[], overrides: Record<string, string> = {}): ToolGroup[] {
   const order: ToolGroup[] = [];
   const seen = new Set<ToolGroup>();
   for (const t of tools) {
@@ -406,9 +398,7 @@ export function computeToolbarNodes(
       if (isGroupMarker(id)) {
         // 分组标记：该位置输出完整分组按钮，收纳组内未平铺工具（不拆开）
         const g = markerGroup(id) as ToolGroup;
-        const arr = tools.filter(
-          (t) => effectiveGroup(t, overrides) === g && !pinned.has(t.id),
-        );
+        const arr = tools.filter((t) => effectiveGroup(t, overrides) === g && !pinned.has(t.id));
         if (arr.length || customGroups.some((d) => d.id === g)) {
           nodes.push({ kind: "group", group: g, tools: arr });
         }
@@ -417,9 +407,7 @@ export function computeToolbarNodes(
       }
     }
     // 有未平铺工具但未出现在序列中的组 → 组按钮追加到末尾（按分组顺序偏好）
-    const used = new Set(
-      visible.filter(isGroupMarker).map((m) => markerGroup(m)),
-    );
+    const used = new Set(visible.filter(isGroupMarker).map((m) => markerGroup(m)));
     const groupTools = new Map<ToolGroup, ToolDef[]>();
     for (const t of tools) {
       const g = effectiveGroup(t, overrides);
@@ -493,10 +481,7 @@ export function foldIntoMore(
 function lastPinnedToolEl(groupEl: HTMLElement): HTMLElement | null {
   for (let i = groupEl.children.length - 1; i >= 0; i--) {
     const el = groupEl.children[i] as HTMLElement;
-    if (
-      el.classList.contains("tool-btn") &&
-      !el.classList.contains("group-btn")
-    ) {
+    if (el.classList.contains("tool-btn") && !el.classList.contains("group-btn")) {
       return el;
     }
   }
@@ -511,15 +496,8 @@ const GROUP_META: Record<ToolGroup, { label: string; defaultIcon: IconName }> = 
 };
 
 /** 分组显示名：内置查表，自定义组查定义，兜底用分组 id */
-export function groupLabel(
-  g: string,
-  customGroups: CustomGroupDef[] = loadCustomGroups(),
-): string {
-  return (
-    GROUP_META[g as ToolGroup]?.label ??
-    customGroups.find((d) => d.id === g)?.name ??
-    g
-  );
+export function groupLabel(g: string, customGroups: CustomGroupDef[] = loadCustomGroups()): string {
+  return GROUP_META[g as ToolGroup]?.label ?? customGroups.find((d) => d.id === g)?.name ?? g;
 }
 
 /** 一个分组拆分按钮的 UI 状态：主按钮（直接使用）+ 箭头按钮（展开菜单） */
@@ -594,8 +572,7 @@ export class Toolbar {
     this.styleBtn.className = "tool-btn style-toggle";
     this.styleBtn.title =
       "样式：描边/填充颜色与粗细（选中元素时作用于选中，未选中时设为新绘制图形的默认样式）";
-    this.styleBtn.innerHTML =
-      `${iconHTML("sliders", 15)}<span class="style-dot"></span>`;
+    this.styleBtn.innerHTML = `${iconHTML("sliders", 15)}<span class="style-dot"></span>`;
     this.styleBtn.addEventListener("click", () => {
       this.handlers.onStyle?.(this.styleBtn.getBoundingClientRect());
     });
@@ -761,9 +738,7 @@ export class Toolbar {
         ui.currentId = undefined;
       }
       // 主按钮提示与图标：当前直接使用的工具 + 箭头切换说明
-      const cur = ui.currentId
-        ? ui.tools.find((t) => t.id === ui.currentId)
-        : ui.tools[0];
+      const cur = ui.currentId ? ui.tools.find((t) => t.id === ui.currentId) : ui.tools[0];
       ui.main.title = cur
         ? `${groupLabel(ui.group, this.customGroups)}：${cur.name}（点击直接使用，右侧箭头展开选择）`
         : `${groupLabel(ui.group, this.customGroups)}工具`;

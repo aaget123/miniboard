@@ -180,9 +180,7 @@ export class ShortcutManager {
 
   /** 设置键位（空数组 = 恢复默认）；返回是否发生变化 */
   setKeys(id: string, keys: string[]): boolean {
-    const cleaned = keys
-      .map((k) => k.trim().toLowerCase())
-      .filter(Boolean);
+    const cleaned = keys.map((k) => k.trim().toLowerCase()).filter(Boolean);
     if (id.startsWith("tool:")) {
       // 工具默认键由注册表维护（配置层不存默认值），仅写入非空自定义键
       if (cleaned.length) {

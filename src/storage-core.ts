@@ -29,12 +29,7 @@ export function parseProjectIndex(text: string | null): ProjectIndex | null {
   }
   const projects: ProjectMeta[] = [];
   for (const p of raw.projects) {
-    if (
-      !p ||
-      typeof p.id !== "string" ||
-      !p.id ||
-      typeof p.name !== "string"
-    ) {
+    if (!p || typeof p.id !== "string" || !p.id || typeof p.name !== "string") {
       continue;
     }
     projects.push({

@@ -39,10 +39,7 @@ async function fetchWithTimeout(
   ms: number,
 ): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(
-    () => ctrl.abort(new DOMException("请求超时", "TimeoutError")),
-    ms,
-  );
+  const timer = setTimeout(() => ctrl.abort(new DOMException("请求超时", "TimeoutError")), ms);
   const onAbort = () => ctrl.abort(signal?.reason);
   if (signal?.aborted) {
     ctrl.abort(signal.reason);
@@ -301,9 +298,7 @@ async function probeToolCalling(cfg: AiConfig): Promise<boolean> {
 }
 
 function withToolHint(message: string, tools: boolean): string {
-  return tools
-    ? message
-    : `${message}；⚠ 该端点未通过工具调用探测，编辑模式可能不可用`;
+  return tools ? message : `${message}；⚠ 该端点未通过工具调用探测，编辑模式可能不可用`;
 }
 
 /**
@@ -319,15 +314,12 @@ export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResul
       models,
       tools,
       message: withToolHint(
-        models.length
-          ? `连接成功，可用模型 ${models.length} 个`
-          : "连接成功（服务未返回模型列表）",
+        models.length ? `连接成功，可用模型 ${models.length} 个` : "连接成功（服务未返回模型列表）",
         tools,
       ),
     };
   } catch (modelsErr) {
-    const modelsMsg =
-      modelsErr instanceof Error ? modelsErr.message : String(modelsErr);
+    const modelsMsg = modelsErr instanceof Error ? modelsErr.message : String(modelsErr);
     try {
       const resp = await fetchWithTimeout(
         chatURL(cfg.baseURL),
@@ -352,10 +344,7 @@ export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResul
         ok: true,
         models: [],
         tools,
-        message: withToolHint(
-          "连接成功（该服务未提供 /models 接口，已通过最小请求验证）",
-          tools,
-        ),
+        message: withToolHint("连接成功（该服务未提供 /models 接口，已通过最小请求验证）", tools),
       };
     } catch (chatErr) {
       const chatMsg = chatErr instanceof Error ? chatErr.message : String(chatErr);

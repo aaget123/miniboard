@@ -28,7 +28,10 @@ export class ToolManageDialog {
   private generatorCodeEl!: HTMLElement;
   private statusEl!: HTMLElement;
 
-  constructor(private registry: ToolRegistry, host: HTMLElement) {
+  constructor(
+    private registry: ToolRegistry,
+    host: HTMLElement,
+  ) {
     this.build(host);
   }
 
@@ -157,9 +160,7 @@ export class ToolManageDialog {
 
   private renderList() {
     this.listEl.innerHTML = "";
-    const tools = this.registry
-      .list()
-      .filter((t): t is CustomToolDef => t.source === "custom");
+    const tools = this.registry.list().filter((t): t is CustomToolDef => t.source === "custom");
     this.emptyEl.hidden = tools.length > 0;
     this.listEl.hidden = tools.length === 0;
     for (const t of tools) {
@@ -263,8 +264,6 @@ export class ToolManageDialog {
 
   private setStatus(text: string, cls: "" | "ok" | "error") {
     this.statusEl.textContent = text;
-    this.statusEl.className = cls
-      ? `ai-modal-status ${cls}`
-      : "ai-modal-status";
+    this.statusEl.className = cls ? `ai-modal-status ${cls}` : "ai-modal-status";
   }
 }

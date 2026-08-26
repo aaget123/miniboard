@@ -46,30 +46,20 @@ describe("mirrorPath", () => {
   });
 
   it("水平镜像：x → 2*center - x，y 不变", () => {
-    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "h", 5)).toBe(
-      "M 10 0 L 0 0 L 0 10 Z",
-    );
+    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "h", 5)).toBe("M 10 0 L 0 0 L 0 10 Z");
   });
 
   it("垂直镜像：y → 2*center - y，x 不变", () => {
-    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "v", 5)).toBe(
-      "M 0 10 L 10 10 L 10 0 Z",
-    );
+    expect(mirrorPath("M 0 0 L 10 0 L 10 10 Z", "v", 5)).toBe("M 0 10 L 10 10 L 10 0 Z");
   });
 
   it("H 只镜像 x、V 只镜像 y", () => {
-    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "h", 5)).toBe(
-      "M 10 0 H 0 V 10 H 10",
-    );
-    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "v", 5)).toBe(
-      "M 0 10 H 10 V 0 H 0",
-    );
+    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "h", 5)).toBe("M 10 0 H 0 V 10 H 10");
+    expect(mirrorPath("M 0 0 H 10 V 10 H 0", "v", 5)).toBe("M 0 10 H 10 V 0 H 0");
   });
 
   it("A 命令：rx/ry/large-arc 不变，rotation 变号、sweep 翻转、末尾 x/y 镜像", () => {
-    expect(mirrorPath("A 5 5 30 0 1 10 10", "h", 5)).toBe(
-      "A 5 5 -30 0 0 0 10",
-    );
+    expect(mirrorPath("A 5 5 30 0 1 10 10", "h", 5)).toBe("A 5 5 -30 0 0 0 10");
   });
 
   it("相对命令（小写）不镜像", () => {
@@ -83,9 +73,7 @@ describe("mirrorPath", () => {
   });
 
   it("浮点坐标保留 2 位小数", () => {
-    expect(mirrorPath("M 0.5 0.5 L 10.333 20.666", "h", 5)).toBe(
-      "M 9.5 0.5 L -0.33 20.67",
-    );
+    expect(mirrorPath("M 0.5 0.5 L 10.333 20.666", "h", 5)).toBe("M 9.5 0.5 L -0.33 20.67");
   });
 });
 
@@ -102,9 +90,7 @@ describe("scalePath", () => {
   });
 
   it("H 只缩放 x、V 只缩放 y", () => {
-    expect(scalePath("M 0 0 H 10 V 10 H 0", 2, 3, 0, 0)).toBe(
-      "M 0 0 H 20 V 30 H 0",
-    );
+    expect(scalePath("M 0 0 H 10 V 10 H 0", 2, 3, 0, 0)).toBe("M 0 0 H 20 V 30 H 0");
   });
 
   it("C 六参数全部坐标对缩放", () => {
@@ -112,15 +98,11 @@ describe("scalePath", () => {
   });
 
   it("A 命令：rx/ry 随轴缩放、rotation/large-arc 不变、末尾 x/y 缩放", () => {
-    expect(scalePath("A 5 5 30 0 1 10 10", 2, 3, 0, 0)).toBe(
-      "A 10 15 30 0 1 20 30",
-    );
+    expect(scalePath("A 5 5 30 0 1 10 10", 2, 3, 0, 0)).toBe("A 10 15 30 0 1 20 30");
   });
 
   it("负缩放翻转 A 命令 sweep 标志", () => {
-    expect(scalePath("A 5 5 0 0 1 10 10", -1, 1, 0, 0)).toBe(
-      "A -5 5 0 0 0 -10 10",
-    );
+    expect(scalePath("A 5 5 0 0 1 10 10", -1, 1, 0, 0)).toBe("A -5 5 0 0 0 -10 10");
   });
 
   it("相对命令（小写）不缩放", () => {
@@ -129,8 +111,6 @@ describe("scalePath", () => {
   });
 
   it("浮点坐标保留 2 位小数", () => {
-    expect(scalePath("M 0.5 0.5 L 10.333 20.666", 2.5, 2, 0, 0)).toBe(
-      "M 1.25 1 L 25.83 41.33",
-    );
+    expect(scalePath("M 0.5 0.5 L 10.333 20.666", 2.5, 2, 0, 0)).toBe("M 1.25 1 L 25.83 41.33");
   });
 });

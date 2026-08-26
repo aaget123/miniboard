@@ -108,10 +108,7 @@ describe("frameScrollMax（滚动上限）", () => {
     const content = "a\n".repeat(100); // 远超折叠上限
     const max = frameScrollMax(content, "text", FRAME_COLLAPSED_HEIGHT);
     expect(max).toBeGreaterThan(0);
-    expect(max).toBeCloseTo(
-      frameContentSize(content, "text").height - FRAME_COLLAPSED_HEIGHT,
-      5,
-    );
+    expect(max).toBeCloseTo(frameContentSize(content, "text").height - FRAME_COLLAPSED_HEIGHT, 5);
   });
 
   it("内容不超框时返回 0（不可滚动）", () => {
@@ -129,9 +126,7 @@ describe("clampShift（夹紧平移量）", () => {
   const fb = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
 
   it("完全在框内不移动", () => {
-    expect(
-      clampShift({ minX: 10, minY: 10, maxX: 20, maxY: 20 }, fb),
-    ).toEqual({ dx: 0, dy: 0 });
+    expect(clampShift({ minX: 10, minY: 10, maxX: 20, maxY: 20 }, fb)).toEqual({ dx: 0, dy: 0 });
   });
 
   it("左/上越界补回框内", () => {
@@ -150,9 +145,10 @@ describe("clampShift（夹紧平移量）", () => {
   });
 
   it("右/下越界补回框内", () => {
-    expect(
-      clampShift({ minX: 90, minY: 90, maxX: 105, maxY: 105 }, fb),
-    ).toEqual({ dx: -5, dy: -5 });
+    expect(clampShift({ minX: 90, minY: 90, maxX: 105, maxY: 105 }, fb)).toEqual({
+      dx: -5,
+      dy: -5,
+    });
   });
 
   it("元素大于框架时仅最小越界修正（保证起点不丢）", () => {
@@ -167,9 +163,7 @@ describe("clampShift（夹紧平移量）", () => {
       dy: 0,
     });
     // 超大元素整体偏右下：只修正上越界
-    expect(
-      clampShift({ minX: 50, minY: -30, maxX: 300, maxY: 50 }, fb),
-    ).toEqual({ dx: 0, dy: 30 });
+    expect(clampShift({ minX: 50, minY: -30, maxX: 300, maxY: 50 }, fb)).toEqual({ dx: 0, dy: 30 });
   });
 });
 

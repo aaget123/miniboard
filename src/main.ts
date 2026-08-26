@@ -242,17 +242,11 @@ async function main() {
       toast("✨ 没有需要整理的画笔笔迹（先选中手绘笔迹）");
       return;
     }
-    toast(
-      `✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`,
-    );
+    toast(`✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`);
   };
   const doSketchify = () => {
     const ok = board.sketchifySelection();
-    toast(
-      ok
-        ? "✎ 已应用手绘风格（选中图形）"
-        : "✎ 请先选中图形（矩形/椭圆/直线/箭头等）",
-    );
+    toast(ok ? "✎ 已应用手绘风格（选中图形）" : "✎ 请先选中图形（矩形/椭圆/直线/箭头等）");
   };
 
   const storage = new ProjectStore(board, dataDir);
@@ -386,9 +380,7 @@ async function main() {
     },
     // ---- 箭头端点：起点/终点样式（仅作用于选中 line/arrow） ----
     onArrowHeadChange: (end, head) => {
-      board.applyStyleToSelection(
-        end === "start" ? { startArrow: head } : { endArrow: head },
-      );
+      board.applyStyleToSelection(end === "start" ? { startArrow: head } : { endArrow: head });
     },
     // ---- P3 样式扩展：线型/透明度/圆角（仅作用于选中，不进默认样式） ----
     onStrokeDashChange: (dash) => {
@@ -475,13 +467,35 @@ async function main() {
   // ---- 内容文件导入（MD/代码/文本 → 内容框架）：对话框 / 拖拽共用 ----
   // 内容类型推断：按扩展名区分 markdown / code / text
   const CONTENT_CODE_EXTS = new Set([
-    "js", "ts", "tsx", "jsx", "py", "java", "c", "cpp", "h", "go",
-    "rs", "rb", "php", "sh", "bat", "ps1", "sql", "yaml", "yml",
-    "toml", "ini", "json", "css", "xml", "html", "vue", "svelte",
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "py",
+    "java",
+    "c",
+    "cpp",
+    "h",
+    "go",
+    "rs",
+    "rb",
+    "php",
+    "sh",
+    "bat",
+    "ps1",
+    "sql",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "json",
+    "css",
+    "xml",
+    "html",
+    "vue",
+    "svelte",
   ]);
-  const contentTypeOf = (
-    name: string,
-  ): "markdown" | "code" | "text" => {
+  const contentTypeOf = (name: string): "markdown" | "code" | "text" => {
     const ext = (name.split(".").pop() ?? "").toLowerCase();
     if (ext === "md" || ext === "markdown") {
       return "markdown";
@@ -506,9 +520,7 @@ async function main() {
     toast(`📄 已导入 ${name}`);
   };
   // 拖入文件分流：图片直插画布、PDF 首页转图片、文本/代码进内容框架、其他提示不支持
-  const IMAGE_EXTS = new Set([
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico",
-  ]);
+  const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif", "ico"]);
   const handleDroppedFile = async (file: File) => {
     const ext = (file.name.split(".").pop() ?? "").toLowerCase();
     if (IMAGE_EXTS.has(ext)) {
@@ -525,15 +537,11 @@ async function main() {
         }
         // 渲染出的首页 PNG 转成 File，复用 insertImage 的缩放/落位逻辑
         const blob = await (await fetch(page.dataURL)).blob();
-        const png = new File(
-          [blob],
-          `${file.name.replace(/\.pdf$/i, "")}.png`,
-          { type: "image/png" },
-        );
+        const png = new File([blob], `${file.name.replace(/\.pdf$/i, "")}.png`, {
+          type: "image/png",
+        });
         const ok = await board.insertImage(png);
-        toast(
-          ok ? `📕 已导入 PDF 首页：${file.name}` : `PDF 导入失败：${file.name}`,
-        );
+        toast(ok ? `📕 已导入 PDF 首页：${file.name}` : `PDF 导入失败：${file.name}`);
       } catch {
         toast(`PDF 导入失败：${file.name}`);
       }
@@ -664,12 +672,7 @@ async function main() {
       return Promise.resolve(aiPanel);
     }
     aiPanelLoading ??= import("./ai/panel").then((m) => {
-      const panel = new m.AiPanel(
-        board,
-        registry,
-        toolbar,
-        () => settingsDialog.open("model"),
-      );
+      const panel = new m.AiPanel(board, registry, toolbar, () => settingsDialog.open("model"));
       panel.setProject(storage.current?.id ?? "");
       aiPanel = panel;
       const aiEl = document.getElementById("ai-panel") as HTMLElement;
@@ -715,28 +718,115 @@ async function main() {
         refreshSelectionBar(lastSelectionInfo);
       },
     })),
-    { id: "open", section: "操作", title: "打开文件", icon: "folder", hint: formatCombo(shortcuts.getKeys("open")[0]), run: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)) },
-    { id: "save", section: "操作", title: "保存文件", icon: "save", hint: formatCombo(shortcuts.getKeys("save")[0]), run: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)) },
+    {
+      id: "open",
+      section: "操作",
+      title: "打开文件",
+      icon: "folder",
+      hint: formatCombo(shortcuts.getKeys("open")[0]),
+      run: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)),
+    },
+    {
+      id: "save",
+      section: "操作",
+      title: "保存文件",
+      icon: "save",
+      hint: formatCombo(shortcuts.getKeys("save")[0]),
+      run: () => storage.saveToFile().catch((err) => toast(`保存失败：${err}`)),
+    },
     { id: "image", section: "操作", title: "插入图片", icon: "image", run: insertImage },
-    { id: "import", section: "操作", title: "导入文件（内容框架）", icon: "file", keywords: "MD Markdown 代码 文本 导入", run: importFile },
-    { id: "export", section: "操作", title: "导出画布", icon: "download", keywords: "PNG SVG 图片 矢量", run: () => exportDialog.open() },
-    { id: "copyImage", section: "操作", title: "复制画布图片到剪贴板", icon: "clipboard", keywords: "clipboard 剪贴板 粘贴 复制图片", run: () => {
-      if (board.elementCount === 0) {
-        toast("画布是空的");
-        return;
-      }
-      storage.exportPNGClipboard().then((ok) => {
-        toast(ok ? "📋 已复制画布图片，可直接粘贴" : "复制失败：浏览器不支持或权限被拒");
-      }).catch(() => toast("复制失败"));
-    } },
-    { id: "projects", section: "操作", title: "项目管理", icon: "folder", keywords: "项目 切换 重命名", run: () => projectDialog.open() },
-    { id: "settings", section: "操作", title: "设置", icon: "settings", keywords: "AI 模型 主题 网格 提示词", run: () => settingsDialog.open() },
-    { id: "ai", section: "操作", title: "AI 助手", icon: "bot", hint: formatCombo(shortcuts.getKeys("aiPanel")[0]), run: () => toggleAiPanel() },
+    {
+      id: "import",
+      section: "操作",
+      title: "导入文件（内容框架）",
+      icon: "file",
+      keywords: "MD Markdown 代码 文本 导入",
+      run: importFile,
+    },
+    {
+      id: "export",
+      section: "操作",
+      title: "导出画布",
+      icon: "download",
+      keywords: "PNG SVG 图片 矢量",
+      run: () => exportDialog.open(),
+    },
+    {
+      id: "copyImage",
+      section: "操作",
+      title: "复制画布图片到剪贴板",
+      icon: "clipboard",
+      keywords: "clipboard 剪贴板 粘贴 复制图片",
+      run: () => {
+        if (board.elementCount === 0) {
+          toast("画布是空的");
+          return;
+        }
+        storage
+          .exportPNGClipboard()
+          .then((ok) => {
+            toast(ok ? "📋 已复制画布图片，可直接粘贴" : "复制失败：浏览器不支持或权限被拒");
+          })
+          .catch(() => toast("复制失败"));
+      },
+    },
+    {
+      id: "projects",
+      section: "操作",
+      title: "项目管理",
+      icon: "folder",
+      keywords: "项目 切换 重命名",
+      run: () => projectDialog.open(),
+    },
+    {
+      id: "settings",
+      section: "操作",
+      title: "设置",
+      icon: "settings",
+      keywords: "AI 模型 主题 网格 提示词",
+      run: () => settingsDialog.open(),
+    },
+    {
+      id: "ai",
+      section: "操作",
+      title: "AI 助手",
+      icon: "bot",
+      hint: formatCombo(shortcuts.getKeys("aiPanel")[0]),
+      run: () => toggleAiPanel(),
+    },
     { id: "clear", section: "操作", title: "清空画布", icon: "trash", run: clearCanvas },
-    { id: "theme-dark", section: "操作", title: "主题：深色", icon: "moon", keywords: "dark 深色", run: () => setThemePref("dark") },
-    { id: "theme-light", section: "操作", title: "主题：浅色", icon: "sun", keywords: "light 浅色", run: () => setThemePref("light") },
-    { id: "theme-system", section: "操作", title: "主题：跟随系统", icon: "monitor", keywords: "system 自动", run: () => setThemePref("system") },
-    { id: "shortcuts", section: "操作", title: "快捷键帮助", icon: "keyboard", keywords: "help 帮助", run: () => showShortcutHelp(getShortcutHelpRows(registry, shortcuts)) },
+    {
+      id: "theme-dark",
+      section: "操作",
+      title: "主题：深色",
+      icon: "moon",
+      keywords: "dark 深色",
+      run: () => setThemePref("dark"),
+    },
+    {
+      id: "theme-light",
+      section: "操作",
+      title: "主题：浅色",
+      icon: "sun",
+      keywords: "light 浅色",
+      run: () => setThemePref("light"),
+    },
+    {
+      id: "theme-system",
+      section: "操作",
+      title: "主题：跟随系统",
+      icon: "monitor",
+      keywords: "system 自动",
+      run: () => setThemePref("system"),
+    },
+    {
+      id: "shortcuts",
+      section: "操作",
+      title: "快捷键帮助",
+      icon: "keyboard",
+      keywords: "help 帮助",
+      run: () => showShortcutHelp(getShortcutHelpRows(registry, shortcuts)),
+    },
   ]);
 
   function updateStatus() {
@@ -811,9 +901,7 @@ async function main() {
       }
       board.toggleFrameFocus();
       toast(
-        board.frameActionState().focusOn
-          ? "已聚焦框架：视口放大到框架"
-          : "已退出聚焦，恢复原视图",
+        board.frameActionState().focusOn ? "已聚焦框架：视口放大到框架" : "已退出聚焦，恢复原视图",
       );
     },
   };
@@ -955,7 +1043,7 @@ async function main() {
 
   // AI 面板开合同步已移入懒加载工厂（创建时挂 MutationObserver）
 
-    // 项目恢复（多项目：初始化迁移旧数据并载入激活项目场景）
+  // 项目恢复（多项目：初始化迁移旧数据并载入激活项目场景）
   const restored = await storage.init();
   statusBar.setProject(storage.current?.name ?? "");
   // AI 面板懒加载：对话分桶由工厂创建时按当前项目恢复，启动时无需加载
@@ -966,11 +1054,7 @@ async function main() {
   // 顶部填充开关与样式按钮圆点对齐默认样式
   toolbar.setFill(style.fillEnabled);
   toolbar.setStyleColor(style.stroke);
-  toast(
-    restored
-      ? `已恢复项目「${storage.current?.name ?? ""}」的画布`
-      : "欢迎使用 Miniboard",
-  );
+  toast(restored ? `已恢复项目「${storage.current?.name ?? ""}」的画布` : "欢迎使用 Miniboard");
 }
 
 void main();

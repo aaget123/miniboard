@@ -9,13 +9,7 @@ import {
 import { elementBounds, unionBounds } from "./bounds";
 import type { ElementData } from "../types";
 
-function rect(
-  id: string,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-): ElementData {
+function rect(id: string, x: number, y: number, w: number, h: number): ElementData {
   return { id, type: "rect", x, y, width: w, height: h };
 }
 
@@ -37,8 +31,7 @@ describe("alignElements 对齐", () => {
   it("centerX：中心对齐到并集中线 x=300", () => {
     const out = alignElements(els, "centerX");
     const bs = out.map(elementBounds);
-    const center = (b: { minX: number; maxX: number }) =>
-      (b.minX + b.maxX) / 2;
+    const center = (b: { minX: number; maxX: number }) => (b.minX + b.maxX) / 2;
     expect(center(bs[0])).toBeCloseTo(300, 6);
     expect(center(bs[1])).toBeCloseTo(300, 6);
     expect(center(bs[2])).toBeCloseTo(300, 6);
@@ -57,8 +50,7 @@ describe("alignElements 对齐", () => {
     expect(top.map((e) => e.y)).toEqual([0, 0, 0]);
     const cy = alignElements(els, "centerY");
     const bs = cy.map(elementBounds);
-    const center = (b: { minY: number; maxY: number }) =>
-      (b.minY + b.maxY) / 2;
+    const center = (b: { minY: number; maxY: number }) => (b.minY + b.maxY) / 2;
     expect(center(bs[0])).toBeCloseTo(125, 6);
     expect(center(bs[1])).toBeCloseTo(125, 6);
     expect(center(bs[2])).toBeCloseTo(125, 6);
@@ -109,11 +101,7 @@ describe("alignElements 对齐", () => {
 describe("distributeElements 分布", () => {
   it("horizontal：按中心排序，首尾保持、中间均分", () => {
     // 中心 x 25 / 325 / 525 → 首尾 25~525，步长 250，b 从 325 移到 275
-    const els = [
-      rect("a", 0, 0, 50, 50),
-      rect("b", 300, 0, 50, 50),
-      rect("c", 500, 0, 50, 50),
-    ];
+    const els = [rect("a", 0, 0, 50, 50), rect("b", 300, 0, 50, 50), rect("c", 500, 0, 50, 50)];
     const out = distributeElements(els, "horizontal");
     const centers = out.map((e) => e.x + (e.width ?? 0) / 2);
     expect(centers[0]).toBeCloseTo(25, 5);
@@ -123,11 +111,7 @@ describe("distributeElements 分布", () => {
 
   it("vertical：y 轴均分", () => {
     // 中心 y 25 / 425 / 625 → 首尾 25~625，步长 300，b 从 425 移到 325
-    const els = [
-      rect("a", 0, 0, 50, 50),
-      rect("b", 0, 400, 50, 50),
-      rect("c", 0, 600, 50, 50),
-    ];
+    const els = [rect("a", 0, 0, 50, 50), rect("b", 0, 400, 50, 50), rect("c", 0, 600, 50, 50)];
     const out = distributeElements(els, "vertical");
     const centers = out.map((e) => e.y + (e.height ?? 0) / 2);
     expect(centers).toEqual([25, 325, 625]);
@@ -238,11 +222,27 @@ describe("flipElements 翻转", () => {
   });
 
   it("text/image 与 rect 同规则（左上角补偿）", () => {
-    const t: ElementData = { id: "t", type: "text", x: 10, y: 10, width: 80, height: 20, text: "hi" };
+    const t: ElementData = {
+      id: "t",
+      type: "text",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 20,
+      text: "hi",
+    };
     const out = flipElements([t], "h", 100, 10)[0];
     expect(out.x).toBe(2 * 100 - 10 - 80);
     expect(out.y).toBe(10);
-    const img: ElementData = { id: "i", type: "image", x: 0, y: 0, width: 50, height: 50, url: "x" };
+    const img: ElementData = {
+      id: "i",
+      type: "image",
+      x: 0,
+      y: 0,
+      width: 50,
+      height: 50,
+      url: "x",
+    };
     const outI = flipElements([img], "v", 0, 50)[0];
     expect(outI.y).toBe(2 * 50 - 0 - 50);
     expect(outI.x).toBe(0);
@@ -274,8 +274,20 @@ describe("reorderElements 层序", () => {
   });
 
   it("已在目标层时顺序不变", () => {
-    expect(reorderElements(list, ["a", "b"], getId, "back").map((el) => el.id)).toEqual(["a", "b", "c", "d", "e"]);
-    expect(reorderElements(list, ["d", "e"], getId, "front").map((el) => el.id)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(reorderElements(list, ["a", "b"], getId, "back").map((el) => el.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
+    expect(reorderElements(list, ["d", "e"], getId, "front").map((el) => el.id)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+    ]);
   });
 });
 
@@ -301,11 +313,7 @@ describe("expandGroupMembers 组归一化", () => {
   });
 
   it("选中多个组的成员时全部展开，未选中组不展开", () => {
-    expect([...expandGroupMembers(els, ["a", "b"])].sort()).toEqual([
-      "a",
-      "b",
-      "c",
-    ]);
+    expect([...expandGroupMembers(els, ["a", "b"])].sort()).toEqual(["a", "b", "c"]);
   });
 
   it("无组成员时原样返回", () => {

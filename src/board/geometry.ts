@@ -16,12 +16,7 @@ export type Bounded = {
 
 /** 两个轴对齐矩形是否相交 */
 export function rectsIntersect(a: Box, b: Box): boolean {
-  return (
-    a.x < b.x + b.width &&
-    b.x < a.x + a.width &&
-    a.y < b.y + b.height &&
-    b.y < a.y + a.height
-  );
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
 /** 点到线段的最短距离 */
@@ -44,10 +39,7 @@ export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
     const yi = poly[i].y;
     const xj = poly[j].x;
     const yj = poly[j].y;
-    if (
-      yi > p.y !== yj > p.y &&
-      p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi
-    ) {
+    if (yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi) {
       inside = !inside;
     }
   }
@@ -58,20 +50,12 @@ export function pointInPolygon(p: Pt, poly: Pt[]): boolean {
  * 目标元素包围盒边框上离给定世界点最近的点（世界坐标）。
  * 点在内部时取最近边上的投影（保证绑定端点始终落在边框上）。
  */
-export function nearestBorderPoint(
-  target: Bounded,
-  world: Pt,
-): Pt | null {
+export function nearestBorderPoint(target: Bounded, world: Pt): Pt | null {
   const b = target.worldBoxBounds;
   if (!b) {
     return null;
   }
-  if (
-    world.x >= b.x &&
-    world.x <= b.x + b.width &&
-    world.y >= b.y &&
-    world.y <= b.y + b.height
-  ) {
+  if (world.x >= b.x && world.x <= b.x + b.width && world.y >= b.y && world.y <= b.y + b.height) {
     // 点在包围盒内部：取到四条边距离最小的边上的投影
     const dL = world.x - b.x;
     const dR = b.x + b.width - world.x;
@@ -112,8 +96,7 @@ export function pointOnSegment(p: Pt, a: Pt, b: Pt): boolean {
 
 /** 两条线段是否相交（含共线/端点接触） */
 export function segmentsIntersect(a1: Pt, a2: Pt, b1: Pt, b2: Pt): boolean {
-  const d =
-    (a2.x - a1.x) * (b2.y - b1.y) - (a2.y - a1.y) * (b2.x - b1.x);
+  const d = (a2.x - a1.x) * (b2.y - b1.y) - (a2.y - a1.y) * (b2.x - b1.x);
   if (Math.abs(d) < 1e-9) {
     // 平行或共线：任一端点落在另一线段上即相交
     return (
@@ -123,10 +106,8 @@ export function segmentsIntersect(a1: Pt, a2: Pt, b1: Pt, b2: Pt): boolean {
       pointOnSegment(b2, a1, a2)
     );
   }
-  const t =
-    ((b1.x - a1.x) * (b2.y - b1.y) - (b1.y - a1.y) * (b2.x - b1.x)) / d;
-  const u =
-    ((b1.x - a1.x) * (a2.y - a1.y) - (b1.y - a1.y) * (a2.x - a1.x)) / d;
+  const t = ((b1.x - a1.x) * (b2.y - b1.y) - (b1.y - a1.y) * (b2.x - b1.x)) / d;
+  const u = ((b1.x - a1.x) * (a2.y - a1.y) - (b1.y - a1.y) * (a2.x - a1.x)) / d;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
@@ -146,12 +127,7 @@ export function polygonHitsBox(poly: Pt[], box: Box): boolean {
   }
   // 套索顶点在矩形内（矩形完全包住套索）
   for (const p of poly) {
-    if (
-      p.x >= box.x &&
-      p.x <= box.x + box.width &&
-      p.y >= box.y &&
-      p.y <= box.y + box.height
-    ) {
+    if (p.x >= box.x && p.x <= box.x + box.width && p.y >= box.y && p.y <= box.y + box.height) {
       return true;
     }
   }
@@ -160,9 +136,7 @@ export function polygonHitsBox(poly: Pt[], box: Box): boolean {
     const p1 = poly[i];
     const p2 = poly[(i + 1) % poly.length];
     for (let j = 0; j < 4; j++) {
-      if (
-        segmentsIntersect(p1, p2, corners[j], corners[(j + 1) % 4])
-      ) {
+      if (segmentsIntersect(p1, p2, corners[j], corners[(j + 1) % 4])) {
         return true;
       }
     }

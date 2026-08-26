@@ -1,16 +1,7 @@
 import type { Board } from "../board/canvas";
-import {
-  allocProfileId,
-  isConfigReady,
-  loadProfiles,
-  saveProfiles,
-} from "../ai/config";
+import { allocProfileId, isConfigReady, loadProfiles, saveProfiles } from "../ai/config";
 import { testConnection } from "../ai/client";
-import {
-  loadSystemPrompt,
-  resetSystemPrompt,
-  saveSystemPrompt,
-} from "../ai/prompts";
+import { loadSystemPrompt, resetSystemPrompt, saveSystemPrompt } from "../ai/prompts";
 import type { AiConfig, AiMode, AiProfile, AiProfileStore } from "../ai/types";
 import type { ToolRegistry } from "../board/registry";
 import type { ToolDef, ToolGroup } from "../types";
@@ -43,11 +34,7 @@ import {
 } from "./toolbar";
 
 /** 预览条按钮（无交互，仅展示真实顶栏外观；tool-btn 类供溢出折叠算法识别） */
-function makePreviewBtn(
-  icon: string,
-  title: string,
-  cls = "tb-preview-item",
-): HTMLButtonElement {
+function makePreviewBtn(icon: string, title: string, cls = "tb-preview-item"): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = cls;
@@ -125,9 +112,7 @@ export function resolveTheme(pref: ThemePref): Theme {
   if (pref !== "system") {
     return pref;
   }
-  return window.matchMedia("(prefers-color-scheme: light)").matches
-    ? "light"
-    : "dark";
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 /** 兼容旧接口：读取偏好并解析为实际主题（默认跟随系统） */
@@ -159,13 +144,11 @@ export function saveThemePref(pref: ThemePref) {
 
 /** 系统主题变化监听：偏好为 system 时自动切换实际主题 */
 export function watchSystemTheme(board: Board) {
-  window
-    .matchMedia("(prefers-color-scheme: light)")
-    .addEventListener("change", () => {
-      if (loadThemePref() === "system") {
-        applyThemePref("system", board);
-      }
-    });
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if (loadThemePref() === "system") {
+      applyThemePref("system", board);
+    }
+  });
 }
 
 // ---------- 设置弹窗 ----------
@@ -228,10 +211,8 @@ export class SettingsDialog {
   /** “+”添加工具面板打开的组（null = 关闭） */
   private groupAddOpen: ToolGroup | null = null;
   /** 分组名称编辑状态：null=无；new=新建；rename=重命名该组（渲染内联输入行） */
-  private groupEdit:
-    | { mode: "new" }
-    | { mode: "rename"; id: string; initial: string }
-    | null = null;
+  private groupEdit: { mode: "new" } | { mode: "rename"; id: string; initial: string } | null =
+    null;
   /** 待确认删除的自定义分组 id（删除按钮两段式确认，避免误删） */
   private confirmDelete: string | null = null;
   private toolbarListEl!: HTMLElement;
@@ -263,10 +244,7 @@ export class SettingsDialog {
     private board: Board,
     private registry: ToolRegistry,
     /** 工具栏布局变更回调（main.ts 转 toolbar.setVisible；自定义组定义变化时一并同步顶栏） */
-    private onToolbarChange: (
-      visible: string[] | null,
-      customGroups?: CustomGroupDef[],
-    ) => void,
+    private onToolbarChange: (visible: string[] | null, customGroups?: CustomGroupDef[]) => void,
   ) {
     this.build();
   }
@@ -420,10 +398,7 @@ export class SettingsDialog {
     // 任一改动即时应用到画布并持久化（网格线随缩放/平移重建）
     const applyGridSettings = () => {
       const g: GridSettings = {
-        size: Math.min(
-          100,
-          Math.max(4, Math.round(Number(sizeInput.value) || DEFAULT_GRID.size)),
-        ),
+        size: Math.min(100, Math.max(4, Math.round(Number(sizeInput.value) || DEFAULT_GRID.size))),
         show: showBox.checked,
         snap: snapBox.checked,
       };
@@ -522,10 +497,7 @@ export class SettingsDialog {
     visionRow.className = "ai-modal-row";
     const visionBox = document.createElement("input");
     visionBox.type = "checkbox";
-    visionRow.append(
-      document.createTextNode("多模态（模型支持视觉时开启）"),
-      visionBox,
-    );
+    visionRow.append(document.createTextNode("多模态（模型支持视觉时开启）"), visionBox);
     formEl.appendChild(visionRow);
 
     // 测试连接：验证 Key 并拉取模型列表（/models 不可用时自动降级最小请求）
@@ -624,8 +596,7 @@ export class SettingsDialog {
     dataSection.appendChild(dataLabel);
     const dataHint = document.createElement("p");
     dataHint.className = "settings-hint";
-    dataHint.textContent =
-      "项目画布与 AI 自定义工具均存储于此目录；更改后旧数据自动迁移到新目录。";
+    dataHint.textContent = "项目画布与 AI 自定义工具均存储于此目录；更改后旧数据自动迁移到新目录。";
     dataSection.appendChild(dataHint);
     const dataRow = document.createElement("div");
     dataRow.className = "data-dir-row";
@@ -733,8 +704,7 @@ export class SettingsDialog {
     }
     for (const p of this.store.profiles) {
       const row = document.createElement("div");
-      row.className =
-        `profile-item${p.id === this.store.activeId ? " active" : ""}`;
+      row.className = `profile-item${p.id === this.store.activeId ? " active" : ""}`;
       row.title = "点击选用此配置并载入编辑";
       row.addEventListener("click", () => this.selectProfile(p.id));
       const radio = document.createElement("span");
@@ -777,9 +747,7 @@ export class SettingsDialog {
     if (!window.confirm(`删除配置「${p.name}」？`)) {
       return;
     }
-    this.store.profiles = this.store.profiles.filter(
-      (x) => x.id !== this.editingId,
-    );
+    this.store.profiles = this.store.profiles.filter((x) => x.id !== this.editingId);
     if (this.store.activeId === this.editingId) {
       this.store.activeId = this.store.profiles[0]?.id ?? "";
     }
@@ -839,8 +807,7 @@ export class SettingsDialog {
       const profile: AiProfile = { ...draft, id: allocProfileId(this.store.profiles) };
       this.store.profiles.push(profile);
     }
-    this.store.activeId =
-      existing?.id ?? this.store.profiles[this.store.profiles.length - 1].id;
+    this.store.activeId = existing?.id ?? this.store.profiles[this.store.profiles.length - 1].id;
     saveProfiles(this.store);
     this.renderList();
     this.setStatus("已保存", "ok");
@@ -884,10 +851,7 @@ export class SettingsDialog {
         this.modelListEl.hidden = false;
       }
     } catch (err) {
-      this.setStatus(
-        `连接失败：${err instanceof Error ? err.message : String(err)}`,
-        "error",
-      );
+      this.setStatus(`连接失败：${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       this.testBtn.disabled = false;
     }
@@ -895,19 +859,13 @@ export class SettingsDialog {
 
   private setStatus(text: string, cls: "" | "ok" | "error") {
     this.statusEl.textContent = text;
-    this.statusEl.className = cls
-      ? `ai-modal-status ${cls}`
-      : "ai-modal-status";
+    this.statusEl.className = cls ? `ai-modal-status ${cls}` : "ai-modal-status";
   }
 
   // ---------- 工具栏布局 ----------
 
   /** 开始拖拽候选：记录源数据与起点（指针移动超过阈值后激活，避免与点击/勾选冲突） */
-  private beginDrag(
-    e: PointerEvent,
-    src: string,
-    kind: "tool" | "pinnedGroup" | "groupHead",
-  ) {
+  private beginDrag(e: PointerEvent, src: string, kind: "tool" | "pinnedGroup" | "groupHead") {
     if (e.button !== 0 || this.dragState) {
       return;
     }
@@ -995,11 +953,7 @@ export class SettingsDialog {
   /** 命中拖放目标：工具行 / 分组按钮行 / 分组头 / 空平铺区（未命中则取消放置） */
   private dragTargetAt(x: number, y: number): HTMLElement | null {
     const el = document.elementFromPoint(x, y);
-    return (
-      el?.closest<HTMLElement>(
-        ".tb-row, .tb-group-head, .tb-section-empty",
-      ) ?? null
-    );
+    return el?.closest<HTMLElement>(".tb-row, .tb-group-head, .tb-section-empty") ?? null;
   }
 
   /** 落点在目标行下半部分 = 插到目标之后（上半 = 插到目标之前） */
@@ -1118,9 +1072,7 @@ export class SettingsDialog {
     this.toolbarListEl.innerHTML = "";
     const pinnedSet = new Set(this.toolbarVisible);
     // 平铺序列元素：工具 id 或分组标记（"g:select" = 顶栏该位置有一个完整分组按钮）
-    const rest = this.registry
-      .list()
-      .filter((t) => !pinnedSet.has(t.id));
+    const rest = this.registry.list().filter((t) => !pinnedSet.has(t.id));
 
     // ---- 平铺区：勾选工具与分组按钮行，拖拽调整顺序 ----
     const pinnedSection = document.createElement("div");
@@ -1228,8 +1180,7 @@ export class SettingsDialog {
       const addBtn = document.createElement("button");
       addBtn.type = "button";
       addBtn.className = "tb-group-op tb-group-add";
-      addBtn.title =
-        "从平铺区添加工具到该组（加入后从平铺区收起，删除分组后自动还回）";
+      addBtn.title = "从平铺区添加工具到该组（加入后从平铺区收起，删除分组后自动还回）";
       addBtn.innerHTML = iconHTML("plus", 11);
       addBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1257,9 +1208,7 @@ export class SettingsDialog {
         del.title = deleting
           ? "再次点击确认删除（组内工具回到原分组，＋添加的还回平铺区）"
           : "删除分组（组内工具回到原分组，＋添加的还回平铺区）";
-        del.innerHTML = deleting
-          ? `${iconHTML("trash", 11)}确认删除`
-          : iconHTML("trash", 11);
+        del.innerHTML = deleting ? `${iconHTML("trash", 11)}确认删除` : iconHTML("trash", 11);
         del.addEventListener("click", (e) => {
           e.stopPropagation();
           this.deleteCustomGroup(g);
@@ -1329,9 +1278,7 @@ export class SettingsDialog {
     // 拖拽手柄（所有行可拖；分组/隐藏行拖到平铺区 = 平铺）
     const grip = document.createElement("span");
     grip.className = "tb-grip";
-    grip.title = pinnedRow
-      ? "拖拽排序；拖到下方分组区取消平铺"
-      : "拖到上方平铺区即可平铺";
+    grip.title = pinnedRow ? "拖拽排序；拖到下方分组区取消平铺" : "拖到上方平铺区即可平铺";
     grip.innerHTML = iconHTML("grip", 12);
     row.appendChild(grip);
 
@@ -1369,9 +1316,7 @@ export class SettingsDialog {
     const box = document.createElement("input");
     box.type = "checkbox";
     box.checked = pinnedRow;
-    box.addEventListener("change", () =>
-      this.toggleToolbarItem(t.id, box.checked),
-    );
+    box.addEventListener("change", () => this.toggleToolbarItem(t.id, box.checked));
     checkRow.appendChild(box);
     row.appendChild(checkRow);
 
@@ -1508,8 +1453,7 @@ export class SettingsDialog {
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = 24;
-    input.placeholder =
-      editing.mode === "new" ? "分组名称（如：常用）" : "重命名分组";
+    input.placeholder = editing.mode === "new" ? "分组名称（如：常用）" : "重命名分组";
     if (editing.mode === "rename") {
       input.value = editing.initial;
       input.select();
@@ -1621,10 +1565,7 @@ export class SettingsDialog {
     const candidates = this.toolbarVisible
       .filter((x) => !isGroupMarker(x))
       .map((id) => this.registry.getTool(id))
-      .filter(
-        (t): t is ToolDef =>
-          !!t && effectiveGroup(t, this.groupOverrides) !== g,
-      );
+      .filter((t): t is ToolDef => !!t && effectiveGroup(t, this.groupOverrides) !== g);
     if (!candidates.length) {
       const empty = document.createElement("div");
       empty.className = "tb-group-add-empty";
@@ -1668,14 +1609,9 @@ export class SettingsDialog {
    * auto = 与分组收纳区同步的副本（分组区存在该组即自动显示）：复选框禁用不可移除，
    * 拖拽到其他行可固定位置（写入显式序列）；取消收纳组内工具或删除分组后自动收起。
    */
-  private makeGroupPinnedRow(
-    g: ToolGroup,
-    tools: ToolDef[],
-    auto = false,
-  ): HTMLElement {
+  private makeGroupPinnedRow(g: ToolGroup, tools: ToolDef[], auto = false): HTMLElement {
     const row = document.createElement("div");
-    row.className =
-      `tb-row tb-group-pinned${auto ? " tb-group-pinned-auto" : ""}`;
+    row.className = `tb-row tb-group-pinned${auto ? " tb-group-pinned-auto" : ""}`;
     row.dataset.group = groupMarker(g);
     row.dataset.pinned = "1";
     row.title = auto
@@ -1709,9 +1645,7 @@ export class SettingsDialog {
     box.checked = true;
     box.disabled = auto;
     box.addEventListener("change", () => {
-      this.toolbarVisible = this.toolbarVisible.filter(
-        (x) => x !== groupMarker(g),
-      );
+      this.toolbarVisible = this.toolbarVisible.filter((x) => x !== groupMarker(g));
       this.applyToolbarLayout();
     });
     checkRow.appendChild(box);
@@ -2005,11 +1939,7 @@ export class SettingsDialog {
     nameEl.textContent = name;
     const keysEl = document.createElement("kbd");
     keysEl.className = editing ? "sc-keys sc-recording" : "sc-keys";
-    keysEl.textContent = editing
-      ? "按下新快捷键…"
-      : keys.length
-        ? formatKeys(keys)
-        : "未设置";
+    keysEl.textContent = editing ? "按下新快捷键…" : keys.length ? formatKeys(keys) : "未设置";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "data-dir-btn sc-btn";
@@ -2071,8 +2001,7 @@ export class SettingsDialog {
       if (clash) {
         // 被挤占的是配置项（操作/内置工具）时恢复其默认键；AI 工具键不在配置层，仅失效提示
         const toolId = clash.id.startsWith("tool:") ? clash.id.slice(5) : null;
-        const isCustomTool =
-          toolId !== null && this.registry.getTool(toolId)?.source === "custom";
+        const isCustomTool = toolId !== null && this.registry.getTool(toolId)?.source === "custom";
         if (!isCustomTool) {
           sm.restoreDefault(clash.id);
         }
@@ -2121,8 +2050,6 @@ export class SettingsDialog {
 
   private setPromptStatus(text: string, cls: "" | "ok" | "error") {
     this.promptStatusEl.textContent = text;
-    this.promptStatusEl.className = cls
-      ? `ai-modal-status ${cls}`
-      : "ai-modal-status";
+    this.promptStatusEl.className = cls ? `ai-modal-status ${cls}` : "ai-modal-status";
   }
 }

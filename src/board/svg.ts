@@ -131,9 +131,7 @@ function elementToSvg(e: ElementData): string {
       if (e.content) {
         const tspans = lines
           .map((line, i) =>
-            i === 0
-              ? xmlEscape(line)
-              : `<tspan x="${pad}" dy="${dy}">${xmlEscape(line)}</tspan>`,
+            i === 0 ? xmlEscape(line) : `<tspan x="${pad}" dy="${dy}">${xmlEscape(line)}</tspan>`,
           )
           .join("");
         const font =
@@ -156,9 +154,7 @@ function elementToSvg(e: ElementData): string {
       const lines = (e.text ?? "").split("\n");
       const tspans = lines
         .map((line, i) =>
-          i === 0
-            ? xmlEscape(line)
-            : `<tspan x="0" dy="${size * 1.4}">${xmlEscape(line)}</tspan>`,
+          i === 0 ? xmlEscape(line) : `<tspan x="0" dy="${size * 1.4}">${xmlEscape(line)}</tspan>`,
         )
         .join("");
       return `<g transform="${wrapTransform(e)}"><text font-size="${size}" font-family="system-ui, -apple-system, sans-serif" dominant-baseline="text-before-edge"${fill}>${tspans}</text></g>`;
@@ -179,10 +175,7 @@ function elementToSvg(e: ElementData): string {
  * 序列化元素 → 完整 SVG 文档字符串（含背景与箭头定义）。
  * 空画布也返回有效 SVG（仅背景）。
  */
-export function elementsToSVG(
-  elements: ElementData[],
-  background: string,
-): string {
+export function elementsToSVG(elements: ElementData[], background: string): string {
   const bounds = contentBounds(elements);
   const pad = PADDING;
   const minX = bounds ? Math.floor(bounds.minX - pad) : 0;

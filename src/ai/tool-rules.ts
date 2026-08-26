@@ -46,12 +46,8 @@ export const GENERATOR_FORBIDDEN_DESC =
 
 /** 渲染“统一功能规则”章节（编辑模式系统提示词用） */
 export function renderToolRules(): string {
-  const kinds = TOOL_KIND_RULES.map(
-    (k) => `- ${k.label}：${k.desc}`,
-  ).join("\n");
-  const groups = TOOL_GROUP_RULES.map(
-    (g) => `- ${g.label}：${g.desc}`,
-  ).join("\n");
+  const kinds = TOOL_KIND_RULES.map((k) => `- ${k.label}：${k.desc}`).join("\n");
+  const groups = TOOL_GROUP_RULES.map((g) => `- ${g.label}：${g.desc}`).join("\n");
   return `## 统一功能规则
 
 工具条目结构：

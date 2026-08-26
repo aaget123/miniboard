@@ -35,11 +35,7 @@ function polygonVertices(path: string): [number, number][] {
 }
 
 /** rough.js 绘制参数（颜色/线宽/抖动 seed/粗糙度） */
-function roughOptions(
-  d: ElementData,
-  seed: number,
-  roughness: number,
-) {
+function roughOptions(d: ElementData, seed: number, roughness: number) {
   return {
     seed,
     roughness,
@@ -140,12 +136,9 @@ export function sketchifyData(d: ElementData): {
     original: d.type,
     // path 多边形需记录原始顶点 path：手绘化后原 path 被替换，改粗糙度时靠它重建几何
     originalPath: d.type === "path" ? d.path : undefined,
-    originalWidth:
-      d.type === "rect" || d.type === "ellipse" ? (d.width ?? 0) : undefined,
-    originalHeight:
-      d.type === "rect" || d.type === "ellipse" ? (d.height ?? 0) : undefined,
-    originalPoints:
-      d.type === "line" || d.type === "arrow" ? d.points : undefined,
+    originalWidth: d.type === "rect" || d.type === "ellipse" ? (d.width ?? 0) : undefined,
+    originalHeight: d.type === "rect" || d.type === "ellipse" ? (d.height ?? 0) : undefined,
+    originalPoints: d.type === "line" || d.type === "arrow" ? d.points : undefined,
   };
   const redrawn = redrawRough(d, meta, 1);
   return redrawn

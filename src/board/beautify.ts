@@ -52,12 +52,7 @@ function isPenPath(path: string): boolean {
 }
 
 /** 重建拉直后的 freehand 元素：新采样点（元素局部基准）+ 重新生成轮廓 path */
-function rebuildFreehand(
-  e: ElementData,
-  kept: number[][],
-  ox: number,
-  oy: number,
-): ElementData {
+function rebuildFreehand(e: ElementData, kept: number[][], ox: number, oy: number): ElementData {
   const rel = kept.map((p) => [round1(p[0] - ox), round1(p[1] - oy)]);
   return {
     type: "freehand",
@@ -231,10 +226,7 @@ function rectResidual(rpts: number[][], w: number, h: number): number {
   let sum = 0;
   for (const p of rpts) {
     // 到左右边 / 上下边距离取近者：| |x| - w/2 | 是到左右边的距离
-    sum += Math.min(
-      Math.abs(Math.abs(p[0]) - w / 2),
-      Math.abs(Math.abs(p[1]) - h / 2),
-    );
+    sum += Math.min(Math.abs(Math.abs(p[0]) - w / 2), Math.abs(Math.abs(p[1]) - h / 2));
   }
   return sum / rpts.length;
 }
@@ -375,14 +367,7 @@ function perfectClosedShape(
     strokeWidth: e.strokeWidth,
     fill: e.fill,
   };
-  const [ccx, ccy] = unrotate(
-    (minX + maxX) / 2,
-    (minY + maxY) / 2,
-    cosA,
-    sinA,
-    cx,
-    cy,
-  );
+  const [ccx, ccy] = unrotate((minX + maxX) / 2, (minY + maxY) / 2, cosA, sinA, cx, cy);
   const rotDeg = Math.abs(theta * (180 / Math.PI)) < 0.5 ? 0 : round1(theta * (180 / Math.PI));
 
   // 判定顺序：矩形 → 多边形 → 椭圆
@@ -446,12 +431,7 @@ function perfectClosedShape(
   }
   const angMean = angSum / angles.length;
   const angDev = Math.max(...angles.map((a) => Math.abs(a - angMean)));
-  if (
-    allSharp &&
-    angDev < 22 &&
-    vertices.length >= 3 &&
-    vertices.length <= 7
-  ) {
+  if (allSharp && angDev < 22 && vertices.length >= 3 && vertices.length <= 7) {
     let vx = 0;
     let vy = 0;
     for (const v of vertices) {
@@ -484,8 +464,7 @@ function perfectClosedShape(
   const ry = Math.sqrt((2 * sy2) / n);
   if (rx >= 2 && ry >= 2 && ellipseResidual(rpts, rx, ry) < ELLIPSE_RESIDUAL) {
     const ratio = rx / ry;
-    const isCircle =
-      ratio >= CIRCLE_RATIO_MIN && ratio <= CIRCLE_RATIO_MAX;
+    const isCircle = ratio >= CIRCLE_RATIO_MIN && ratio <= CIRCLE_RATIO_MAX;
     const r = (rx + ry) / 2;
     return {
       el: {
@@ -558,8 +537,7 @@ function straightenPenPaths(
       }
       const closeDist = Math.max(CLOSE_DIST, diag * 0.09);
       const closed =
-        cpts.length > 4 &&
-        Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
+        cpts.length > 4 && Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
       if (closed && cpts.length >= MIN_PTS) {
         const fitted = perfectClosedShape(e, cpts);
         if (fitted) {
@@ -568,9 +546,7 @@ function straightenPenPaths(
           continue;
         }
       }
-      const kept = closed
-        ? simplifyRing(cpts, TOLERANCE)
-        : simplify(cpts, TOLERANCE);
+      const kept = closed ? simplifyRing(cpts, TOLERANCE) : simplify(cpts, TOLERANCE);
       if (kept.length < 2 || kept.length === raw.length) {
         continue; // 已经足够直，保留原样
       }
@@ -630,8 +606,7 @@ function straightenPenPaths(
     }
     const closeDist = Math.max(CLOSE_DIST, diag * 0.09);
     const closed =
-      cpts.length > 4 &&
-      Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
+      cpts.length > 4 && Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
 
     if (closed && cpts.length >= MIN_PTS) {
       const fitted = perfectClosedShape(e, cpts);
@@ -723,9 +698,7 @@ export function describeFreehandShape(e: ElementData): string | null {
     diag = Math.hypot(maxX - minX, maxY - minY);
   }
   const closeDist = Math.max(CLOSE_DIST, diag * 0.09);
-  const closed =
-    cpts.length > 4 &&
-    Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
+  const closed = cpts.length > 4 && Math.hypot(last[0] - first[0], last[1] - first[1]) < closeDist;
   if (closed && cpts.length >= MIN_PTS) {
     const fitted = perfectClosedShape(e, cpts);
     if (fitted) {

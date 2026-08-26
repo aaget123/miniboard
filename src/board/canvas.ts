@@ -74,19 +74,9 @@ import {
   toLeaferArrow,
   typeOf,
 } from "./element-utils";
-import {
-  distToSegment,
-  nearestBorderPoint,
-  polygonHitsBox,
-  rectsIntersect,
-} from "./geometry";
+import { distToSegment, nearestBorderPoint, polygonHitsBox, rectsIntersect } from "./geometry";
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
-import {
-  penSizeOf,
-  splitArrowHeads,
-  splitErasedPoints,
-  strokeOutlinePath,
-} from "./stroke";
+import { penSizeOf, splitArrowHeads, splitErasedPoints, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
 import { elementsToSVG } from "./svg";
 import type { GridSettings } from "../ui/settings";
@@ -373,10 +363,7 @@ export class Board {
           let nx = x;
           let ny = y;
           // 网格吸附：单选拖动时把期望位置对齐网格
-          if (
-            this.grid.snap &&
-            (this.editor as unknown as { list?: UI[] }).list?.length === 1
-          ) {
+          if (this.grid.snap && (this.editor as unknown as { list?: UI[] }).list?.length === 1) {
             const tx = (target.x ?? 0) + nx;
             const ty = (target.y ?? 0) + ny;
             nx = this.snapGrid(tx) - (target.x ?? 0);
@@ -393,14 +380,10 @@ export class Board {
               const t = target as UI;
               // nx/ny 为 local 增量、bbox 为世界基准：画布缩放/平移后
               // local≠world，先转世界增量再夹紧，修正量再转回父级局部
-              const wd = t.getWorldPointByLocal(
-                { x: nx, y: ny },
-                undefined,
-                true,
+              const wd = t.getWorldPointByLocal({ x: nx, y: ny }, undefined, true);
+              const moverList = ((this.editor as unknown as { list?: UI[] }).list ?? []).filter(
+                (m) => m && !m.locked && !isFrameEl(m),
               );
-              const moverList = (
-                (this.editor as unknown as { list?: UI[] }).list ?? []
-              ).filter((m) => m && !m.locked && !isFrameEl(m));
               const movers = moverList.length > 1 ? moverList : [t];
               let box: {
                 minX: number;
@@ -470,16 +453,11 @@ export class Board {
     });
     this.bindEvents();
     // 自研滚轮缩放：以鼠标位置为不动点
-    (this.app.canvas.view as HTMLElement).addEventListener(
-      "wheel",
-      this.onWheel,
-      { passive: false },
-    );
+    (this.app.canvas.view as HTMLElement).addEventListener("wheel", this.onWheel, {
+      passive: false,
+    });
     // 右键菜单：原生 contextmenu 事件（leafer 事件系统不覆盖 DOM 右键）
-    (this.app.canvas.view as HTMLElement).addEventListener(
-      "contextmenu",
-      this.onContextMenu,
-    );
+    (this.app.canvas.view as HTMLElement).addEventListener("contextmenu", this.onContextMenu);
     // 修饰键状态：编辑器 MOVE/SCALE 事件不携带按键信息，用 DOM 键盘事件维护
     // （夹紧豁免 Alt 拖出等交互依赖；窗口失焦时重置避免 Alt 卡死）
     // shift 同步给自定义工具生成器（ctx.shiftKey，正比约束等用途）
@@ -513,9 +491,9 @@ export class Board {
       // Alt+拖拽复制挂靠：按住 Alt 且尚未快照/未判禁用时，以编辑器选中集为
       // 移动单元尝试快照（支持拖动中途按下 Alt，下一帧生效）
       if (!this.altCopySnap && !this.altCopyBlocked && this.modKeys.alt) {
-        const movers = (
-          (this.editor as unknown as { list?: UI[] }).list ?? []
-        ).filter((m) => m && !m.locked);
+        const movers = ((this.editor as unknown as { list?: UI[] }).list ?? []).filter(
+          (m) => m && !m.locked,
+        );
         if (!movers.length || !this.tryLatchAltCopy(movers)) {
           this.altCopyBlocked = true;
         }
@@ -529,9 +507,7 @@ export class Board {
       const moved = (e as EditorMoveEvent).target as UI | undefined;
       // 组联动：同组未选中成员跟随本次位移（选中成员已由编辑器移动；
       // moveX/moveY 为 world 增量，缩放视图下位移一致；锁定成员不跟随）
-      const gid = moved
-        ? (moved as unknown as { __groupId?: string }).__groupId
-        : undefined;
+      const gid = moved ? (moved as unknown as { __groupId?: string }).__groupId : undefined;
       if (moved && gid && (ev.moveX || ev.moveY)) {
         for (const other of this.app.tree.children as UI[]) {
           if (other === moved || other.locked) {
@@ -574,12 +550,7 @@ export class Board {
           } else {
             const cx = eb.x + eb.width / 2;
             const cy = eb.y + eb.height / 2;
-            if (
-              cx < fb.x ||
-              cx > fb.x + fb.width ||
-              cy < fb.y ||
-              cy > fb.y + fb.height
-            ) {
+            if (cx < fb.x || cx > fb.x + fb.width || cy < fb.y || cy > fb.y + fb.height) {
               this.setFrameId(moved, undefined);
             }
           }
@@ -596,17 +567,8 @@ export class Board {
       const ev = e as EditorRotateEvent;
       this.frameClampDirty = true;
       const target = ev.target as UI | undefined;
-      if (
-        target &&
-        isFrameEl(target) &&
-        ev.rotation &&
-        this.selectedList.length === 1
-      ) {
-        this.rotateFrameContents(
-          target,
-          ev.worldOrigin ?? { x: 0, y: 0 },
-          ev.rotation,
-        );
+      if (target && isFrameEl(target) && ev.rotation && this.selectedList.length === 1) {
+        this.rotateFrameContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, ev.rotation);
       }
       this.scheduleHistory();
     });
@@ -625,18 +587,8 @@ export class Board {
       const target = ev.target as UI | undefined;
       const sx = ev.scaleX ?? 1;
       const sy = ev.scaleY ?? 1;
-      if (
-        target &&
-        isFrameEl(target) &&
-        this.selectedList.length === 1 &&
-        (sx !== 1 || sy !== 1)
-      ) {
-        this.scaleFrameContents(
-          target,
-          ev.worldOrigin ?? { x: 0, y: 0 },
-          sx,
-          sy,
-        );
+      if (target && isFrameEl(target) && this.selectedList.length === 1 && (sx !== 1 || sy !== 1)) {
+        this.scaleFrameContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, sx, sy);
       }
       this.scheduleHistory();
     });
@@ -724,29 +676,26 @@ export class Board {
     }
     // 字号信息：供左侧栏字号控件显隐/跟随（仅单选未锁定文字时给出）
     const fontSize =
-      texts.length === 1 && list.length === 1
-        ? (texts[0].fontSize ?? TEXT_FONT_SIZE)
-        : undefined;
+      texts.length === 1 && list.length === 1 ? (texts[0].fontSize ?? TEXT_FONT_SIZE) : undefined;
     // 文本排版信息：仅单选未锁定文字时给出（供对齐/字重/字体控件跟随）
     const textAlign =
       texts.length === 1 && list.length === 1
-        ? ((texts[0].textAlign as "left" | "center" | "right" | undefined) ??
-          undefined)
+        ? ((texts[0].textAlign as "left" | "center" | "right" | undefined) ?? undefined)
         : undefined;
     const fontFamily =
       texts.length === 1 && list.length === 1
-        ? (typeof texts[0].fontFamily === "string"
-            ? texts[0].fontFamily
-            : undefined)
+        ? typeof texts[0].fontFamily === "string"
+          ? texts[0].fontFamily
+          : undefined
         : undefined;
     // 字重数值化：leafer 支持 100-900 数字（旧数据/旧代码可能存 "normal"/"bold" 字符串）
     const fontWeight =
       texts.length === 1 && list.length === 1
-        ? (typeof texts[0].fontWeight === "number"
-            ? (texts[0].fontWeight as FontWeight)
-            : texts[0].fontWeight === "bold"
-              ? 700
-              : undefined)
+        ? typeof texts[0].fontWeight === "number"
+          ? (texts[0].fontWeight as FontWeight)
+          : texts[0].fontWeight === "bold"
+            ? 700
+            : undefined
         : undefined;
     // 端点信息：仅单选未锁定 line/arrow 时给出（端点按钮组高亮跟随）
     let startArrow: ArrowHead | undefined;
@@ -768,8 +717,7 @@ export class Board {
       if (typeOf(single) === "rect") {
         cornerRadius = numOf((single as Rect).cornerRadius);
       }
-      const meta = (single as unknown as { __rough?: { roughness?: number } })
-        .__rough;
+      const meta = (single as unknown as { __rough?: { roughness?: number } }).__rough;
       if (meta) {
         roughness = meta.roughness ?? 1;
       }
@@ -825,8 +773,7 @@ export class Board {
     view.classList.toggle("hand-tool", tool === "hand");
     view.classList.toggle("eraser-tool", tool === "eraser");
     // 橡皮圆圈光标：按当前半径渲染，所见即所擦（其他工具恢复默认）
-    view.style.cursor =
-      tool === "eraser" ? eraserCursorURL(this.eraserRadius) : "";
+    view.style.cursor = tool === "eraser" ? eraserCursorURL(this.eraserRadius) : "";
     // 切离橡皮时清除待删预览
     if (tool !== "eraser") {
       this.clearErasePreview();
@@ -1265,19 +1212,17 @@ export class Board {
   }
 
   /** 调用当前工具的生成器（统一拖拽管线），异常时安全返回 null；返回值统一为元素列表 */
-  private runGenerator(
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
-  ): ElementData[] | null {
+  private runGenerator(x0: number, y0: number, x1: number, y1: number): ElementData[] | null {
     const gen = this.opts.registry.getGenerator(this.tool);
     if (!gen) {
       return null;
     }
     try {
       const out = gen({
-        x0, y0, x1, y1,
+        x0,
+        y0,
+        x1,
+        y1,
         style: this.opts.getStyle(),
         // ctx v2 可选字段：屏幕恒定大小换算与修饰键约束
         zoom: this.zoomScale(),
@@ -1296,7 +1241,7 @@ export class Board {
     } catch (err) {
       console.error("[board] 生成器执行失败", err);
       // 运行时错误回执：冒烟测试拦不住的执行期异常（此前完全黑盒），
-  // 每个工具每次会话只报一次，避免拖拽高频调用刷屏
+      // 每个工具每次会话只报一次，避免拖拽高频调用刷屏
       const msg = err instanceof Error ? err.message : String(err);
       if (!this.toolRuntimeErrShown.has(this.tool)) {
         this.toolRuntimeErrShown.add(this.tool);
@@ -1392,11 +1337,7 @@ export class Board {
     }
     // 点编辑拖点：指针跟随（Shift 锁 45° 角；端点靠近形状时吸附绑定）
     if (this.draggingPoint !== null && this.pointEditEl) {
-      this.movePointTo(
-        this.draggingPoint,
-        { x: e.x ?? 0, y: e.y ?? 0 },
-        e.shiftKey,
-      );
+      this.movePointTo(this.draggingPoint, { x: e.x ?? 0, y: e.y ?? 0 }, e.shiftKey);
       this.scheduleHistory();
       return;
     }
@@ -1446,12 +1387,7 @@ export class Board {
       return;
     }
     if (kind === "drag") {
-      let data = this.runGenerator(
-        this.startX,
-        this.startY,
-        this.snapGrid(px),
-        this.snapGrid(py),
-      );
+      let data = this.runGenerator(this.startX, this.startY, this.snapGrid(px), this.snapGrid(py));
       if (data) {
         // 约束夹紧：起点在 constrain 框架内时生成结果整体限制在框内
         if (this.drawingFrame) {
@@ -1598,8 +1534,7 @@ export class Board {
       return;
     }
     const now = Date.now();
-    const isDouble =
-      this.lastTapTarget === e.target && now - this.lastTapTime < 300;
+    const isDouble = this.lastTapTarget === e.target && now - this.lastTapTime < 300;
     this.lastTapTime = now;
     this.lastTapTarget = e.target;
 
@@ -1633,9 +1568,7 @@ export class Board {
 
   /** 打开文本内联编辑：先选中元素（openInnerEditor 仅对单选状态生效），并聚焦覆盖层 */
   private openTextEdit(el: Text) {
-    (el as unknown as Record<string, unknown>).__textBeforeEdit = String(
-      el.text ?? "",
-    );
+    (el as unknown as Record<string, unknown>).__textBeforeEdit = String(el.text ?? "");
     // 编辑中隐藏左侧选中栏（避免遮挡输入框与干扰交互）
     this.opts.onTextEditChange?.(true);
     this.editor.openInnerEditor(el, "TextEditor", true);
@@ -1737,11 +1670,7 @@ export class Board {
   }
 
   /** 拖动中的点跟随指针（世界坐标 → 元素局部，Shift 锁 45° 角；端点吸附绑定） */
-  private movePointTo(
-    idx: number,
-    world: { x: number; y: number },
-    shiftKey: boolean | undefined,
-  ) {
+  private movePointTo(idx: number, world: { x: number; y: number }, shiftKey: boolean | undefined) {
     const el = this.pointEditEl;
     if (!el) {
       return;
@@ -1755,8 +1684,7 @@ export class Board {
       // 45° 锁角：以相邻点为基准（首点取后一点，其余取前一点）
       const ref = pts[idx > 0 ? idx - 1 : Math.min(1, pts.length - 1)];
       const angle =
-        Math.round(Math.atan2(p.y - ref.y, p.x - ref.x) / (Math.PI / 4)) *
-        (Math.PI / 4);
+        Math.round(Math.atan2(p.y - ref.y, p.x - ref.x) / (Math.PI / 4)) * (Math.PI / 4);
       const dist = Math.hypot(p.x - ref.x, p.y - ref.y);
       p = { x: ref.x + dist * Math.cos(angle), y: ref.y + dist * Math.sin(angle) };
     }
@@ -1937,10 +1865,7 @@ export class Board {
    * - 其余元素整条删除：仅当圆心触及元素本体（容差取橡皮半径与 12px 的较小者，
    *   且按缩放补偿为世界单位）——大半径蹭边不再误删整块图形。
    */
-  private resolveEraseTarget(
-    ax: number,
-    ay: number,
-  ): { el: UI; segment: boolean } | null {
+  private resolveEraseTarget(ax: number, ay: number): { el: UI; segment: boolean } | null {
     const zoom = this.zoomScale();
     const solidTol = Math.min(this.eraserRadius, 12) / zoom;
     const solid = this.hitTest({ x: ax, y: ay }, solidTol);
@@ -2083,8 +2008,7 @@ export class Board {
     if (path) {
       el.path = path;
     }
-    (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints =
-      seg.map((p) => [...p]);
+    (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints = seg.map((p) => [...p]);
   }
 
   /**
@@ -2123,20 +2047,13 @@ export class Board {
 
   /** 橡皮半径换算到指定元素的局部单位（防御画布缩放与元素缩放） */
   private localEraserRadius(el: UI): number {
-    return (
-      this.eraserRadius /
-      this.zoomScale() /
-      Math.max(el.scaleX ?? 1, 0.01)
-    );
+    return this.eraserRadius / this.zoomScale() / Math.max(el.scaleX ?? 1, 0.01);
   }
 
   /** 分段类元素的局部采样点列（freehand 笔迹 / 线性元素）；非分段类返回 null */
   private segmentPointsOf(el: UI): number[][] | null {
     if (isFreehandEl(el)) {
-      return (
-        (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints ??
-        null
-      );
+      return (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints ?? null;
     }
     if (el instanceof Line) {
       return pointsOf(el).map((p) => [p.x, p.y]);
@@ -2169,9 +2086,7 @@ export class Board {
 
   private applyEraserCursor() {
     if (this.tool === "eraser") {
-      (this.app.canvas.view as HTMLElement).style.cursor = eraserCursorURL(
-        this.eraserRadius,
-      );
+      (this.app.canvas.view as HTMLElement).style.cursor = eraserCursorURL(this.eraserRadius);
     }
   }
 
@@ -2419,9 +2334,7 @@ export class Board {
    * 契约元素并入 points/path（freehand 移锚点），框架带动框内内容。
    */
   nudgeSelected(dxWorld: number, dyWorld: number): boolean {
-    const list = this.selectedList.filter(
-      (el) => !el.locked && !this.isEditorInternal(el),
-    );
+    const list = this.selectedList.filter((el) => !el.locked && !this.isEditorInternal(el));
     if (!list.length) {
       return false;
     }
@@ -2463,12 +2376,7 @@ export class Board {
   }
 
   /** 视口缩放/平移到指定世界 bbox（留 10% 边距，限幅在画布缩放范围内） */
-  private zoomToFitBounds(b: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }): boolean {
+  private zoomToFitBounds(b: { x: number; y: number; width: number; height: number }): boolean {
     const layer = this.app.tree.zoomLayer;
     if (!layer || b.width <= 0 || b.height <= 0) {
       return false;
@@ -2508,8 +2416,7 @@ export class Board {
             x: Math.min(box.x, b.x),
             y: Math.min(box.y, b.y),
             width: Math.max(box.x + box.width, b.x + b.width) - Math.min(box.x, b.x),
-            height:
-              Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
+            height: Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
           }
         : { ...b };
     }
@@ -2537,8 +2444,7 @@ export class Board {
             x: Math.min(box.x, b.x),
             y: Math.min(box.y, b.y),
             width: Math.max(box.x + box.width, b.x + b.width) - Math.min(box.x, b.x),
-            height:
-              Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
+            height: Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
           }
         : { ...b };
     }
@@ -2578,13 +2484,7 @@ export class Board {
   private pointInSelection(ax: number, ay: number): boolean {
     for (const el of this.selectedList) {
       const b = el.worldBoxBounds;
-      if (
-        b &&
-        ax >= b.x &&
-        ax <= b.x + b.width &&
-        ay >= b.y &&
-        ay <= b.y + b.height
-      ) {
+      if (b && ax >= b.x && ax <= b.x + b.width && ay >= b.y && ay <= b.y + b.height) {
         return true;
       }
     }
@@ -2598,7 +2498,9 @@ export class Board {
   private hitEditBox(ax: number, ay: number): boolean {
     const eb = this.editor.editBox as unknown as
       | {
-          rect?: { getLayoutPoints?: (type?: string, relative?: string) => { x: number; y: number }[] };
+          rect?: {
+            getLayoutPoints?: (type?: string, relative?: string) => { x: number; y: number }[];
+          };
           resizePoints?: UI[];
           rotatePoints?: UI[];
           resizeLines?: UI[];
@@ -2689,13 +2591,8 @@ export class Board {
     if (!this.modKeys.alt || !movers.length) {
       return false;
     }
-    const units = this.groupExpanded(this.expandMoversForSnap(movers)).filter(
-      (el) => !el.locked,
-    );
-    if (
-      !units.length ||
-      units.some((m) => !isFrameEl(m) && this.constrainFrameOf(m))
-    ) {
+    const units = this.groupExpanded(this.expandMoversForSnap(movers)).filter((el) => !el.locked);
+    if (!units.length || units.some((m) => !isFrameEl(m) && this.constrainFrameOf(m))) {
       return false;
     }
     const children = this.app.tree.children as UI[];
@@ -2841,8 +2738,7 @@ export class Board {
         if (isFreehandEl(el)) {
           // 画笔笔迹视觉粗细由轮廓（penSize）决定：按新粗细重算轮廓并更新元数据，
           // 否则仅改 strokeWidth 数据透传，画面粗细不变
-          const pts = (el as unknown as { __freehandPoints?: number[][] })
-            .__freehandPoints;
+          const pts = (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints;
           const pen = penSizeOf(partial.strokeWidth);
           const path = strokeOutlinePath(pts ?? [], { size: pen });
           if (path) {
@@ -2878,17 +2774,12 @@ export class Board {
       // P3 样式扩展：线型/透明度/圆角（图片跳过圆角——内部填充为图像数据）；
       // 线型用 in 判断：实线的 strokeDash 恰为 undefined，!== undefined 会漏掉“改回实线”
       if ("strokeDash" in partial) {
-        (el as unknown as { dashPattern?: number[] }).dashPattern =
-          partial.strokeDash;
+        (el as unknown as { dashPattern?: number[] }).dashPattern = partial.strokeDash;
       }
       if (partial.opacity !== undefined) {
         el.opacity = partial.opacity;
       }
-      if (
-        partial.cornerRadius !== undefined &&
-        el instanceof Rect &&
-        !(el instanceof Image)
-      ) {
+      if (partial.cornerRadius !== undefined && el instanceof Rect && !(el instanceof Image)) {
         el.cornerRadius = partial.cornerRadius;
       }
       if (partial.fillEnabled !== undefined) {
@@ -2911,18 +2802,12 @@ export class Board {
    * 整元素切换（TextEditor 纯文本机制不支持局部粗体）；返回是否有文字被切换。
    */
   toggleBold(): boolean {
-    const texts = this.selectedList.filter(
-      (el): el is Text => el instanceof Text && !el.locked,
-    );
+    const texts = this.selectedList.filter((el): el is Text => el instanceof Text && !el.locked);
     if (!texts.length) {
       return false;
     }
     const weightOf = (t: Text) =>
-      typeof t.fontWeight === "number"
-        ? t.fontWeight
-        : t.fontWeight === "bold"
-          ? 700
-          : 400;
+      typeof t.fontWeight === "number" ? t.fontWeight : t.fontWeight === "bold" ? 700 : 400;
     const allBold = texts.every((t) => weightOf(t) >= 700);
     for (const t of texts) {
       t.fontWeight = allBold ? 400 : 700;
@@ -2944,11 +2829,7 @@ export class Board {
     }
     let changed = 0;
     for (const el of list) {
-      if (
-        this.isEditorInternal(el) ||
-        el instanceof Text ||
-        el instanceof Image
-      ) {
+      if (this.isEditorInternal(el) || el instanceof Text || el instanceof Image) {
         continue;
       }
       const d = this.elementToData(el);
@@ -3057,11 +2938,7 @@ export class Board {
    * 坐标基准：元素 x/y、points 为 tree 局部坐标，worldOrigin 为世界坐标，
    * 画布缩放/平移后两者不一致，逐点经 getWorldPoint/getLocalPoint 换算。
    */
-  private rotateFrameContents(
-    frame: UI,
-    worldOrigin: { x: number; y: number },
-    rotation: number,
-  ) {
+  private rotateFrameContents(frame: UI, worldOrigin: { x: number; y: number }, rotation: number) {
     const fid = this.aiIdOf(frame);
     if (!rotation) {
       return;
@@ -3084,18 +2961,13 @@ export class Board {
       // getInnerPointByLocal（那会把锚点换算成 inner 值写回 x/y，产生偏移）
       const rotPoint = (p: { x: number; y: number }) =>
         el.getInnerPointByLocal(
-          el.getLocalPoint(
-            rotatePoint(el.getWorldPoint(p), rotation, worldOrigin),
-          ),
+          el.getLocalPoint(rotatePoint(el.getWorldPoint(p), rotation, worldOrigin)),
         );
       const anchorPoint = () =>
-        el.getLocalPoint(
-          rotatePoint(el.getWorldPoint({ x: 0, y: 0 }), rotation, worldOrigin),
-        );
+        el.getLocalPoint(rotatePoint(el.getWorldPoint({ x: 0, y: 0 }), rotation, worldOrigin));
       if (el instanceof Line) {
         const pts = (el.points ?? []).filter(
-          (p): p is { x: number; y: number } =>
-            typeof p === "object" && p !== null,
+          (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
         );
         el.points = pts.map(rotPoint);
       } else if (el instanceof Path) {
@@ -3169,9 +3041,7 @@ export class Board {
       if (item.kind === "line") {
         // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
         (el as Line).points = item.worldPoints!.map((w) =>
-          el.getInnerPointByLocal(
-            el.getLocalPoint({ x: tx(w.x), y: ty(w.y) }),
-          ),
+          el.getInnerPointByLocal(el.getLocalPoint({ x: tx(w.x), y: ty(w.y) })),
         );
       } else if (item.kind === "freehand") {
         // freehand 用 x/y + 局部轮廓：锚点随缩放映射，局部轮廓按比例缩放
@@ -3186,17 +3056,11 @@ export class Board {
           x: q.x * kx,
           y: q.y * ky,
         }));
-        t.__freehandPoints = item.penPoints!.map((pt) => [
-          pt[0] * kx,
-          pt[1] * ky,
-          ...pt.slice(2),
-        ]);
+        t.__freehandPoints = item.penPoints!.map((pt) => [pt[0] * kx, pt[1] * ky, ...pt.slice(2)]);
       } else if (item.kind === "path") {
         // 普通 path 绝对坐标：快照已是世界坐标，绕缩放中心映射后转回 inner
         el.path = transformPath(item.path as string, (p) =>
-          el.getInnerPointByLocal(
-            el.getLocalPoint({ x: tx(p.x), y: ty(p.y) }),
-          ),
+          el.getInnerPointByLocal(el.getLocalPoint({ x: tx(p.x), y: ty(p.y) })),
         );
       } else if (item.kind === "text") {
         el.x = lp.x;
@@ -3240,8 +3104,7 @@ export class Board {
       if (el instanceof Line) {
         // 画布内 line 的 points 均为对象数组（扁平 number[] 仅存在于类型定义中）
         const pts = (el.points ?? []).filter(
-          (p): p is { x: number; y: number } =>
-            typeof p === "object" && p !== null,
+          (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
         );
         items.push({
           el,
@@ -3265,9 +3128,7 @@ export class Board {
             el,
             kind: "path",
             worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-            path: transformPath(el.path as string, (p) =>
-              el.getWorldPoint(p),
-            ),
+            path: transformPath(el.path as string, (p) => el.getWorldPoint(p)),
           });
         }
       } else if (el instanceof Text) {
@@ -3381,8 +3242,7 @@ export class Board {
     };
     if (el instanceof Line) {
       const pts = (el.points ?? []).filter(
-        (p): p is { x: number; y: number } =>
-          typeof p === "object" && p !== null,
+        (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
       );
       el.points = pts.map(toWorld);
     } else if (el instanceof Path) {
@@ -3571,8 +3431,7 @@ export class Board {
     }
     const el = list[0] as Box;
     const meta = el as unknown as Record<string, unknown>;
-    const content =
-      typeof meta.__frameContent === "string" ? meta.__frameContent : "";
+    const content = typeof meta.__frameContent === "string" ? meta.__frameContent : "";
     if (!content) {
       return false;
     }
@@ -3611,8 +3470,7 @@ export class Board {
    */
   private scrollFrameContent(el: Box, deltaY: number) {
     const meta = el as unknown as Record<string, unknown>;
-    const content =
-      typeof meta.__frameContent === "string" ? meta.__frameContent : "";
+    const content = typeof meta.__frameContent === "string" ? meta.__frameContent : "";
     const max = frameScrollMax(
       content,
       typeof meta.__frameContentType === "string"
@@ -3638,13 +3496,7 @@ export class Board {
         continue;
       }
       const b = el.worldBoxBounds;
-      if (
-        b &&
-        p.x >= b.x &&
-        p.x <= b.x + b.width &&
-        p.y >= b.y &&
-        p.y <= b.y + b.height
-      ) {
+      if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
         return el as Box;
       }
     }
@@ -3774,10 +3626,7 @@ export class Board {
   /** 命中约束框架：点 (x, y) 落在的 constrain 框架（无则 null） */
   private constrainFrameAt(x: number, y: number): UI | null {
     for (const el of this.app.tree.children as UI[]) {
-      if (
-        !isFrameEl(el) ||
-        (el as unknown as Record<string, unknown>).__frameConstrain !== true
-      ) {
+      if (!isFrameEl(el) || (el as unknown as Record<string, unknown>).__frameConstrain !== true) {
         continue;
       }
       // page 基准判定：x/y 来自 tree.getInnerPoint（page 坐标，不含 zoomLayer
@@ -3820,19 +3669,15 @@ export class Board {
       if (other === el || !isFrameEl(other)) {
         continue;
       }
-      if (
-        (other as unknown as Record<string, unknown>).__frameConstrain !== true
-      ) {
+      if ((other as unknown as Record<string, unknown>).__frameConstrain !== true) {
         continue;
       }
       const fb = other.worldBoxBounds;
       if (!fb) {
         continue;
       }
-      const ix =
-        Math.min(eb.x + eb.width, fb.x + fb.width) - Math.max(eb.x, fb.x);
-      const iy =
-        Math.min(eb.y + eb.height, fb.y + fb.height) - Math.max(eb.y, fb.y);
+      const ix = Math.min(eb.x + eb.width, fb.x + fb.width) - Math.max(eb.x, fb.x);
+      const iy = Math.min(eb.y + eb.height, fb.y + fb.height) - Math.max(eb.y, fb.y);
       if (ix <= 0 || iy <= 0) {
         continue;
       }
@@ -3860,9 +3705,7 @@ export class Board {
    * （不改尺寸/旋转）。用于点编辑收尾、粘贴落点等移动管线之外的兜底。
    */
   private clampConstrainedMembers(list?: UI[]) {
-    const movers =
-      list ??
-      ((this.editor as unknown as { list?: UI[] }).list ?? []);
+    const movers = list ?? (this.editor as unknown as { list?: UI[] }).list ?? [];
     for (const el of movers) {
       if (!el || isFrameEl(el) || el.locked) {
         continue;
@@ -3898,11 +3741,8 @@ export class Board {
 
   /** 约束状态可视化：开启约束的框架描边转实线（虚线 = 普通框），一眼区分 */
   private applyFrameConstrainVisual(el: UI) {
-    const on =
-      (el as unknown as Record<string, unknown>).__frameConstrain === true;
-    (el as unknown as { dashPattern?: number[] }).dashPattern = on
-      ? undefined
-      : [8, 5];
+    const on = (el as unknown as Record<string, unknown>).__frameConstrain === true;
+    (el as unknown as { dashPattern?: number[] }).dashPattern = on ? undefined : [8, 5];
   }
 
   /**
@@ -3951,18 +3791,14 @@ export class Board {
    * 返回整理统计（空数组 = 没有需要整理的笔迹）。
    */
   beautifySelection(): { changed: number; stats: BeautifyStats } {
-    const list = this.selectedList.filter(
-      (el) => !el.locked && !this.isEditorInternal(el),
-    );
+    const list = this.selectedList.filter((el) => !el.locked && !this.isEditorInternal(el));
     if (!list.length) {
       return { changed: 0, stats: [] };
     }
     // serialize 会为所有元素分配稳定 id，先序列化再取选中 id；
     // 内容归属元素先展开为世界坐标（相对坐标会让对齐/分布计算失真）
     const before = this.serialize();
-    const ids = list
-      .map((el) => this.aiIdOf(el))
-      .filter((id): id is string => !!id);
+    const ids = list.map((el) => this.aiIdOf(el)).filter((id): id is string => !!id);
     const { elements, stats } = beautifyScene(expandFrameContents(before), ids);
     if (!stats.length) {
       return { changed: 0, stats: [] };
@@ -4043,9 +3879,7 @@ export class Board {
     const list = this.selectedList;
     // 内容归属：仅当所属框架也一起复制时才保留 frameId（相对坐标随框架平移），
     // 否则临时解除归属按世界坐标复制（粘贴为自由元素，避免失去框架后坐标错位）
-    const frameIds = new Set(
-      list.filter((el) => isFrameEl(el)).map((el) => this.aiIdOf(el)),
-    );
+    const frameIds = new Set(list.filter((el) => isFrameEl(el)).map((el) => this.aiIdOf(el)));
     const detached: { el: UI; fid: string }[] = [];
     for (const el of list) {
       const fid = this.frameIdOf(el);
@@ -4078,9 +3912,7 @@ export class Board {
         // bounds 不可用时跳过（clipboardBox 为 null 时粘贴回退为原位置偏移）
       }
     }
-    this.clipboardBox = Number.isFinite(minX)
-      ? { minX, minY, maxX, maxY }
-      : null;
+    this.clipboardBox = Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
     return this.clipboard.length > 0;
   }
 
@@ -4156,12 +3988,8 @@ export class Board {
     let dy = 12;
     if (this.lastPointer && this.clipboardBox) {
       // 跟随鼠标：剪贴板原始包围盒中心对齐（复制时从元素实际渲染 bounds 记录）
-      dx =
-        this.lastPointer.x -
-        (this.clipboardBox.minX + this.clipboardBox.maxX) / 2;
-      dy =
-        this.lastPointer.y -
-        (this.clipboardBox.minY + this.clipboardBox.maxY) / 2;
+      dx = this.lastPointer.x - (this.clipboardBox.minX + this.clipboardBox.maxX) / 2;
+      dy = this.lastPointer.y - (this.clipboardBox.minY + this.clipboardBox.maxY) / 2;
     }
     const pasted: UI[] = [];
     for (const d of this.clipboard) {
@@ -4205,8 +4033,7 @@ export class Board {
       if (dx || dy) {
         // 画布内 line 的 points 均为对象数组（扁平 number[] 仅存在于类型定义中）
         const pts = (el.points ?? []).filter(
-          (p): p is { x: number; y: number } =>
-            typeof p === "object" && p !== null,
+          (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
         );
         el.points = pts.map((p) => ({
           x: p.x + dx,
@@ -4232,9 +4059,7 @@ export class Board {
 
   /** 全选：锁定元素被 editor 自动排除 */
   selectAll() {
-    const children = (this.app.tree.children as UI[]).filter(
-      (el) => !this.isEditorInternal(el),
-    );
+    const children = (this.app.tree.children as UI[]).filter((el) => !this.isEditorInternal(el));
     if (children.length === 1) {
       this.editor.target = children[0];
     } else if (children.length > 1) {
@@ -4272,10 +4097,7 @@ export class Board {
   }
 
   // ================= AI 排列（对齐/分布/翻转/层序，供 arrange_elements 工具） =================
-  arrangeByIds(
-    ids: string[],
-    action: ArrangeAction,
-  ): { done: number; skipped: number } {
+  arrangeByIds(ids: string[], action: ArrangeAction): { done: number; skipped: number } {
     // before 为相对坐标（历史快照基准）；计算在世界坐标下进行（frame 内元素
     // 相对坐标会让对齐/分布失真），loadElements 用 worldCoords 模式重建
     const before = this.serialize();
@@ -4290,12 +4112,7 @@ export class Board {
     const members = expandGroupMembers(world, selIds);
     const targets = world.filter((d) => members.has(d.id ?? ""));
     let next: ElementData[];
-    if (
-      action === "front" ||
-      action === "back" ||
-      action === "forward" ||
-      action === "backward"
-    ) {
+    if (action === "front" || action === "back" || action === "forward" || action === "backward") {
       // 层序作用于全列表（组内成员必须保持相对顺序），其余动作只作用于目标元素
       next = reorderElements(world, [...members], (d) => d.id ?? "", action);
     } else {
@@ -4319,9 +4136,7 @@ export class Board {
    * AI 整理（beautify_elements 工具）：按 id 把手绘笔迹识别为标准图形/拉直，
    * 未指名的元素原样保留；同组成员整组参与、锁定元素跳过；整轮改动一步撤销。
    */
-  beautifyByIds(
-    ids: string[],
-  ): { changed: number; stats: BeautifyStats; skipped: number } {
+  beautifyByIds(ids: string[]): { changed: number; stats: BeautifyStats; skipped: number } {
     const before = this.serialize();
     const byId = new Map(before.map((d) => [d.id, d]));
     const found = ids.filter((id) => byId.has(id));
@@ -4331,10 +4146,7 @@ export class Board {
       return { changed: 0, stats: [], skipped };
     }
     const members = expandGroupMembers(before, selIds);
-    const { elements, stats } = beautifyScene(
-      expandFrameContents(before),
-      [...members],
-    );
+    const { elements, stats } = beautifyScene(expandFrameContents(before), [...members]);
     if (!stats.length) {
       return { changed: 0, stats: [], skipped };
     }
@@ -4396,10 +4208,7 @@ export class Board {
    * AI 粗糙度（set_roughness 工具）：按 id 调整已手绘元素的抖动强度（0~2），
    * 同一 seed 重绘（抖动态不变仅幅度变化）；无 rough 元数据的元素跳过。
    */
-  setRoughnessByIds(
-    ids: string[],
-    value: number,
-  ): { changed: number; skipped: number } {
+  setRoughnessByIds(ids: string[], value: number): { changed: number; skipped: number } {
     const before = this.serialize();
     const byId = new Map(before.map((d) => [d.id, d]));
     const found = ids.filter((id) => byId.has(id));
@@ -4454,12 +4263,7 @@ export class Board {
         return (els) => {
           const b = unionBounds(els);
           const axis = action === "flip-h" ? "h" : "v";
-          return flipElements(
-            els,
-            axis,
-            (b.minX + b.maxX) / 2,
-            (b.minY + b.maxY) / 2,
-          );
+          return flipElements(els, axis, (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
         };
       default:
         // 层序（front/back/forward/backward）不经过此分支
@@ -4518,7 +4322,7 @@ export class Board {
   }
 
   // ================= 锁定 / 解锁 =================
-  
+
   lock() {
     this.editor.lock();
     this.commitHistory();
@@ -4602,12 +4406,7 @@ export class Board {
   }
 
   /** 矩形框选：命中与选框相交的元素（世界包围盒，与 app 坐标同一体系） */
-  private selectByBox(box: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }): UI[] {
+  private selectByBox(box: { x: number; y: number; width: number; height: number }): UI[] {
     const hits: UI[] = [];
     if (box.width < 3 || box.height < 3) {
       return hits; // 点击而非拖拽：视为取消选择
@@ -4799,11 +4598,7 @@ export class Board {
   /** 按稳定 id 查找画布元素（AI 优化用） */
   private findByAiId(id: string): UI | null {
     const list = (this.app.tree.children ?? []) as UI[];
-    return (
-      list.find(
-        (el) => (el as unknown as { __aiId?: string }).__aiId === id,
-      ) ?? null
-    );
+    return list.find((el) => (el as unknown as { __aiId?: string }).__aiId === id) ?? null;
   }
 
   /**
@@ -4876,8 +4671,7 @@ export class Board {
       el.path = patch.path;
     }
     if ("strokeDash" in patch) {
-      (el as unknown as { dashPattern?: number[] }).dashPattern =
-        patch.strokeDash;
+      (el as unknown as { dashPattern?: number[] }).dashPattern = patch.strokeDash;
     }
     if (patch.opacity !== undefined) {
       el.opacity = patch.opacity;
@@ -4892,9 +4686,7 @@ export class Board {
   clearAll() {
     this.exitPointEdit();
     this.cancelCrop();
-    const els = (this.app.tree.children as UI[]).filter(
-      (el) => !this.isEditorInternal(el),
-    );
+    const els = (this.app.tree.children as UI[]).filter((el) => !this.isEditorInternal(el));
     if (els.length) {
       this.app.tree.clear();
     }
@@ -4904,9 +4696,7 @@ export class Board {
 
   get elementCount() {
     // 排除 editor 内部元素（多选模拟层），避免计数虚增
-    return (this.app.tree.children as UI[]).filter(
-      (el) => !this.isEditorInternal(el),
-    ).length;
+    return (this.app.tree.children as UI[]).filter((el) => !this.isEditorInternal(el)).length;
   }
 
   // ================= 图片裁剪（委托 CropController） =================
@@ -4961,13 +4751,10 @@ export class Board {
   }
 
   /** 读取图片自然尺寸（HTMLImageElement 预加载，与 leafer Image 无关） */
-  private imageSize(
-    url: string,
-  ): Promise<{ width: number; height: number } | null> {
+  private imageSize(url: string): Promise<{ width: number; height: number } | null> {
     return new Promise((resolve) => {
       const img = new window.Image();
-      img.onload = () =>
-        resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
       img.onerror = () => resolve(null);
       img.src = url;
     });
@@ -5043,14 +4830,10 @@ export class Board {
           meta.__frameContentType === "text"
             ? meta.__frameContentType
             : undefined,
-        content:
-          typeof meta.__frameContent === "string" ? meta.__frameContent : undefined,
-        autoSize:
-          typeof meta.__frameAutoSize === "boolean" ? meta.__frameAutoSize : undefined,
-        constrain:
-          typeof meta.__frameConstrain === "boolean" ? meta.__frameConstrain : undefined,
-        collapsed:
-          typeof meta.__frameCollapsed === "boolean" ? meta.__frameCollapsed : undefined,
+        content: typeof meta.__frameContent === "string" ? meta.__frameContent : undefined,
+        autoSize: typeof meta.__frameAutoSize === "boolean" ? meta.__frameAutoSize : undefined,
+        constrain: typeof meta.__frameConstrain === "boolean" ? meta.__frameConstrain : undefined,
+        collapsed: typeof meta.__frameCollapsed === "boolean" ? meta.__frameCollapsed : undefined,
         // 滚动偏移读运行时 scrollY（滚动交互直接改装饰属性，meta 不随动）
         scrollY: numOf(el.scrollY),
       };
@@ -5143,8 +4926,7 @@ export class Board {
         fill: colorOf(el.fill),
         // 文本排版扩展：对齐/字重/字体随文件保存（autoSizeAlign 按对齐自动推导，不单独存）
         textAlign: el.textAlign === "center" || el.textAlign === "right" ? el.textAlign : undefined,
-        fontFamily:
-          typeof el.fontFamily === "string" ? el.fontFamily : undefined,
+        fontFamily: typeof el.fontFamily === "string" ? el.fontFamily : undefined,
         fontWeight:
           typeof el.fontWeight === "number"
             ? (el.fontWeight as FontWeight)
@@ -5272,7 +5054,7 @@ export class Board {
           width: boxW,
           height: boxH,
           fill,
-          dashPattern: d.constrain ? undefined : d.strokeDash ?? [8, 5],
+          dashPattern: d.constrain ? undefined : (d.strokeDash ?? [8, 5]),
           // 折叠状态：裁剪超出内容，scrollY 偏移子级渲染。overflow 必须含
           // "scroll"（leafer Box 只在 overflow 含 scroll 时应用 scrollX/scrollY
           // 平移子级 bounds，hide 仅裁剪不滚动；无 scroller 插件不显示滚动条），
@@ -5318,10 +5100,7 @@ export class Board {
           points: d.points,
           // 终点默认三角箭头（兼容旧文件）；显式 "none" 时保持无端点
           startArrow: toLeaferArrow(d.startArrow),
-          endArrow:
-            d.endArrow !== undefined
-              ? toLeaferArrow(d.endArrow)
-              : "triangle",
+          endArrow: d.endArrow !== undefined ? toLeaferArrow(d.endArrow) : "triangle",
         });
         bindingsToEl(el, d);
         return el;
@@ -5364,10 +5143,7 @@ export class Board {
           textAlign: d.textAlign,
           fontFamily: d.fontFamily,
           fontWeight: d.fontWeight,
-          autoSizeAlign:
-            d.textAlign && d.textAlign !== "left" && !d.width
-              ? true
-              : undefined,
+          autoSizeAlign: d.textAlign && d.textAlign !== "left" && !d.width ? true : undefined,
         });
       case "image":
         return new Image({
@@ -5384,10 +5160,7 @@ export class Board {
   /** 导出画布为 SVG 文档字符串（矢量，可无损缩放；图片以 dataURL 内嵌） */
   exportSVG(): string {
     // 内容归属元素先展开为世界坐标（文件里存的是相对坐标，直接导出会错位）
-    return elementsToSVG(
-      expandFrameContents(this.serialize()),
-      this.background,
-    );
+    return elementsToSVG(expandFrameContents(this.serialize()), this.background);
   }
 
   // ================= 网格 =================
@@ -5512,9 +5285,7 @@ export class Board {
    * screenshot 区域为 app 局部坐标——视口原点即 (0,0)、尺寸即画布像素尺寸（与 contentWorldBounds
    * 输出同基准）；返回视口世界范围供文本标注，让模型把截图与 get_canvas 数据对齐。
    */
-  async exportViewportImage(
-    size = 1024,
-  ): Promise<{ url: string; viewport: ViewportInfo } | null> {
+  async exportViewportImage(size = 1024): Promise<{ url: string; viewport: ViewportInfo } | null> {
     if (this.elementCount === 0) {
       return null;
     }

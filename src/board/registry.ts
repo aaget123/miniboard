@@ -107,10 +107,7 @@ function hexToRgba(hex: string, alpha: number): string {
 // ================= 内置工具 =================
 
 /** 内置 drag 工具的生成器（从 canvas 原有 switch 逻辑迁为数据，行为保持一致） */
-const builtinGenerators: Record<
-  string,
-  (c: GeneratorContext) => ElementData | ElementData[]
-> = {
+const builtinGenerators: Record<string, (c: GeneratorContext) => ElementData | ElementData[]> = {
   rect(c) {
     const { x0, y0, x1, y1, style } = c;
     return {
@@ -121,9 +118,7 @@ const builtinGenerators: Record<
       height: Math.abs(y1 - y0),
       stroke: style.stroke,
       strokeWidth: style.strokeWidth,
-      fill: style.fillEnabled
-        ? hexToRgba(style.fillColor || style.stroke, 0.15)
-        : undefined,
+      fill: style.fillEnabled ? hexToRgba(style.fillColor || style.stroke, 0.15) : undefined,
     };
   },
   ellipse(c) {
@@ -136,9 +131,7 @@ const builtinGenerators: Record<
       height: Math.abs(y1 - y0),
       stroke: style.stroke,
       strokeWidth: style.strokeWidth,
-      fill: style.fillEnabled
-        ? hexToRgba(style.fillColor || style.stroke, 0.15)
-        : undefined,
+      fill: style.fillEnabled ? hexToRgba(style.fillColor || style.stroke, 0.15) : undefined,
     };
   },
   frame(c) {
@@ -195,18 +188,120 @@ const builtinGenerators: Record<
  * 点击主按钮直接使用当前选择工具（默认“选择”），右侧箭头展开切换框选/套索；
  * 画布移动保持平铺（高频且不与选中类工具互相替代） */
 const BUILTIN: ToolDef[] = [
-  { id: "select", name: "选择", icon: "select", title: "选择 (V)", shortcut: "v", kind: "interaction", group: "select", source: "builtin" },
-  { id: "hand", name: "画布移动", icon: "hand", title: "画布移动 (H)", shortcut: "h", kind: "interaction", source: "builtin" },
-  { id: "marquee", name: "框选", icon: "marquee", title: "框选 (M)", shortcut: "m", kind: "interaction", group: "select", source: "builtin" },
-  { id: "lasso", name: "套索选中", icon: "lasso", title: "套索选中 (Q)", shortcut: "q", kind: "interaction", group: "select", source: "builtin" },
-  { id: "pen", name: "画笔", icon: "pen", title: "画笔 (P)", shortcut: "p", kind: "freehand", source: "builtin" },
-  { id: "eraser", name: "橡皮擦", icon: "eraser", title: "橡皮擦 (E)", shortcut: "e", kind: "interaction", source: "builtin" },
-  { id: "line", name: "直线", icon: "line", title: "直线 (L)", shortcut: "l", kind: "drag", source: "builtin" },
-  { id: "arrow", name: "箭头", icon: "arrow", title: "箭头 (A)", shortcut: "a", kind: "drag", source: "builtin" },
-  { id: "rect", name: "矩形", icon: "rect", title: "矩形 (R)", shortcut: "r", kind: "drag", group: "shape", source: "builtin" },
-  { id: "ellipse", name: "椭圆", icon: "ellipse", title: "椭圆 (O)", shortcut: "o", kind: "drag", group: "shape", source: "builtin" },
-  { id: "frame", name: "框架", icon: "frame", title: "框架 (F)", shortcut: "f", kind: "drag", group: "shape", source: "builtin" },
-  { id: "text", name: "文本", icon: "text", title: "文本 (T)", shortcut: "t", kind: "interaction", source: "builtin" },
+  {
+    id: "select",
+    name: "选择",
+    icon: "select",
+    title: "选择 (V)",
+    shortcut: "v",
+    kind: "interaction",
+    group: "select",
+    source: "builtin",
+  },
+  {
+    id: "hand",
+    name: "画布移动",
+    icon: "hand",
+    title: "画布移动 (H)",
+    shortcut: "h",
+    kind: "interaction",
+    source: "builtin",
+  },
+  {
+    id: "marquee",
+    name: "框选",
+    icon: "marquee",
+    title: "框选 (M)",
+    shortcut: "m",
+    kind: "interaction",
+    group: "select",
+    source: "builtin",
+  },
+  {
+    id: "lasso",
+    name: "套索选中",
+    icon: "lasso",
+    title: "套索选中 (Q)",
+    shortcut: "q",
+    kind: "interaction",
+    group: "select",
+    source: "builtin",
+  },
+  {
+    id: "pen",
+    name: "画笔",
+    icon: "pen",
+    title: "画笔 (P)",
+    shortcut: "p",
+    kind: "freehand",
+    source: "builtin",
+  },
+  {
+    id: "eraser",
+    name: "橡皮擦",
+    icon: "eraser",
+    title: "橡皮擦 (E)",
+    shortcut: "e",
+    kind: "interaction",
+    source: "builtin",
+  },
+  {
+    id: "line",
+    name: "直线",
+    icon: "line",
+    title: "直线 (L)",
+    shortcut: "l",
+    kind: "drag",
+    source: "builtin",
+  },
+  {
+    id: "arrow",
+    name: "箭头",
+    icon: "arrow",
+    title: "箭头 (A)",
+    shortcut: "a",
+    kind: "drag",
+    source: "builtin",
+  },
+  {
+    id: "rect",
+    name: "矩形",
+    icon: "rect",
+    title: "矩形 (R)",
+    shortcut: "r",
+    kind: "drag",
+    group: "shape",
+    source: "builtin",
+  },
+  {
+    id: "ellipse",
+    name: "椭圆",
+    icon: "ellipse",
+    title: "椭圆 (O)",
+    shortcut: "o",
+    kind: "drag",
+    group: "shape",
+    source: "builtin",
+  },
+  {
+    id: "frame",
+    name: "框架",
+    icon: "frame",
+    title: "框架 (F)",
+    shortcut: "f",
+    kind: "drag",
+    group: "shape",
+    source: "builtin",
+  },
+  {
+    id: "text",
+    name: "文本",
+    icon: "text",
+    title: "文本 (T)",
+    shortcut: "t",
+    kind: "interaction",
+    source: "builtin",
+  },
 ];
 
 // ================= 注册表 =================
@@ -217,10 +312,7 @@ const BUILTIN: ToolDef[] = [
  */
 export class ToolRegistry {
   private custom: CustomToolDef[] = [];
-  private compiled = new Map<
-    string,
-    (c: GeneratorContext) => ElementData | ElementData[]
-  >();
+  private compiled = new Map<string, (c: GeneratorContext) => ElementData | ElementData[]>();
   private generatorWarned = new Set<string>();
   private onChangeFn: () => void = () => {};
 
@@ -256,13 +348,8 @@ export class ToolRegistry {
    * 兼容两种源码形态：函数表达式 `(ctx) => {...}`（AI 示例格式）与函数体 `{ ... return {...}; }`。
    * 返回值可为单个元素数据或元素数据数组（组合工具）。编译失败抛错，调用方应捕获并向用户反馈具体原因。
    */
-  compileGenerator(
-    code: string,
-  ): (c: GeneratorContext) => ElementData | ElementData[] {
-    const raw = new Function(
-      "ctx",
-      `"use strict"; return (${code});`,
-    ) as (
+  compileGenerator(code: string): (c: GeneratorContext) => ElementData | ElementData[] {
+    const raw = new Function("ctx", `"use strict"; return (${code});`) as (
       ctx: GeneratorContext,
     ) => ElementData | ElementData[] | ((c: GeneratorContext) => ElementData | ElementData[]);
     // 函数表达式格式：raw 返回的是函数本身，再调用一次取元素数据
@@ -291,9 +378,7 @@ export class ToolRegistry {
   }
 
   /** 获取 drag/click 工具的可执行生成器（内置或自定义），不存在返回 null */
-  getGenerator(
-    id: string,
-  ): ((c: GeneratorContext) => ElementData | ElementData[]) | null {
+  getGenerator(id: string): ((c: GeneratorContext) => ElementData | ElementData[]) | null {
     if (builtinGenerators[id]) {
       return builtinGenerators[id];
     }
@@ -326,10 +411,7 @@ export class ToolRegistry {
   async smokeTest(
     generator: string,
     kind?: string,
-  ): Promise<
-    | { ok: true; elements: ElementData[] }
-    | { ok: false; error: string }
-  > {
+  ): Promise<{ ok: true; elements: ElementData[] } | { ok: false; error: string }> {
     // 第一道防线：静态危险扫描（同步，秒拒明显越权/循环代码；click 类额外拒绝随机函数）
     const hits = scanGeneratorSource(generator, kind);
     if (hits.length) {
@@ -378,25 +460,23 @@ export class ToolRegistry {
     `;
     const blob = new Blob([workerSrc], { type: "application/javascript" });
     const url = URL.createObjectURL(blob);
-    const run = new Promise<{ ok?: boolean; error?: string; data?: unknown }>(
-      (resolve, reject) => {
-        const worker = new Worker(url);
-        const timer = setTimeout(() => {
-          worker.terminate();
-          reject(new Error("timeout"));
-        }, 1500);
-        worker.onmessage = (e: MessageEvent) => {
-          clearTimeout(timer);
-          worker.terminate();
-          resolve(e.data as { ok?: boolean; error?: string; data?: unknown });
-        };
-        worker.onerror = () => {
-          clearTimeout(timer);
-          worker.terminate();
-          reject(new Error("worker"));
-        };
-      },
-    );
+    const run = new Promise<{ ok?: boolean; error?: string; data?: unknown }>((resolve, reject) => {
+      const worker = new Worker(url);
+      const timer = setTimeout(() => {
+        worker.terminate();
+        reject(new Error("timeout"));
+      }, 1500);
+      worker.onmessage = (e: MessageEvent) => {
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(e.data as { ok?: boolean; error?: string; data?: unknown });
+      };
+      worker.onerror = () => {
+        clearTimeout(timer);
+        worker.terminate();
+        reject(new Error("worker"));
+      };
+    });
     try {
       const res = await run;
       if (!res.ok) {
@@ -443,10 +523,7 @@ export class ToolRegistry {
   }
 
   /** 修改自定义工具（内置工具不可改），返回更新后的定义；id 不存在返回 null */
-  updateCustom(
-    id: string,
-    patch: Partial<CustomToolInput>,
-  ): CustomToolDef | null {
+  updateCustom(id: string, patch: Partial<CustomToolInput>): CustomToolDef | null {
     const tool = this.custom.find((t) => t.id === id);
     if (!tool) {
       return null;
@@ -457,8 +534,7 @@ export class ToolRegistry {
       shortcut: patch.shortcut !== undefined ? patch.shortcut : tool.shortcut,
       kind: patch.kind !== undefined ? patch.kind : tool.kind,
       generator: patch.generator ?? tool.generator,
-      description:
-        patch.description !== undefined ? patch.description : tool.description,
+      description: patch.description !== undefined ? patch.description : tool.description,
       group: patch.group !== undefined ? patch.group : tool.group,
     };
     this.validateInput(next);
@@ -492,11 +568,7 @@ export class ToolRegistry {
 
   // ---------- 内部 ----------
 
-  private titleOf(
-    name: string,
-    shortcut: string | undefined,
-    kind: "drag" | "click",
-  ): string {
+  private titleOf(name: string, shortcut: string | undefined, kind: "drag" | "click"): string {
     if (shortcut) {
       return `${name} (${shortcut.toUpperCase()})`;
     }
@@ -511,17 +583,23 @@ export class ToolRegistry {
     // 而非直接拒绝整个 add/update 调用
     input.icon = coerceIcon(input.icon, input.name);
     if (!ICON_PATTERN.test(input.icon.trim())) {
-      throw new Error("工具图标只支持 1-2 个字符的中文/字母/数字/常见符号（如 ★、▭、箭头），不能使用 emoji 或长文本");
+      throw new Error(
+        "工具图标只支持 1-2 个字符的中文/字母/数字/常见符号（如 ★、▭、箭头），不能使用 emoji 或长文本",
+      );
     }
     if (!input.generator?.trim()) {
       throw new Error("生成器代码不能为空");
     }
     if (input.kind !== undefined && !(CUSTOM_KINDS as readonly string[]).includes(input.kind)) {
-      throw new Error(`行为类别 ${String(input.kind)} 不支持，自定义工具只能是 drag（拖拽生成）或 click（点击生成）`);
+      throw new Error(
+        `行为类别 ${String(input.kind)} 不支持，自定义工具只能是 drag（拖拽生成）或 click（点击生成）`,
+      );
     }
     if (input.group !== undefined && input.group !== "shape" && input.group !== "ai") {
       // select 组为内置选中类工具专属；shape 收形状类，其余默认 ai（AI 工具下拉）
-      throw new Error(`分组 ${String(input.group)} 不支持，自定义工具只能归入 shape（形状）或 ai（AI 工具）`);
+      throw new Error(
+        `分组 ${String(input.group)} 不支持，自定义工具只能归入 shape（形状）或 ai（AI 工具）`,
+      );
     }
     this.compileGenerator(input.generator); // 编译失败会抛错
   }
@@ -534,9 +612,7 @@ export class ToolRegistry {
       // k 已被 AI 助手面板开关占用（保留键）
       throw new Error("快捷键 k 已被保留（AI 助手开关），请换一个字母");
     }
-    const clash = this.list().find(
-      (t) => t.id !== exceptId && t.shortcut === def.shortcut,
-    );
+    const clash = this.list().find((t) => t.id !== exceptId && t.shortcut === def.shortcut);
     if (clash) {
       throw new Error(`快捷键 ${def.shortcut} 已被工具「${clash.name}」占用`);
     }

@@ -61,18 +61,12 @@ function pointSegDist(
   const abx = b.x - a.x;
   const aby = b.y - a.y;
   const len2 = abx * abx + aby * aby;
-  const t =
-    len2 > 0
-      ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2))
-      : 0;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2)) : 0;
   return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t));
 }
 
 /** 轨迹折线按 step 插值补密（保证快速拖动时擦除区间连续不漏段） */
-function densifyTrail(
-  trail: { x: number; y: number }[],
-  step: number,
-): { x: number; y: number }[] {
+function densifyTrail(trail: { x: number; y: number }[], step: number): { x: number; y: number }[] {
   if (trail.length < 2) {
     return trail;
   }

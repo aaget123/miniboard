@@ -10,11 +10,7 @@ export type StatusBarHandlers = {
   onZoomReset: () => void;
 };
 
-function makeBtn(
-  icon: IconName | string,
-  title: string,
-  onClick: () => void,
-): HTMLButtonElement {
+function makeBtn(icon: IconName | string, title: string, onClick: () => void): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.className = "tool-btn sb-btn";
   btn.title = title;
@@ -44,10 +40,7 @@ export class StatusBar {
   /** 选区整体包围盒（选中元素时展示 W×H） */
   private selSize: { width: number; height: number } | null = null;
 
-  constructor(
-    container: HTMLElement,
-    handlers: StatusBarHandlers,
-  ) {
+  constructor(container: HTMLElement, handlers: StatusBarHandlers) {
     this.el = container;
     this.el.classList.add("docked");
 
@@ -67,12 +60,8 @@ export class StatusBar {
     this.undoBtn = makeBtn("undo", "撤销 (Ctrl+Z)", () => handlers.onUndo());
     this.redoBtn = makeBtn("redo", "重做 (Ctrl+Y)", () => handlers.onRedo());
     right.append(this.undoBtn, this.redoBtn);
-    right.append(
-      makeBtn("zoomOut", "缩小 (Ctrl+−)", () => handlers.onZoomOut()),
-    );
-    this.zoomBtn = makeBtn("100%", "重置为 100% (Ctrl+0)", () =>
-      handlers.onZoomReset(),
-    );
+    right.append(makeBtn("zoomOut", "缩小 (Ctrl+−)", () => handlers.onZoomOut()));
+    this.zoomBtn = makeBtn("100%", "重置为 100% (Ctrl+0)", () => handlers.onZoomReset());
     this.zoomBtn.classList.add("sb-zoom");
     right.append(this.zoomBtn);
     right.append(makeBtn("zoomIn", "放大 (Ctrl+＋)", () => handlers.onZoomIn()));

@@ -99,8 +99,7 @@ export class CropController {
       x: Math.min(tl.x, tr.x, bl.x, br.x),
       y: Math.min(tl.y, tr.y, bl.y, br.y),
       width: Math.max(tl.x, tr.x, bl.x, br.x) - Math.min(tl.x, tr.x, bl.x, br.x),
-      height:
-        Math.max(tl.y, tr.y, bl.y, br.y) - Math.min(tl.y, tr.y, bl.y, br.y),
+      height: Math.max(tl.y, tr.y, bl.y, br.y) - Math.min(tl.y, tr.y, bl.y, br.y),
     };
     // 裁剪框（index 0 为框体，非手柄）
     const frame = new Rect({
@@ -145,8 +144,7 @@ export class CropController {
         ay >= b.y - 4 &&
         ay <= b.y + b.height + 4
       ) {
-        this.dragDir =
-          (this.handles[i] as unknown as { __dir?: string }).__dir ?? null;
+        this.dragDir = (this.handles[i] as unknown as { __dir?: string }).__dir ?? null;
         this.dragged = false;
         return;
       }

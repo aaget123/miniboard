@@ -77,10 +77,7 @@ describe("describeCanvas 单模态画面感知", () => {
   });
 
   it("带 intent 的元素输出意图字段，且摘要说明其来源是 AI 自报", () => {
-    const els = [
-      { ...rect(0, 0, 100, 100), intent: "流程起点" },
-      rect(400, 0, 100, 100),
-    ];
+    const els = [{ ...rect(0, 0, 100, 100), intent: "流程起点" }, rect(400, 0, 100, 100)];
     const out = describeCanvas(mockBoard(els));
     const json = out.slice(out.indexOf("\n") + 1);
     const data = JSON.parse(json) as { intent?: string }[];
@@ -247,9 +244,7 @@ describe("parseLeaferJSON intent 透传", () => {
   });
 
   it("intent 非字符串时忽略（非法值不进入数据）", () => {
-    const r = parseLeaferJSON([
-      { type: "rect", x: 0, y: 0, intent: 123 },
-    ]);
+    const r = parseLeaferJSON([{ type: "rect", x: 0, y: 0, intent: 123 }]);
     expect(r[0].data?.intent).toBeUndefined();
   });
 });

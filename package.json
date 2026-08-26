@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "biome lint src",
+    "format": "biome format --write src",
+    "format:check": "biome format src",
     "test": "vitest run"
   },
   "dependencies": {

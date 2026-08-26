@@ -202,9 +202,7 @@ export class ContextMenu {
     }
 
     this.el.addEventListener("click", (e) => {
-      const row = (e.target as HTMLElement).closest(
-        ".ctx-item",
-      ) as HTMLElement | null;
+      const row = (e.target as HTMLElement).closest(".ctx-item") as HTMLElement | null;
       if (!row) {
         return;
       }
@@ -264,9 +262,7 @@ export class ContextMenu {
         const labelEl = el.querySelector(".ctx-label");
         if (labelEl) {
           if (item.action === "toggleFrameConstrain") {
-            labelEl.textContent = state.frameConstrainOn
-              ? "关闭内容约束"
-              : "开启内容约束";
+            labelEl.textContent = state.frameConstrainOn ? "关闭内容约束" : "开启内容约束";
           } else if (item.action === "toggleFrameCollapse") {
             labelEl.textContent = state.collapsedOn ? "展开内容" : "折叠内容";
           } else if (item.action === "toggleFrameFocus") {
