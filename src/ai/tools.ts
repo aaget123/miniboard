@@ -283,6 +283,10 @@ function buildCompactEntries(input: ElementData[]): {
     if (el.fill && el.fill !== "none") d.fill = el.fill;
     if (el.text != null) d.text = el.text;
     if (typeof el.fontSize === "number") d.fontSize = el.fontSize;
+    // 框架名称：模型可按名引用框架（导入内容框带标题名）
+    if (el.type === "frame" && typeof el.name === "string" && el.name.trim()) {
+      d.name = el.name;
+    }
     if (el.type === "path" && el.path) {
       // rough 手绘风格元素：直接用原几何类型描述（C 命令密集，路径段数无意义）
       d.path = el.rough?.original

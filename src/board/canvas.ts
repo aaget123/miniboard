@@ -100,6 +100,10 @@ const SNAP_BIND_PX = 10;
 // 智能对齐吸附的屏幕距离阈值（px）与参考线颜色（画在 sky 层）
 const ALIGN_SNAP_PX = 6;
 const ALIGN_GUIDE_STROKE = "#f24aa0";
+// 框架名称标签：字号 / 与框架上沿的间距 / 颜色（子级 Text，hit:false 点击穿透）
+const FRAME_NAME_LABEL_SIZE = 11;
+const FRAME_NAME_LABEL_GAP = 5;
+const FRAME_NAME_LABEL_COLOR = "#8a8f98";
 // 内容约束的归属阈值：元素与 constrain 框架的包围盒重叠面积占比下限
 const CONSTRAINT_ADOPT_RATIO = 0.6;
 
@@ -5182,6 +5186,21 @@ export class Board {
             locked: true,
           });
         }
+        // 名称标签：悬于框架上沿之外（负 y），点击穿透到框体即选中整框；
+        // 折叠状态 overflow 裁剪掉负 y 区域 → 标签随折叠自然隐藏。
+        // 序列化只读框架元数据不读子级，标签不会进入数据
+        let nameLabel: Text | null = null;
+        if (typeof d.name === "string" && d.name.trim()) {
+          nameLabel = new Text({
+            x: 0,
+            y: -(FRAME_NAME_LABEL_SIZE + FRAME_NAME_LABEL_GAP),
+            text: d.name,
+            fontSize: FRAME_NAME_LABEL_SIZE,
+            fill: FRAME_NAME_LABEL_COLOR,
+            hit: false,
+            locked: true,
+          });
+        }
         const el = new Box({
           ...common,
           width: boxW,
@@ -5197,7 +5216,7 @@ export class Board {
           // 注意：children 显式传 undefined 会让 leafer 2.2.9 的 Group/Branch
           // children 保持 undefined，入树时 __bindLeafer 遍历其 length 崩溃并
           // 卡死布局管线（画布永不渲染），必须用空数组
-          children: contentText ? [contentText] : [],
+          children: [...(contentText ? [contentText] : []), ...(nameLabel ? [nameLabel] : [])],
         });
         const meta = el as unknown as Record<string, unknown>;
         meta[FRAME_FLAG] = true;
