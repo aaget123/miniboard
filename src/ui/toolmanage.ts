@@ -58,7 +58,8 @@ export class ToolManageDialog {
     root.appendChild(this.listEl);
     this.emptyEl = document.createElement("div");
     this.emptyEl.className = "tm-empty";
-    this.emptyEl.textContent = "暂无 AI 生成的自定义工具（可在 AI 面板「编辑」模式中让 AI 添加，或从文件导入）";
+    this.emptyEl.textContent =
+      "暂无 AI 生成的自定义工具（可在 AI 面板「编辑」模式中让 AI 添加，或从文件导入）";
     root.appendChild(this.emptyEl);
 
     // ---- 导入 / 导出（custom-tools.json 开放格式；导入强制过冒烟测试）----
@@ -238,9 +239,7 @@ export class ToolManageDialog {
     if (this.sortMode === "used") {
       tools.sort((a, b) => (b.useCount ?? 0) - (a.useCount ?? 0));
     } else if (this.sortMode === "recent") {
-      tools.sort(
-        (a, b) => (b.lastUsedAt ?? b.createdAt ?? 0) - (a.lastUsedAt ?? a.createdAt ?? 0),
-      );
+      tools.sort((a, b) => (b.lastUsedAt ?? b.createdAt ?? 0) - (a.lastUsedAt ?? a.createdAt ?? 0));
     } else if (this.sortMode === "name") {
       tools.sort((a, b) => a.name.localeCompare(b.name, "zh"));
     }
@@ -409,9 +408,7 @@ export class ToolManageDialog {
       return;
     }
     // 兼容裸数组（与持久化文件同格式）与 { tools: [...] } 包装
-    const list = Array.isArray(parsed)
-      ? parsed
-      : (parsed as { tools?: unknown } | null)?.tools;
+    const list = Array.isArray(parsed) ? parsed : (parsed as { tools?: unknown } | null)?.tools;
     if (!Array.isArray(list) || !list.length) {
       this.setIoStatus("导入失败：文件中没有工具数据", "error");
       return;
@@ -453,7 +450,10 @@ export class ToolManageDialog {
     if (failures.length) {
       lines.push(`跳过 ${failures.length} 个：${failures.join("；")}`);
     }
-    this.setIoStatus(lines.join("；") || "没有可导入的工具", failures.length ? "error" : okCount ? "ok" : "");
+    this.setIoStatus(
+      lines.join("；") || "没有可导入的工具",
+      failures.length ? "error" : okCount ? "ok" : "",
+    );
     if (this.editingId) {
       // 正在编辑的工具可能被导入的同名操作影响，回到列表视图最稳妥
       this.showList();

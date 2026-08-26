@@ -1,0 +1,14 @@
+# 统一换行符为 LF：biome format 强制 LF（CI format:check 把关），
+# Windows 检出若为 CRLF 会导致本地格式检查永远失败
+* text=auto eol=lf
+
+# 二进制资源不做任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

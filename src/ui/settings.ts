@@ -464,10 +464,7 @@ export class SettingsDialog {
     const backBox = document.createElement("input");
     backBox.type = "checkbox";
     backBox.checked = loadDrawPrefs().autoBackToSelect;
-    backRow.append(
-      document.createTextNode("绘制完成后自动切回选择工具"),
-      backBox,
-    );
+    backRow.append(document.createTextNode("绘制完成后自动切回选择工具"), backBox);
     backBox.addEventListener("change", () => {
       const p: DrawPrefs = { autoBackToSelect: backBox.checked };
       saveDrawPrefs(p);

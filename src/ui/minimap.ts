@@ -66,10 +66,7 @@ export class Minimap {
     const fx = (clientX - rect.left) / Math.max(rect.width, 1);
     const fy = (clientY - rect.top) / Math.max(rect.height, 1);
     const { minX, minY, maxX, maxY } = this.mapBounds;
-    this.board.centerViewAt(
-      minX + fx * (maxX - minX),
-      minY + fy * (maxY - minY),
-    );
+    this.board.centerViewAt(minX + fx * (maxX - minX), minY + fy * (maxY - minY));
     this.render();
   }
 

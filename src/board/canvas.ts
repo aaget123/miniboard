@@ -5299,12 +5299,7 @@ export class Board {
       const rect = view.getBoundingClientRect();
       const sx = view.width / Math.max(rect.width, 1);
       const sy = view.height / Math.max(rect.height, 1);
-      const d = ctx.getImageData(
-        Math.round(ax * sx),
-        Math.round(ay * sy),
-        1,
-        1,
-      ).data;
+      const d = ctx.getImageData(Math.round(ax * sx), Math.round(ay * sy), 1, 1).data;
       const h = (n: number) => n.toString(16).padStart(2, "0");
       return `#${h(d[0])}${h(d[1])}${h(d[2])}`;
     } catch {
