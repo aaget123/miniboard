@@ -352,6 +352,10 @@ export class Board {
   // 智能对齐参考线（单选拖动）：候选边每手势收集一次，参考线画在 sky 层
   private alignCandidates: { xs: number[]; ys: number[] } | null = null;
   private alignGuides: UI[] = [];
+  // 落框高亮：拖动中联合 bbox 完全落入某框架时，sky 层画高亮框预判归属
+  // （不修改框架本体属性——拖动中的防抖历史快照不会捕获高亮态）
+  private dropHighlightFrame: UI | null = null;
+  private dropHighlightRect: Rect | null = null;
   /** 取色模式：下一次画布点击采样像素色（Esc/右键取消） */
   private pickState: {
     resolve: (hex: string | null) => void;
@@ -619,6 +623,8 @@ export class Board {
       }
       // 移动元素后刷新绑定箭头端点（被绑元素移动时端点跟随）
       this.updateBindings(moved);
+      // 落框预判高亮（移动集合的联合 bbox 完全落入某框架时）
+      this.updateDropHighlight((this.editor as unknown as { list?: UI[] }).list ?? []);
       this.scheduleHistory();
     });
     // 框架旋转：归属于该框架的内容元素绕旋转中心同步旋转（内容跟随框架，
@@ -683,8 +689,9 @@ export class Board {
       if (!this.selectDragging) {
         this.commitAltCopy();
       }
-      // 对齐参考线手势收尾清空（候选缓存一并失效）
+      // 对齐参考线与落框高亮手势收尾清空（候选缓存一并失效）
       this.clearAlignGuides();
+      this.clearDropHighlight();
     });
     this.app.on(ZoomEvent.END, () => {
       this.frameScaleSnap = null;
@@ -1092,9 +1099,10 @@ export class Board {
     this.altCopySnap = null;
     this.altCopyBlocked = false;
     this.altCopyMoved = false;
-    // 新手势：对齐候选重新收集，参考线清空
+    // 新手势：对齐候选重新收集，参考线与落框高亮清空
     this.alignCandidates = null;
     this.clearAlignGuides();
+    this.clearDropHighlight();
     // 取色模式下右键 = 取消
     if (e.right && this.pickState) {
       this.finishPick(null);
@@ -1448,6 +1456,8 @@ export class Board {
           this.moveFrameContents(item.el, dx, dy);
         }
       }
+      // 落框预判高亮（手动拖动管线与编辑器拖动同语义）
+      this.updateDropHighlight(this.dragEls.map((i) => i.el));
       this.scheduleHistory();
       return;
     }
@@ -1577,6 +1587,7 @@ export class Board {
       } else {
         this.commitAltCopy(); // 未移动：内部按空操作清理挂靠状态
       }
+      this.clearDropHighlight();
       return;
     }
     // 框选/套索结束：结算选中
@@ -5504,6 +5515,100 @@ export class Board {
     }
     this.alignGuides = [];
     this.alignCandidates = null;
+  }
+
+  // ================= 落框高亮 =================
+
+  /**
+   * 拖动中落框预判：移动集合（编辑器选中或手动拖动列表）的联合 bbox 完全
+   * 落入某框架（含描边容差，与 adoptIntoFrame 同语义）时，临时高亮该框架
+   * 描边——嵌套时取面积最小者。无命中/集合为空即还原。
+   */
+  private updateDropHighlight(movers: UI[]) {
+    const units = movers.filter((m) => m && !m.locked);
+    if (!units.length) {
+      this.clearDropHighlight();
+      return;
+    }
+    let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    for (const m of units) {
+      const b = m.worldBoxBounds;
+      if (!b) {
+        continue;
+      }
+      box = box
+        ? {
+            minX: Math.min(box.minX, b.x),
+            minY: Math.min(box.minY, b.y),
+            maxX: Math.max(box.maxX, b.x + b.width),
+            maxY: Math.max(box.maxY, b.y + b.height),
+          }
+        : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
+    }
+    if (!box) {
+      this.clearDropHighlight();
+      return;
+    }
+    const moverSet = new Set(units);
+    let target: UI | null = null;
+    let targetArea = Infinity;
+    for (const frame of this.app.tree.children as UI[]) {
+      if (!isFrameEl(frame) || moverSet.has(frame)) {
+        continue;
+      }
+      const fb = frame.worldBoxBounds;
+      if (!fb) {
+        continue;
+      }
+      // 完全包含判定：与 adoptIntoFrame 的 frameContaining 同语义（含描边容差）
+      const sw = typeof frame.strokeWidth === "number" ? frame.strokeWidth : 0;
+      const tol = sw / 2 + 1;
+      if (
+        box.minX >= fb.x - tol &&
+        box.minY >= fb.y - tol &&
+        box.maxX <= fb.x + fb.width + tol &&
+        box.maxY <= fb.y + fb.height + tol
+      ) {
+        const area = fb.width * fb.height;
+        if (area < targetArea) {
+          targetArea = area;
+          target = frame;
+        }
+      }
+    }
+    if (target === this.dropHighlightFrame) {
+      return;
+    }
+    this.clearDropHighlight();
+    if (!target) {
+      return;
+    }
+    const b = target.worldBoxBounds;
+    if (!b) {
+      return;
+    }
+    const rect = new Rect({
+      x: b.x - 3,
+      y: b.y - 3,
+      width: b.width + 6,
+      height: b.height + 6,
+      stroke: ALIGN_GUIDE_STROKE,
+      strokeWidth: 2.5,
+      fill: "rgba(242, 74, 160, 0.05)",
+      dashPattern: undefined,
+    });
+    this.app.sky.add(rect);
+    this.dropHighlightRect = rect;
+    this.dropHighlightFrame = target;
+  }
+
+  /** 清除落框高亮（sky 层覆盖框，不动框架本体） */
+  private clearDropHighlight() {
+    if (this.dropHighlightRect) {
+      this.dropHighlightRect.remove();
+      this.dropHighlightRect = null;
+    }
+    this.dropHighlightFrame = null;
   }
 
   /**
