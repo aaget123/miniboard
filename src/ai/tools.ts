@@ -8,6 +8,12 @@ import { canvasToLocal, localToCanvas, round1 } from "../board/coords";
 import { elementBounds } from "../board/bounds";
 import type { ArrangeAction } from "../board/arrange";
 import type { AiMode, AiTool, AiToolExecution } from "./types";
+import {
+  diffElementSnapshots,
+  getPerceptionSnapshot,
+  setPerceptionSnapshot,
+  type ElementDiff,
+} from "./perception";
 
 // ================= 画布感知（非多模态：把画布转成 JSON 给模型看） =================
 
@@ -182,28 +188,19 @@ function gridIndex(elements: ElementData[]): string {
 }
 
 /**
- * 把画布序列化为紧凑 JSON 描述，供 LLM 理解内容：
- * - path 只保留路径段数（原始 SVG 路径 token 太大），手绘笔迹给出识别形状
- * - image 不包含 dataURL 本体，只保留尺寸
- * - line/arrow 的 points 输出画布绝对坐标（写回时系统自动换算回局部坐标）
- * - 元素过多时截断（最多 MAX_DESCRIBE 个，截断部分附带空间网格索引）；
- *   显式传 ids（@选区）或 region（bounds/viewport 过滤）时不截断
- * - 返回内容前附带整体摘要：元素统计、内容范围、空间分布（九宫格区域计数）、
- *   坐标系说明、region 字段语义、当前视口（位置与缩放）、背景色
- * - 每个元素附 region 字段：中心在内容包围盒 3×3 均分中的位置（如“左上/中心/右下”），
- *   把原始坐标抽象为空间词汇，降低模型心算坐标差的负担（借鉴手绘代理的空间上下文做法）
+ * 把元素列表压缩为紧凑条目（describeCanvas 与增量感知的变更集输出共用）：
+ * - 按 (y, x) 排序，让模型按空间顺序读取元素而非 z 序；
+ * - 内容包围盒（与摘要「内容范围」同基准）驱动 region 标签；
+ * - 数量 ≤120 时为 text 元素附最近图形元素的方位距离（near 字段）。
+ * 返回排序后的元素数组、内容包围盒与一一对应的紧凑条目。
  */
-export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegion | null): string {
-  // 世界坐标序列化：frame 内元素展开为画布绝对坐标，保证坐标/region 计算基准一致
-  const full = board.serializeWorld();
-  const all = ids?.length
-    ? full.filter((e) => e.id && ids.includes(e.id))
-    : region
-      ? full.filter((e) => inRegion(elementBounds(e), region))
-      : full;
-  const limited = ids?.length || region ? all : all.slice(0, MAX_DESCRIBE);
+function buildCompactEntries(input: ElementData[]): {
+  els: ElementData[];
+  box: { minX: number; minY: number; maxX: number; maxY: number } | null;
+  entries: Record<string, unknown>[];
+} {
   // 按 (y, x) 排序，让模型按空间顺序读取元素而非 z 序
-  const els = [...limited].sort((a, b) => a.y - b.y || a.x - b.x);
+  const els = [...input].sort((a, b) => a.y - b.y || a.x - b.x);
   // 内容包围盒（与摘要“内容范围”同基准）：region 标签与空间分布摘要共用
   let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
   if (els.length) {
@@ -271,7 +268,7 @@ export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegi
     }
     return best ? `${best.label} ${best.dir} ${Math.round(best.d)}px` : null;
   };
-  const compact = els.map((el) => {
+  const entries = els.map((el) => {
     const d: Record<string, unknown> = {
       id: el.id,
       type: el.type,
@@ -329,6 +326,31 @@ export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegi
     if (box) d.region = regionOf(el, box);
     return d;
   });
+  return { els, box, entries };
+}
+
+/**
+ * 把画布序列化为紧凑 JSON 描述，供 LLM 理解内容：
+ * - path 只保留路径段数（原始 SVG 路径 token 太大），手绘笔迹给出识别形状
+ * - image 不包含 dataURL 本体，只保留尺寸
+ * - line/arrow 的 points 输出画布绝对坐标（写回时系统自动换算回局部坐标）
+ * - 元素过多时截断（最多 MAX_DESCRIBE 个，截断部分附带空间网格索引）；
+ *   显式传 ids（@选区）或 region（bounds/viewport 过滤）时不截断
+ * - 返回内容前附带整体摘要：元素统计、内容范围、空间分布（九宫格区域计数）、
+ *   坐标系说明、region 字段语义、当前视口（位置与缩放）、背景色
+ * - 每个元素附 region 字段：中心在内容包围盒 3×3 均分中的位置（如“左上/中心/右下”），
+ *   把原始坐标抽象为空间词汇，降低模型心算坐标差的负担（借鉴手绘代理的空间上下文做法）
+ */
+export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegion | null): string {
+  // 世界坐标序列化：frame 内元素展开为画布绝对坐标，保证坐标/region 计算基准一致
+  const full = board.serializeWorld();
+  const all = ids?.length
+    ? full.filter((e) => e.id && ids.includes(e.id))
+    : region
+      ? full.filter((e) => inRegion(elementBounds(e), region))
+      : full;
+  const limited = ids?.length || region ? all : all.slice(0, MAX_DESCRIBE);
+  const { els, box, entries: compact } = buildCompactEntries(limited);
   const over = ids?.length || region ? 0 : full.length - MAX_DESCRIBE;
   // 摘要：全画布统计 + 返回集合的内容范围 + 坐标系/视口说明 + 背景色
   const counts = new Map<string, number>();
@@ -403,6 +425,73 @@ export function describeCanvas(board: Board, ids?: string[], region?: CanvasRegi
     tail += `\n（另有 ${over} 个元素已省略：${gridIndex(full.slice(MAX_DESCRIBE))}）`;
   }
   return summary + tail;
+}
+
+// ================= 增量感知输出（ai/perception.ts 的缓存与 diff 之上） =================
+
+/** 类型统计文案（全量摘要与无变化/增量回执共用） */
+function typeCountsText(data: ElementData[]): string {
+  const counts = new Map<string, number>();
+  for (const e of data) {
+    counts.set(e.type, (counts.get(e.type) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([t, n]) => `${TYPE_LABELS[t] ?? t} ${n}`).join("、");
+}
+
+/**
+ * 「无变化」简短回执：内容版本未推进时替代全量 JSON。
+ * 视口实时读取——用户平移/缩放不计入内容版本，但模型需要最新视口。
+ */
+function describeNoChange(board: Board, snapshot: ElementData[]): string {
+  const vp = board.viewport;
+  return `画布自上次获取以来没有任何变化（仍为 ${snapshot.length} 个元素：${typeCountsText(snapshot)}），此前返回的元素数据继续有效，请勿重复请求。当前视口：中心 (${Math.round(vp.center.x)}, ${Math.round(vp.center.y)})，缩放 ${Math.round(vp.scale * 100)}%。`;
+}
+
+/**
+ * 版本推进时的增量变更集输出；变更面超过 MAX_DESCRIBE 时返回 null，
+ * 由调用方退回完整快照（此时逐条列出反而更长且信息密度更低）。
+ */
+function describePerceptionDiff(board: Board, next: ElementData[], diff: ElementDiff): string | null {
+  const total = diff.added.length + diff.updated.length;
+  if (total > MAX_DESCRIBE) {
+    return null;
+  }
+  let summary = `画布现共 ${next.length} 个元素：${typeCountsText(next)}。`;
+  const parts: string[] = [];
+  if (diff.added.length) {
+    parts.push(`新增 ${diff.added.length} 个`);
+  }
+  if (diff.updated.length) {
+    parts.push(`更新 ${diff.updated.length} 个`);
+  }
+  if (diff.removedIds.length) {
+    parts.push(`删除 ${diff.removedIds.length} 个`);
+  }
+  summary += ` 相对上次获取：${parts.join("、")}。`;
+  const vp = board.viewport;
+  summary += ` 当前视口：中心 (${Math.round(vp.center.x)}, ${Math.round(vp.center.y)})，缩放 ${Math.round(vp.scale * 100)}%。`;
+  summary += ` 坐标系：左上角为原点 (0,0)，y 轴向下，单位 px。`;
+
+  const sections: string[] = [];
+  // 新增条目带 change 标记（新增 / 更新），数据字段与完整快照一致
+  if (diff.added.length) {
+    const entries = buildCompactEntries(diff.added).entries;
+    sections.push(
+      `【新增 ${diff.added.length} 个】\n${JSON.stringify(entries.map((e) => ({ ...e, change: "added" })))}`,
+    );
+  }
+  if (diff.updated.length) {
+    const entries = buildCompactEntries(diff.updated).entries;
+    sections.push(
+      `【更新 ${diff.updated.length} 个】\n${JSON.stringify(entries.map((e) => ({ ...e, change: "updated" })))}`,
+    );
+  }
+  if (diff.removedIds.length) {
+    sections.push(`【删除 ${diff.removedIds.length} 个】\n${diff.removedIds.join("、")}`);
+  }
+  summary += `\n${sections.join("\n")}`;
+  summary += `\n（未变更元素不再重复返回，此前返回的数据继续有效；如需完整快照传 full:true，或用 ids/bounds/viewport 定向获取）`;
+  return summary;
 }
 
 // ================= 官方 leafer JSON 解析（create_elements 用） =================
@@ -564,7 +653,7 @@ function getCanvasTool(): AiTool {
   return {
     name: "get_canvas",
     description:
-      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区），或传 viewport/bounds 只看某个世界坐标区域（如当前视口）内的元素。返回内容附带整体摘要：元素数量与类型统计、内容范围、空间分布（元素集中在哪个区域、哪里空旷）、当前视口范围与缩放、坐标系说明、背景色；每个元素带 region 字段（中心在内容包围盒九宫格中的位置）与形状描述，AI 创建的元素带 intent 字段（创建时自报的意图）；line/arrow 的 points 为画布绝对坐标。返回数据就是发送时刻的最新快照：画布未被修改时不要重复调用获取相同数据（浪费轮次与 token），如需细化请用 ids/bounds/viewport 参数定向获取",
+      "获取画布元素的结构化 JSON 数据（坐标、颜色、文字内容、形状描述等），用于理解画布上有什么；可传 ids 只看指定元素（如用户 @ 的选区），或传 viewport/bounds 只看某个世界坐标区域（如当前视口）内的元素。返回内容附带整体摘要：元素数量与类型统计、内容范围、空间分布（元素集中在哪个区域、哪里空旷）、当前视口范围与缩放、坐标系说明、背景色；每个元素带 region 字段（中心在内容包围盒九宫格中的位置）与形状描述，AI 创建的元素带 intent 字段（创建时自报的意图）；line/arrow 的 points 为画布绝对坐标。增量感知：全量调用时若画布自上次获取后没有变化，只返回简短的「无变化」摘要；有变化时默认只返回增量变更集（新增 / 更新元素的完整数据 + 删除元素的 id 清单），未变更元素不再重复返回，需要完整快照时传 full:true。请勿在画布未修改时反复调用（浪费轮次与 token），需要细化时用 ids/bounds/viewport 参数定向获取",
     parameters: {
       type: "object",
       properties: {
@@ -572,6 +661,11 @@ function getCanvasTool(): AiTool {
           type: "array",
           items: { type: "string" },
           description: "可选：元素 id 列表，只返回这些元素的数据；不传则返回全部",
+        },
+        full: {
+          type: "boolean",
+          description:
+            "可选：true 时跳过增量感知，强制返回完整快照（默认有变化时只返回增量变更集）",
         },
         viewport: {
           type: "boolean",
@@ -1287,6 +1381,43 @@ export async function executeTool(
           }
           region = { minX, minY, maxX, maxY };
         }
+      }
+      // 增量感知：全量调用（无 ids/region）走缓存判定——版本命中返回「无变化」
+      // 摘要；版本推进返回 diff 变更集；full:true 或变更面过大时退回完整快照。
+      // 定向查询不读也不写全量缓存（其输出与全量快照语义不同）
+      if (!ids?.length && !region) {
+        const version = board.perceptionVersion;
+        const cached = getPerceptionSnapshot(board);
+        if (cached && cached.version === version && args.full !== true) {
+          return {
+            name: tool.name,
+            args,
+            result: describeNoChange(board, cached.data),
+            changed: false,
+          };
+        }
+        const next = board.serializeWorld();
+        if (cached && args.full !== true) {
+          const diff = diffElementSnapshots(cached.data, next);
+          const incremental = describePerceptionDiff(board, next, diff);
+          if (incremental !== null) {
+            setPerceptionSnapshot(board, { version, data: next });
+            return {
+              name: tool.name,
+              args,
+              result: incremental,
+              changed: false,
+            };
+          }
+          // 变更面过大：退回完整快照（缓存随后统一刷新）
+        }
+        setPerceptionSnapshot(board, { version, data: next });
+        return {
+          name: tool.name,
+          args,
+          result: `当前画布元素数据：\n${describeCanvas(board, ids, region)}`,
+          changed: false,
+        };
       }
       return {
         name: tool.name,

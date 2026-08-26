@@ -340,6 +340,8 @@ export class Board {
   private gridPath: Path | null = null;
   /** 绘制后自动切回选择工具（Excalidraw 同款默认行为；设置页可关） */
   private autoBackToSelect = true;
+  /** 画布感知版本：内容变更点自增（AI 增量感知缓存命中判定用） */
+  private perceptionVersionN = 0;
   /** 取色模式：下一次画布点击采样像素色（Esc/右键取消） */
   private pickState: {
     resolve: (hex: string | null) => void;
@@ -4530,7 +4532,14 @@ export class Board {
   }
 
   private commitHistory() {
+    // 感知版本自增：AI 增量画布感知据此判定「无变化」（见 ai/perception.ts）
+    this.perceptionVersionN++;
     this.pushSnapshot(this.serialize());
+  }
+
+  /** 当前感知版本（每次内容变更 +1；视口移动/缩放不计入） */
+  get perceptionVersion(): number {
+    return this.perceptionVersionN;
   }
 
   /** 公开：压入一个历史快照并触发变化回调（美化/导入等场景） */
@@ -5032,6 +5041,8 @@ export class Board {
     this.resolveFrameContents(opts?.worldCoords);
     this.editor.cancel();
     this.updateGrid();
+    // 场景整体重建（撤销/重做/载入）不经 commitHistory，感知版本单独自增
+    this.perceptionVersionN++;
   }
 
   private dataToElement(d: ElementData): UI | null {
