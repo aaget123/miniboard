@@ -352,6 +352,36 @@ body,
   cursor: crosshair !important;
 }
 
+/* Ctrl 概览浮层（小地图）：按住 Ctrl 显示，点击/拖动定位 */
+.minimap {
+  position: fixed;
+  right: 16px;
+  bottom: 56px;
+  z-index: 40;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg-2, #17181a) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+}
+
+.minimap-canvas {
+  display: block;
+  width: 240px;
+  height: 160px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: crosshair;
+}
+
+.minimap-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+
 .swatch {
   width: 18px;
   height: 18px;

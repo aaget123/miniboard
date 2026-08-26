@@ -856,6 +856,44 @@ export class Board {
   }
 
   /**
+   * 将视口中心平移到指定画布坐标（page 基准，保持当前缩放不变）。
+   * 小地图点击导航用；仅调整 zoomLayer 平移。
+   */
+  centerViewAt(cx: number, cy: number) {
+    const layer = this.app.tree.zoomLayer;
+    if (!layer) {
+      return;
+    }
+    const view = this.app.canvas.view as HTMLElement;
+    const w = this.app.width ?? view.clientWidth;
+    const h = this.app.height ?? view.clientHeight;
+    const s = layer.scaleX ?? 1;
+    layer.x = w / 2 - cx * s;
+    layer.y = h / 2 - cy * s;
+    this.updateGrid();
+  }
+
+  /**
+   * 概览浮层数据：全部元素的包围盒（page 基准，与 viewport 同基准可直接映射；
+   * 单个元素 bounds 异常时跳过）。供 Ctrl 小地图渲染简化矩形。
+   */
+  overviewItems(): { x: number; y: number; w: number; h: number }[] {
+    const items: { x: number; y: number; w: number; h: number }[] = [];
+    for (const el of this.app.tree.children as UI[]) {
+      try {
+        const b = el.getBounds("box", "page");
+        if (!b || b.width <= 0 || b.height <= 0 || !Number.isFinite(b.x)) {
+          continue;
+        }
+        items.push({ x: b.x, y: b.y, w: b.width, h: b.height });
+      } catch {
+        // 个别元素 bounds 计算异常不影响整体概览
+      }
+    }
+    return items;
+  }
+
+  /**
    * 初始/重置视图：画布原点 (0,0) 居中显示在视口中心（X0Y0 居中，
    * 元素坐标数据不变，仅调整 zoomLayer 平移；缩放倍率归 1）。
    */

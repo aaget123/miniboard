@@ -25,6 +25,7 @@ import { ShortcutManager, comboFromEvent, formatCombo } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusbar";
 import { ContextMenu } from "./ui/contextmenu";
 import type { ContextMenuAction } from "./ui/contextmenu";
+import { Minimap } from "./ui/minimap";
 import type { AiPanel } from "./ai/panel";
 import { PointerEvent } from "leafer-ui";
 import type { IPointerEvent } from "@leafer-ui/interface";
@@ -312,6 +313,50 @@ async function main() {
   board.applyGrid(loadGrid());
   // 绘制偏好：绘制后自动切回选择工具（默认开启，Excalidraw 同款）
   board.setAutoBackToSelect(loadDrawPrefs().autoBackToSelect);
+
+  // ---- Ctrl 概览浮层（小地图）：按住裸 Ctrl 短暂延迟后显示，松开/组合键收起 ----
+  const minimap = new Minimap(board);
+  let overviewTimer = 0;
+  let overviewShown = false;
+  const hideOverview = () => {
+    clearTimeout(overviewTimer);
+    overviewTimer = 0;
+    if (overviewShown) {
+      overviewShown = false;
+      minimap.hide();
+    }
+  };
+  window.addEventListener("keydown", (e) => {
+    // 输入框内打字/粘贴等 Ctrl 操作不弹概览
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable)
+    ) {
+      hideOverview();
+      return;
+    }
+    if (e.key === "Control" || e.key === "Meta") {
+      // 仅裸修饰键按住约 200ms 才显示：Ctrl+A/C/V/Z 等组合键不误闪
+      if (!e.repeat && !overviewTimer) {
+        overviewTimer = window.setTimeout(() => {
+          overviewTimer = 0;
+          overviewShown = true;
+          minimap.show();
+        }, 200);
+      }
+      return;
+    }
+    hideOverview();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.key === "Control" || e.key === "Meta" || (!e.ctrlKey && !e.metaKey)) {
+      hideOverview();
+    }
+  });
+  window.addEventListener("blur", hideOverview);
 
   // AI 面板懒加载：panel/tools/client 约 2900 行仅在首次唤起时加载（主包瘦身）。
   // 未加载期间所有引用点安全空转；工厂创建时兜底同步当前项目对话分桶
