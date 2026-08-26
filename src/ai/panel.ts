@@ -28,6 +28,8 @@ const MAX_HISTORY_TOKENS = 8000;
 const MAX_MSG_TOKENS = 4000;
 /** 图片片段的固定 token 估算（1280px JPEG 视觉 token 的保守值，因模型而异） */
 const IMAGE_TOKENS = 1200;
+/** 批量操作确认阈值：mutating 工具影响元素数超过该值时需用户确认 */
+const BATCH_CONFIRM_THRESHOLD = 20;
 /** @ 选区附带单图：图片数量上限与压缩后最长边（px），控制 token 与流量 */
 const MAX_AT_IMAGES = 3;
 const IMAGE_SEND_MAX_SIDE = 1024;
@@ -924,6 +926,45 @@ export class AiPanel {
           const tool = toolsForMode(mode).find(
             (t) => t.name === call.function.name,
           );
+          // 批量操作闸门：影响元素数超过阈值时需用户确认（防提示注入/模型误操作的最后一道防线）
+          if (tool?.mutating) {
+            let affected = 0;
+            try {
+              const parsedArgs = JSON.parse(
+                call.function.arguments || "{}",
+              ) as {
+                ids?: unknown[];
+                elements?: unknown[];
+                updates?: unknown[];
+              };
+              affected =
+                parsedArgs.ids?.length ??
+                parsedArgs.updates?.length ??
+                parsedArgs.elements?.length ??
+                0;
+            } catch {
+              // 参数解析失败按 0 处理，交由执行器返回具体错误
+            }
+            if (
+              affected > BATCH_CONFIRM_THRESHOLD &&
+              !window.confirm(
+                `该操作将影响 ${affected} 个元素，确认执行？`,
+              )
+            ) {
+              this.pushHistory({
+                role: "tool",
+                tool_call_id: call.id,
+                content: "用户取消了该批量操作",
+              });
+              this.renderToolReceipt({
+                name: call.function.name,
+                args: {},
+                result: "用户取消了该批量操作",
+                changed: false,
+              });
+              continue;
+            }
+          }
           const exec = tool
             ? await executeTool(tool, call.function.arguments, {
                 board: this.board,
@@ -971,6 +1012,8 @@ export class AiPanel {
         }
       }
       commitCanvasChange();
+      // 用量透明：发送按钮悬停可见本轮/累计估算（字符估算，非精确 tokenizer）
+      this.sendBtn.title = `本轮回复 ≈${estimateTokens(fullText)} tokens · 会话上下文 ≈${this.st.historyTokens} / ${MAX_HISTORY_TOKENS}`;
       if (!fullText) {
         this.renderBubble(bubble, "（本轮没有文本回复）");
       }

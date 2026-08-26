@@ -1372,6 +1372,7 @@ export async function executeTool(
       let ok = 0;
       let ignored = 0;
       const failed: string[] = [];
+      const updatedIds: string[] = [];
       for (const u of updates) {
         if (!u.id || typeof u.patch !== "object" || u.patch === null) {
           failed.push(u.id ?? "(缺 id)");
@@ -1388,16 +1389,18 @@ export async function executeTool(
         const done = board.updateElement(u.id, patch as Partial<ElementData>);
         if (done) {
           ok++;
+          updatedIds.push(u.id);
         } else {
           failed.push(u.id);
         }
       }
+      // 自检回执：成功时回传实际更新的 id 清单，模型可核对"改的是不是想改的"
       return {
         name: tool.name,
         args,
         result: failed.length
-          ? `已更新 ${ok} 个元素；失败 ${failed.length} 个：${failed.join("、")}（不存在或已锁定）${ignored ? `；${ignored} 个字段不在白名单，已忽略` : ""}`
-          : `已更新 ${ok} 个元素${ignored ? `（${ignored} 个字段不在白名单，已忽略）` : ""}`,
+          ? `已更新 ${ok} 个元素${updatedIds.length ? `（id：${updatedIds.join("、")}）` : ""}；失败 ${failed.length} 个：${failed.join("、")}（不存在或已锁定）${ignored ? `；${ignored} 个字段不在白名单，已忽略` : ""}`
+          : `已更新 ${ok} 个元素${updatedIds.length ? `（id：${updatedIds.join("、")}）` : ""}${ignored ? `（${ignored} 个字段不在白名单，已忽略）` : ""}`,
         changed: ok > 0,
       };
     }
