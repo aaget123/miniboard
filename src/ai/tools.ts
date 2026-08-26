@@ -1206,26 +1206,37 @@ function drawFlowchart(board: Board, args: Record<string, unknown>): string {
  * 把冒烟测试得到的示例元素整体平移到画布内容区右下角，创建并返回 id 列表。
  * 生成器的 x/y 基于测试基准 (0,0)，平移后避免与已有内容重叠；供用户立即查看工具效果。
  */
+/** 试画示例的锚点与元素记忆：同一工具连续迭代时固定位置，便于前后对比 */
+const previewAnchors = new Map<string, { x: number; y: number }>();
+const previewElementIds = new Map<string, string[]>();
+
 function previewToolElements(
   board: Board,
   elements: ElementData[],
+  key?: string,
 ): { ids: string[]; x: number; y: number } {
-  const els = board.serialize();
+  const remembered = key ? previewAnchors.get(key) : undefined;
   let originX = 0;
   let originY = 0;
-  if (els.length) {
-    const maxX = Math.max(...els.map((e) => e.x + (e.width ?? 0)));
-    const maxY = Math.max(...els.map((e) => e.y + (e.height ?? 0)));
-    originX = maxX + 120;
-    originY = maxY + 120;
+  if (remembered) {
+    originX = remembered.x;
+    originY = remembered.y;
   } else {
-    // 空画布：放在视口中心附近（与 draw_flowchart 同基准）
-    const view = board.app.canvas.view as HTMLElement;
-    const w = board.app.width ?? view.clientWidth;
-    const h = board.app.height ?? view.clientHeight;
-    const inner = board.app.tree.getInnerPoint({ x: w / 2, y: h / 2 });
-    originX = inner.x - 100;
-    originY = inner.y - 60;
+    const els = board.serialize();
+    if (els.length) {
+      const maxX = Math.max(...els.map((e) => e.x + (e.width ?? 0)));
+      const maxY = Math.max(...els.map((e) => e.y + (e.height ?? 0)));
+      originX = maxX + 120;
+      originY = maxY + 120;
+    } else {
+      // 空画布：放在视口中心附近（与 draw_flowchart 同基准）
+      const view = board.app.canvas.view as HTMLElement;
+      const w = board.app.width ?? view.clientWidth;
+      const h = board.app.height ?? view.clientHeight;
+      const inner = board.app.tree.getInnerPoint({ x: w / 2, y: h / 2 });
+      originX = inner.x - 100;
+      originY = inner.y - 60;
+    }
   }
   const ids: string[] = [];
   for (const d of elements) {
@@ -1234,7 +1245,34 @@ function previewToolElements(
       ids.push(id);
     }
   }
+  if (key && ids.length) {
+    previewAnchors.set(key, { x: originX, y: originY });
+    previewElementIds.set(key, ids);
+  }
   return { ids, x: originX, y: originY };
+}
+
+/**
+ * 更新工具后的试画：先移除上一版示例（与本轮新增合并为一步撤销），
+ * 再在记忆锚点处放置新版示例——「再大一点」类迭代可原地对比。
+ */
+function refreshToolPreview(
+  board: Board,
+  key: string,
+  elements: ElementData[],
+): { ids: string[]; x: number; y: number } | null {
+  const prev = previewElementIds.get(key);
+  if (prev?.length) {
+    for (const id of prev) {
+      try {
+        board.findElementByAiId(id)?.destroy();
+      } catch {
+        // 示例已被用户删除/场景重建，跳过
+      }
+    }
+  }
+  const preview = previewToolElements(board, elements, key);
+  return preview.ids.length ? preview : null;
 }
 
 /** 执行工具调用，返回给模型的文本结果与是否修改了画布/功能区（add_tool/update_tool 含异步冒烟测试） */
@@ -1740,7 +1778,7 @@ export async function executeTool(
         // 试画预览：把验证通过的示例元素放到画布内容区右侧，用户可立即看到效果（可撤销）
         let previewText = "";
         try {
-          const preview = previewToolElements(board, smoke.elements);
+          const preview = previewToolElements(board, smoke.elements, toolDef.id);
           if (preview.ids.length) {
             previewText = `，并已在画布 (${Math.round(preview.x)}, ${Math.round(preview.y)}) 处试画 ${preview.ids.length} 个示例元素（id：${preview.ids.join("、")}），可直接查看效果，不需要可按 Delete 删除或 Ctrl+Z 撤销`;
           }
@@ -1798,6 +1836,7 @@ export async function executeTool(
         };
       }
       const patch = (args.patch ?? {}) as Partial<CustomToolInput>;
+      let smokeElements: ElementData[] | null = null;
       // 生成器变更时同样过冒烟测试（kind 随 patch 或原工具传递），未通过则不改动工具
       if (typeof patch.generator === "string") {
         const smoke = await registry.smokeTest(patch.generator, patch.kind ?? def.kind);
@@ -1809,14 +1848,24 @@ export async function executeTool(
             changed: false,
           };
         }
+        smokeElements = smoke.elements;
       }
       try {
         const updated = registry.updateCustom(id, patch);
         ctx.toolbar?.refresh();
+        // 生成器有变更：在记忆锚点处原地更新试画示例（旧示例一并移除，
+        // 与本轮其他改动合并为一步撤销），「再大一点」类迭代可原地对比
+        let previewText = "";
+        if (smokeElements) {
+          const preview = refreshToolPreview(board, id, smokeElements);
+          if (preview) {
+            previewText = `，并已在原试画位置 (${Math.round(preview.x)}, ${Math.round(preview.y)}) 更新 ${preview.ids.length} 个示例元素`;
+          }
+        }
         return {
           name: tool.name,
           args,
-          result: `已更新工具「${updated?.name}」（id=${id}）`,
+          result: `已更新工具「${updated?.name}」（id=${id}）${previewText}`,
           changed: true,
           tool: updated
             ? {

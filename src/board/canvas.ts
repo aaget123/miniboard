@@ -4570,6 +4570,11 @@ export class Board {
       .filter((d): d is ElementData => d !== null);
   }
 
+  /** 按稳定 id 查找画布元素（AI 工具执行器/试画清理用）；不存在返回 null */
+  findElementByAiId(id: string): UI | null {
+    return this.findByAiId(id);
+  }
+
   /** 按稳定 id 查找画布元素（AI 优化用） */
   private findByAiId(id: string): UI | null {
     const list = (this.app.tree.children ?? []) as UI[];
