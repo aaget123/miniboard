@@ -311,11 +311,6 @@ export class Board {
   private eraseTrail: { x: number; y: number }[] = [];
   /** 分段擦除快照：本手势已拆分的笔迹元素 → 原始点列（元素局部坐标） */
   private eraseSnap = new Map<UI, EraseSnap>();
-  // 选中框内拖动：点击点在选中元素包围盒内（而非元素本体）时手动移动整个选择
-  private selectDragging = false;
-  private dragStart = { x: 0, y: 0 };
-  private dragEls: { el: UI; x: number; y: number; lastPosX?: number; lastPosY?: number }[] = [];
-  private movedAny = false;
   /** Alt+拖拽复制（落点克隆）：手势内按住 Alt 拖动元素时快照，松手后在拖动前
    * 原位重建快照元素——移动中的元素即副本。约束开启的框架内禁用（Alt 在那里
    * 保留「出框豁免」语义，BACKLOG P0 决策）。 */
@@ -397,7 +392,9 @@ export class Board {
         strokeWidth: 1.5,
         pointSize: 7,
         pointRadius: 1,
-        lockRatio: true,
+        // 关闭等比锁定：抓边缩放时只改单轴，不会把元素等比放大到失控
+        // （此前 lockRatio 开启时，用户误抓框架边线会把框架“撑爆”）
+        lockRatio: false,
         // 拖动位移修正钩子：leafer 按“拖动起点 + pointer 总位移”计算移动，
         // MOVE 事件里直接改位置会被其 totalOffset 补偿抵消（“吸不住”），
         // 必须在移动前修正增量：网格吸附 + 约束框架夹紧。x/y 为 local 增量。
@@ -609,63 +606,74 @@ export class Board {
       }
       // 被移动元素：leafer 2.2.9 的 MOVE 事件 data 为 { target, editor, moveX,
       // moveY }，不含 operateEvent（历史写法导致 moved 恒为 undefined，框内
-      // 跟随/组联动/吸附/拖动夹紧全部失效）
+      // 跟随/组联动/吸附/拖动夹紧全部失效）。多选拖拽时 target 是编辑器内部
+      // 的 simulateTarget，归属同步/组联动/框架跟随必须作用到真实成员上
       const moved = (e as EditorMoveEvent).target as UI | undefined;
+      const movedReal =
+        moved && this.isEditorInternal(moved)
+          ? ((this.editor as unknown as { list?: UI[] }).list ?? []).filter(
+              (m) => m && !m.locked,
+            )
+          : moved
+            ? [moved]
+            : [];
+      if (!movedReal.length) {
+        return;
+      }
       // 组联动：同组未选中成员跟随本次位移（选中成员已由编辑器移动；
       // moveX/moveY 为 world 增量，缩放视图下位移一致；锁定成员不跟随）
-      const gid = moved ? (moved as unknown as { __groupId?: string }).__groupId : undefined;
-      if (moved && gid && (ev.moveX || ev.moveY)) {
-        for (const other of this.app.tree.children as UI[]) {
-          if (other === moved || other.locked) {
-            continue;
+      if (ev.moveX || ev.moveY) {
+        const gids = new Set<string>();
+        for (const m of movedReal) {
+          const g = (m as unknown as { __groupId?: string }).__groupId;
+          if (g) {
+            gids.add(g);
           }
-          if ((other as unknown as { __groupId?: string }).__groupId === gid) {
-            other.moveWorld(ev.moveX, ev.moveY);
-            this.normalizeContractEl(other);
+        }
+        if (gids.size) {
+          for (const other of this.app.tree.children as UI[]) {
+            if (other.locked || movedReal.includes(other)) {
+              continue;
+            }
+            const g = (other as unknown as { __groupId?: string }).__groupId;
+            if (g && gids.has(g)) {
+              other.moveWorld(ev.moveX, ev.moveY);
+              this.normalizeContractEl(other);
+            }
           }
         }
       }
       // frame 框架移动：归属于该框架的内容元素（frameId 显式归属，不再靠
       // bbox 包含猜测）跟随位移——纯增量同步，无时序问题
-      if (moved && isFrameEl(moved) && (ev.moveX || ev.moveY)) {
-        this.moveFrameContents(moved, ev.moveX, ev.moveY);
+      if (ev.moveX || ev.moveY) {
+        for (const m of movedReal) {
+          if (isFrameEl(m)) {
+            this.moveFrameContents(m, ev.moveX, ev.moveY);
+          }
+        }
       }
       // 契约元素（line/arrow/path）拖动时 leafer 改 x/y，但拖动中立即归零会
       // 破坏 leafer 的增量计算（getValidMove 按“拖起点位置 - 当前位置”求增量，
       // 归零后增量退化为累计总位移，元素被反复叠加放大、越拖越飞），
       // 改为拖动结束时统一并入 points/path 并归零
-      if (moved) {
-        this.moveNormalizeEls.add(moved);
+      for (const m of movedReal) {
+        this.moveNormalizeEls.add(m);
       }
       // 内容归属同步：框架内容被拖出所属框架（中心点出框）即解除归属，
       // 变回自由元素（夹紧生效时中心保持在框内，不会误触发）；
       // 未归属元素拖入某框架（完全包含）时补挂归属，此后随框架移动/缩放联动
-      if (moved && !isFrameEl(moved)) {
-        const fid = this.frameIdOf(moved);
-        if (!fid) {
-          const frame = this.frameContaining(moved);
-          if (frame) {
-            this.setFrameId(moved, this.aiIdOf(frame));
-          }
-        } else {
-          const frame = this.frameById(fid);
-          const fb = frame?.worldBoxBounds;
-          const eb = moved.worldBoxBounds;
-          if (!fb || !eb) {
-            this.setFrameId(moved, undefined);
-          } else {
-            const cx = eb.x + eb.width / 2;
-            const cy = eb.y + eb.height / 2;
-            if (cx < fb.x || cx > fb.x + fb.width || cy < fb.y || cy > fb.y + fb.height) {
-              this.setFrameId(moved, undefined);
-            }
-          }
-        }
+      for (const m of movedReal) {
+        this.syncMoverAdoption(m);
       }
-      // 移动元素后刷新绑定箭头端点（被绑元素移动时端点跟随）
-      this.updateBindings(moved);
+      // 移动元素后刷新绑定箭头端点（被绑元素移动时端点跟随；
+      // 多选拖拽 target 是模拟层，改为全量刷新）
+      if (movedReal.length > 1) {
+        this.updateBindings();
+      } else {
+        this.updateBindings(movedReal[0]);
+      }
       // 落框预判高亮（移动集合的联合 bbox 完全落入某框架时）
-      this.updateDropHighlight((this.editor as unknown as { list?: UI[] }).list ?? []);
+      this.updateDropHighlight(movedReal);
       this.scheduleHistory();
     });
     // 框架旋转：归属于该框架的内容元素绕旋转中心同步旋转（内容跟随框架，
@@ -702,6 +710,19 @@ export class Board {
     });
     // 选中变化（选中/多选/取消）：左侧浮动工具栏显隐依赖此事件
     this.editor.on(EditorEvent.AFTER_SELECT, () => this.emitSelectionInfo());
+    // 选择被清空（editor.cancel / target=undefined）后，编辑框矩形仍是可命中的
+    // （leafer unload 不重置 hittable）——下一手势的拖拽检测落在其上会让
+    // EditBox.onTransformStart 读空列表的 editor.element（undefined）抛
+    // TypeError，交互管线随之冻结（“画板无法操作”根因）。统一在此收口：
+    // 列表为空即禁命中，下次 load() 会自动恢复
+    this.editor.on(EditorEvent.SELECT, () => {
+      if (!this.editor.list.length) {
+        const rect = this.editor.editBox?.rect as unknown as { hittable?: boolean } | undefined;
+        if (rect) {
+          rect.hittable = false;
+        }
+      }
+    });
     // 文本内联编辑关闭：空文本即删；内容变化才入历史（对齐 fabric object:modified 时机）
     this.editor.on(InnerEditorEvent.CLOSE, (e) => this.onInnerEditorClose(e));
     // 框架缩放手势结束：清空内容快照（拖拽/触摸捻合两种手势的结束事件；
@@ -725,11 +746,11 @@ export class Board {
         this.moveNormalizeEls.clear();
         this.scheduleHistory();
       }
-      // Alt+拖拽复制收尾（落点克隆）：编辑器拖动路径在此还原快照；手动拖动
-      // （selectDragging）路径由 onUp 提交，此处跳过避免双提交
-      if (!this.selectDragging) {
-        this.commitAltCopy();
-      }
+      // 内容归属兜底：拖动结束 bounds 已定型，补挂/解除归属
+      // （编辑器多选模拟层平移期间的世界包围盒可能滞后导致判定失败）
+      this.syncMoversAdoption((this.editor as unknown as { list?: UI[] }).list ?? []);
+      // Alt+拖拽复制收尾（落点克隆）：拖动结束统一在此还原快照
+      this.commitAltCopy();
       // 落框高亮手势收尾清空；对齐吸附候选缓存与迟滞锁一并失效
       this.clearDropHighlight();
       this.alignCandidates = null;
@@ -886,8 +907,6 @@ export class Board {
     // 切换工具时终止未完成的拖拽/框选/擦除，并同步光标
     this.panning = false;
     this.erasing = false;
-    this.selectDragging = false;
-    this.dragEls = [];
     if (this.selecting) {
       this.selecting = false;
       this.draft?.remove();
@@ -1299,14 +1318,15 @@ export class Board {
       if (this.hitEditBox(e.x ?? 0, e.y ?? 0)) {
         return;
       }
-      // 未命中元素本体：点击点落在选中元素包围盒内时，
-      // 手动拖动整个选择（覆盖选中框内空白区域）
-      if (this.editor.list.length && this.pointInSelection(e.x ?? 0, e.y ?? 0)) {
+      // 未命中元素本体：点击点落在选中元素包围盒内时，视为选区内的按下——
+      // 一律短路，不取消选择（多选空隙被清空会让编辑器 simulateTarget
+      // 拖拽读到空列表而崩溃、冻结画布）。拖动本身交给编辑器：单选由编辑框
+      // 矩形（move 点）承接，多选由 simulateTarget 承接，此处不再手动处理
+      if (this.pointInSelection(e.x ?? 0, e.y ?? 0)) {
         // 修饰键点击包围盒内空白：保持选择不变（连续选取中误点空白不丢失已选内容）
         if (e.ctrlKey || e.metaKey || e.shiftKey) {
           return;
         }
-        this.beginDragSelection(px, py);
         return;
       }
       // 修饰键点击空白：保持当前选择（连续多选过程中误点空白不取消全部）
@@ -1512,51 +1532,6 @@ export class Board {
     if (this.tool === "eraser") {
       this.updateErasePreview(e.x ?? 0, e.y ?? 0);
     }
-    // 选中框内拖动：整个选择跟随指针位移
-    if (this.selectDragging) {
-      const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
-      const dx = p.x - this.dragStart.x;
-      const dy = p.y - this.dragStart.y;
-      // Alt+拖拽复制挂靠（手动拖动管线）：应用本帧位移前以 dragEls 为移动单元
-      // 快照（组感知已含于 dragEls）
-      if (!this.altCopySnap && !this.altCopyBlocked && this.modKeys.alt) {
-        const movers = this.dragEls.map((i) => i.el);
-        if (!movers.length || !this.tryLatchAltCopy(movers)) {
-          this.altCopyBlocked = true;
-        }
-      }
-      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-        this.movedAny = true;
-        if (this.altCopySnap) {
-          this.altCopyMoved = true;
-        }
-      }
-      for (const item of this.dragEls) {
-        item.el.x = this.snapGrid(item.x + dx);
-        item.el.y = this.snapGrid(item.y + dy);
-        // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
-        this.normalizeContractEl(item.el);
-        // frame 框架拖动：框内元素（frameId 归属）跟随位移。
-        // 框架本体按吸附后的绝对位置设置，内容必须按「上一帧实际位置」的
-        // 差值增量移动——直接透传相对手势起点的总位移会每帧累计叠加，
-        // 网格吸附开启时按未吸附差值传递也会累积量化漂移
-        if (isFrameEl(item.el)) {
-          const curX = item.el.x ?? 0;
-          const curY = item.el.y ?? 0;
-          const stepX = curX - (item.lastPosX ?? curX);
-          const stepY = curY - (item.lastPosY ?? curY);
-          if (stepX || stepY) {
-            this.moveFrameContents(item.el, stepX, stepY);
-          }
-          item.lastPosX = curX;
-          item.lastPosY = curY;
-        }
-      }
-      // 落框预判高亮（手动拖动管线与编辑器拖动同语义）
-      this.updateDropHighlight(this.dragEls.map((i) => i.el));
-      this.scheduleHistory();
-      return;
-    }
     // 点编辑拖点：指针跟随（Shift 锁 45° 角；端点靠近形状时吸附绑定）
     if (this.draggingPoint !== null && this.pointEditEl) {
       this.movePointTo(this.draggingPoint, { x: e.x ?? 0, y: e.y ?? 0 }, e.shiftKey);
@@ -1676,20 +1651,6 @@ export class Board {
     }
     // 裁剪框调整结束：松手即应用裁剪（canvas 2D 裁出新图）
     if (this.cropCtrl.handleUp()) {
-      return;
-    }
-    // 选中框内拖动结束：实际移动过才入历史
-    if (this.selectDragging) {
-      this.selectDragging = false;
-      this.dragEls = [];
-      if (this.movedAny) {
-        // Alt+拖拽复制收尾（手动拖动路径的落点克隆），与位移并入同一步历史
-        this.commitAltCopy();
-        this.commitHistory();
-      } else {
-        this.commitAltCopy(); // 未移动：内部按空操作清理挂靠状态
-      }
-      this.clearDropHighlight();
       return;
     }
     // 框选/套索结束：结算选中
@@ -2023,6 +1984,45 @@ export class Board {
       t.__bindEnd = this.aiIdOf(best);
     }
     return el.getLocalPoint(anchor);
+  }
+
+  /** 内容归属同步（单个元素）：拖出所属框架（中心出框）解除归属；
+   * 未归属元素完全落入某框架时补挂归属。拖动中调用时 bounds 可能滞后
+   * （多选模拟层平移异步刷新），结束兜底再跑一次 */
+  private syncMoverAdoption(m: UI) {
+    if (isFrameEl(m)) {
+      return;
+    }
+    const fid = this.frameIdOf(m);
+    if (!fid) {
+      const frame = this.frameContaining(m);
+      if (frame) {
+        this.setFrameId(m, this.aiIdOf(frame));
+      }
+      return;
+    }
+    const frame = this.frameById(fid);
+    const fb = frame?.worldBoxBounds;
+    const eb = m.worldBoxBounds;
+    if (!fb || !eb) {
+      this.setFrameId(m, undefined);
+      return;
+    }
+    const cx = eb.x + eb.width / 2;
+    const cy = eb.y + eb.height / 2;
+    if (cx < fb.x || cx > fb.x + fb.width || cy < fb.y || cy > fb.y + fb.height) {
+      this.setFrameId(m, undefined);
+    }
+  }
+
+  /** 内容归属同步（移动集合）：拖动结束兜底（bounds 已定型），
+   * 覆盖编辑器多选模拟层平移期间判定滞后的情况 */
+  private syncMoversAdoption(list: UI[]) {
+    for (const m of list) {
+      if (m && !m.locked) {
+        this.syncMoverAdoption(m);
+      }
+    }
   }
 
   /**
@@ -2815,13 +2815,31 @@ export class Board {
 
   /** app 坐标点是否落在任一选中元素的包围盒内 */
   private pointInSelection(ax: number, ay: number): boolean {
+    // 联合包围盒判定：多选元素之间的空隙也属于选区（此前逐元素判定会让
+    // 空隙按下把选择清空——空列表下编辑器的 simulateTarget 拖拽会崩溃，
+    // 进而冻结整个画布）
+    let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
     for (const el of this.selectedList) {
       const b = el.worldBoxBounds;
-      if (b && ax >= b.x && ax <= b.x + b.width && ay >= b.y && ay <= b.y + b.height) {
-        return true;
+      if (!b) {
+        continue;
       }
+      box = box
+        ? {
+            minX: Math.min(box.minX, b.x),
+            minY: Math.min(box.minY, b.y),
+            maxX: Math.max(box.maxX, b.x + b.width),
+            maxY: Math.max(box.maxY, b.y + b.height),
+          }
+        : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
     }
-    return false;
+    return (
+      box !== null &&
+      ax >= box.minX &&
+      ax <= box.maxX &&
+      ay >= box.minY &&
+      ay <= box.maxY
+    );
   }
 
   /**
@@ -2842,13 +2860,18 @@ export class Board {
     if (!eb) {
       return false;
     }
-    // 缩放手柄 / 旋转手柄 / 边线手柄：世界包围盒 + 容差
+    // 缩放手柄 / 旋转手柄 / 边线手柄：世界包围盒 + 容差。
+    // 跳过不可见手柄（visible=0/false）：禁用的手柄（如框架的 resizeable:false）
+    // 只是隐藏，编辑器侧不再响应，若此处仍让路会形成“抓边无反应”的死区
     const points = [
       ...(eb.resizePoints ?? []),
       ...(eb.rotatePoints ?? []),
       ...(eb.resizeLines ?? []),
     ];
     for (const p of points) {
+      if (!(p as unknown as { visible?: unknown }).visible) {
+        continue;
+      }
       const b = p.worldBoxBounds;
       if (
         b &&
@@ -2872,24 +2895,9 @@ export class Board {
     return false;
   }
 
-  /** 开始手动拖动整个选择（tree 局部坐标；组感知：选中含组成员时整组跟随，锁定元素不参与） */
-  private beginDragSelection(tx: number, ty: number) {
-    this.selectDragging = true;
-    this.dragStart = { x: tx, y: ty };
-    this.dragEls = this.groupExpandedSelection()
-      .filter((el) => !el.locked)
-      .map((el) => ({ el, x: el.x ?? 0, y: el.y ?? 0 }));
-    this.movedAny = false;
-  }
-
-  /** 选中集合的组感知展开：选中含组成员时返回整组（拖拽联动用），否则原样返回 */
-  private groupExpandedSelection(): UI[] {
-    return this.groupExpanded(this.selectedList);
-  }
-
   /**
    * 组感知展开：列表含组成员时返回整组成员并集（保持传入成员在内），
-   * 供选中拖动与 Alt+拖拽复制的移动单元计算共用。
+   * 供 Alt+拖拽复制的移动单元计算共用。
    */
   private groupExpanded(list: UI[]): UI[] {
     const gids = new Set(
@@ -3629,6 +3637,9 @@ export class Board {
     if (el.fill === undefined || el.fill === "none") {
       el.fill = FRAME_DEFAULT_FILL;
     }
+    // 抓边=移动（见 dataToElementInner 的说明）；转换后的矩形同样生效
+    (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } })
+      .editConfig = { resizeable: false, rotateable: false };
     // 转换前已画在框内的元素补挂归属（此前只有绘制/导入时才会自动归属）
     const fid = this.aiIdOf(el);
     for (const other of this.app.tree.children as UI[]) {
@@ -5448,6 +5459,12 @@ export class Board {
         meta.__frameAutoSize = d.autoSize;
         meta.__frameConstrain = d.constrain;
         meta.__frameCollapsed = d.collapsed;
+        // 框架的抓取心智：内容常占满内部，边线/角点是最自然的抓取处——
+        // 禁用手柄缩放与旋转（抓边/抓角 = 移动框架；leafer 在手柄不可缩放时
+        // 会把 resize 点当旋转用，形成“抓边无反应”的死区，一并关闭）；
+        // 尺寸调整交给内容 autoSize 或转回矩形
+        (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } })
+          .editConfig = { resizeable: false, rotateable: false };
         return el;
       }
       case "ellipse": {
