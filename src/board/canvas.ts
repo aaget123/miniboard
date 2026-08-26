@@ -70,6 +70,7 @@ import {
   isFreehandEl,
   isSketchableEl,
   numOf,
+  parseHexColor,
   pointsOf,
   toLeaferArrow,
   typeOf,
@@ -5288,9 +5289,17 @@ export class Board {
     state.resolve(hex);
   }
 
-  /** 采样 app 坐标处的画布像素 → #rrggbb；画布污染/不可读时返回 null */
+  /**
+   * 采样 app 坐标处的渲染像素 → #rrggbb；画布不可读（污染）返回 null。
+   * 注意：多层 App 的自身 view 是 div 容器（unrealCanvas），元素像素在
+   * tree 层自己的画布上；tree 画布空区域为透明，需与画布背景色合成。
+   */
   private samplePixelAt(ax: number, ay: number): string | null {
-    const view = this.app.canvas.view as HTMLCanvasElement;
+    const view = (this.app.tree as unknown as { canvas?: { view?: HTMLCanvasElement } })
+      .canvas?.view;
+    if (!(view instanceof HTMLCanvasElement)) {
+      return null;
+    }
     try {
       const ctx = view.getContext("2d");
       if (!ctx || !view.width || !view.height) {
@@ -5300,8 +5309,18 @@ export class Board {
       const sx = view.width / Math.max(rect.width, 1);
       const sy = view.height / Math.max(rect.height, 1);
       const d = ctx.getImageData(Math.round(ax * sx), Math.round(ay * sy), 1, 1).data;
+      // alpha 合成到画布背景色（透明像素 = 背景本身）
+      const al = d[3] / 255;
+      if (al <= 0) {
+        return this.background;
+      }
+      const bg = parseHexColor(this.background);
       const h = (n: number) => n.toString(16).padStart(2, "0");
-      return `#${h(d[0])}${h(d[1])}${h(d[2])}`;
+      const mix = (fg: number, base: number) => Math.round(fg * al + base * (1 - al));
+      if (!bg) {
+        return `#${h(d[0])}${h(d[1])}${h(d[2])}`;
+      }
+      return `#${h(mix(d[0], bg[0]))}${h(mix(d[1], bg[1]))}${h(mix(d[2], bg[2]))}`;
     } catch {
       // 画布被跨域图片污染等场景：getImageData 抛错
       return null;
