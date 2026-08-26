@@ -19,6 +19,8 @@
 
 - **正交路由升级**：当前为单拐点 L 形；避障绕行（多段 Z/门形）与多连线
   分层间距可作为增强方向
+- **智能对齐参考线**：P1 已落地但按用户反馈调整为「吸附保留、参考线显示
+  移除」（迟滞防抖机制仍在）；如需恢复视觉参考线可作为小开关再加回
 - **tools.ts 继续拆分**：schemas 已拆出 ai/tool-schemas.ts、perception 纯函数
   已拆出 ai/perception.ts；执行器（executeTool 各 case）仍约 900 行，
   可按 create/update/arrange/beautify 再切

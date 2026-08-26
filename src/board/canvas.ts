@@ -104,11 +104,11 @@ const MARQUEE_STROKE = "#4f8cff";
 const POINT_HANDLE_SIZE = 10;
 // 端点吸附绑定的屏幕距离（px，缩放后世界距离换算保证手感恒定）
 const SNAP_BIND_PX = 10;
-// 智能对齐吸附的屏幕距离阈值（px）与参考线颜色（画在 sky 层）
+// 智能对齐吸附的屏幕距离阈值（px）；已锁定吸附线的迟滞退出阈值（> 进入阈值）
 const ALIGN_SNAP_PX = 6;
-// 已锁定吸附线的迟滞退出阈值（> 进入阈值，避免阈值边界反复命中/丢失导致参考线闪烁）
 const ALIGN_HYST_PX = 18;
-const ALIGN_GUIDE_STROKE = "#f24aa0";
+// 落框高亮覆盖框的颜色（sky 层）
+const DROP_HIGHLIGHT_STROKE = "#f24aa0";
 // 框架名称标签：字号 / 与框架上沿的间距 / 颜色（子级 Text，hit:false 点击穿透）
 const FRAME_NAME_LABEL_SIZE = 11;
 const FRAME_NAME_LABEL_GAP = 5;
@@ -364,10 +364,9 @@ export class Board {
   private autoBackToSelect = true;
   /** 画布感知版本：内容变更点自增（AI 增量感知缓存命中判定用） */
   private perceptionVersionN = 0;
-  // 智能对齐参考线（单选拖动）：候选边每手势收集一次，参考线画在 sky 层
+  // 智能对齐吸附（单选拖动）：候选边每手势收集一次；已锁定的吸附线在迟滞
+  // 期内只认锁定线，防阈值边界抖动（吸附生效但不显示参考线）
   private alignCandidates: { xs: number[]; ys: number[] } | null = null;
-  private alignGuides: UI[] = [];
-  // 已锁定的吸附线（世界坐标）：迟滞期内只认锁定线，防阈值边界抖动
   private alignLockX: number | null = null;
   private alignLockY: number | null = null;
   // 落框高亮：拖动中联合 bbox 完全落入某框架时，sky 层画高亮框预判归属
@@ -446,13 +445,8 @@ export class Board {
                 const lp = t.getLocalPoint({ x: aw.x + wd.x, y: aw.y + wd.y });
                 nx = lp.x - (t.x ?? 0);
                 ny = lp.y - (t.y ?? 0);
-                this.showAlignGuides(hitX?.line, hitY?.line);
-              } else {
-                this.clearAlignGuides();
               }
             }
-          } else if (this.alignGuides.length) {
-            this.clearAlignGuides();
           }
           // 约束框架夹紧：非框架元素与 constrain 框架重叠率达标时，期望位置整体
           // 夹回框架（Alt 按住豁免拖出；修正发生在移动前，编辑器按修正值
@@ -736,8 +730,7 @@ export class Board {
       if (!this.selectDragging) {
         this.commitAltCopy();
       }
-      // 对齐参考线与落框高亮手势收尾清空（候选缓存与迟滞锁一并失效）
-      this.clearAlignGuides();
+      // 落框高亮手势收尾清空；对齐吸附候选缓存与迟滞锁一并失效
       this.clearDropHighlight();
       this.alignCandidates = null;
       this.alignLockX = null;
@@ -1160,11 +1153,10 @@ export class Board {
     this.altCopySnap = null;
     this.altCopyBlocked = false;
     this.altCopyMoved = false;
-    // 新手势：对齐候选重新收集，参考线与落框高亮清空（吸附迟滞锁一并重置）
+    // 新手势：对齐候选重新收集、迟滞锁重置；落框高亮清空
     this.alignCandidates = null;
     this.alignLockX = null;
     this.alignLockY = null;
-    this.clearAlignGuides();
     this.clearDropHighlight();
     // 取色模式下右键 = 取消
     if (e.right && this.pickState) {
@@ -5730,55 +5722,12 @@ export class Board {
     return hit;
   }
 
-  /** 在 sky 层画对齐参考线（竖/横各一条；sky 不随缩放变化，线宽恒定） */
-  private showAlignGuides(vx?: number, hy?: number) {
-    this.clearAlignGuides();
-    const view = this.app.canvas.view as HTMLElement;
-    const w = this.app.width ?? view.clientWidth;
-    const h = this.app.height ?? view.clientHeight;
-    if (vx !== undefined) {
-      const v = new Line({
-        points: [
-          { x: vx, y: 0 },
-          { x: vx, y: h },
-        ],
-        stroke: ALIGN_GUIDE_STROKE,
-        strokeWidth: 1,
-      });
-      this.alignGuides.push(v);
-      this.app.sky.add(v);
-    }
-    if (hy !== undefined) {
-      const g = new Line({
-        points: [
-          { x: 0, y: hy },
-          { x: w, y: hy },
-        ],
-        stroke: ALIGN_GUIDE_STROKE,
-        strokeWidth: 1,
-      });
-      this.alignGuides.push(g);
-      this.app.sky.add(g);
-    }
-  }
-
-  /** 清除对齐参考线（手势结束 / 无命中时调用；候选缓存与锁定随手势独立管理） */
-  private clearAlignGuides() {
-    if (!this.alignGuides.length) {
-      return;
-    }
-    for (const g of this.alignGuides) {
-      g.remove();
-    }
-    this.alignGuides = [];
-  }
-
   // ================= 落框高亮 =================
 
   /**
    * 拖动中落框预判：移动集合（编辑器选中或手动拖动列表）的联合 bbox 完全
-   * 落入某框架（含描边容差，与 adoptIntoFrame 同语义）时，临时高亮该框架
-   * 描边——嵌套时取面积最小者。无命中/集合为空即还原。
+   * 落入某框架（含描边容差，与 adoptIntoFrame 同语义）时，sky 层高亮该
+   * 框架——嵌套时取面积最小者。无命中/集合为空即还原。
    */
   private updateDropHighlight(movers: UI[]) {
     const units = movers.filter((m) => m && !m.locked);
@@ -5848,7 +5797,7 @@ export class Board {
       y: b.y - 3,
       width: b.width + 6,
       height: b.height + 6,
-      stroke: ALIGN_GUIDE_STROKE,
+      stroke: DROP_HIGHLIGHT_STROKE,
       strokeWidth: 2.5,
       fill: "rgba(242, 74, 160, 0.05)",
       dashPattern: undefined,
