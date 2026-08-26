@@ -550,6 +550,12 @@ export class Board {
       },
       findTargetAt: (ax, ay, exclude) => this.hitTest({ x: ax, y: ay }, 5, exclude),
       aiIdOf: (el) => this.aiIdOf(el),
+      onAnchorDown: () => {
+        // 锚点按下阻断传播后执行：先取消编辑器选择与点编辑（拖出期间
+        // 选择保持为空，避免编辑框遮住落点判定）
+        this.editor.cancel();
+        this.exitPointEdit();
+      },
       createArrow: (sourceId, targetId, endWorld, prefer) =>
         this.createBoundArrow(sourceId, targetId, endWorld, prefer),
     });

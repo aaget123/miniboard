@@ -1,4 +1,4 @@
-import { Line, Rect } from "leafer-ui";
+import { Line, PointerEvent, Rect } from "leafer-ui";
 import type { App, UI } from "leafer-ui";
 
 /**
@@ -27,6 +27,8 @@ export type ConnectorDeps = {
   findTargetAt: (ax: number, ay: number, exclude: UI) => UI | null;
   /** 元素稳定 id */
   aiIdOf: (el: UI) => string;
+  /** 锚点按下（阻断传播后）：取消编辑器选择/点编辑，进入拖出前的清理 */
+  onAnchorDown: () => void;
   /** 创建箭头：targetId 为空表示落到空白（普通箭头），否则建 route 绑定连线 */
   createArrow: (
     sourceId: string,
@@ -44,6 +46,8 @@ export class ConnectorController {
   private draft: Line | null = null;
   private activeSide: Side | null = null;
   private lastKey = "";
+  /** 拖出起点（app 坐标）：松手距离 < 4px 视为点击，不产生退化箭头 */
+  private dragStartPt: Pt | null = null;
 
   constructor(private readonly deps: ConnectorDeps) {}
 
@@ -57,6 +61,10 @@ export class ConnectorController {
    * 状态未变化时跳过重建，可高频安全调用。
    */
   refresh() {
+    // 拖出进行中：选择变化（如 onAnchorDown 的 editor.cancel）不得打断
+    if (this.draft) {
+      return;
+    }
     const list = this.deps.allowed() ? this.deps.selectedList() : [];
     const el = list.length === 1 && this.deps.isConnectable(list[0]) ? list[0] : null;
     if (!el) {
@@ -89,6 +97,19 @@ export class ConnectorController {
         strokeWidth: 1.2,
       });
       (dot as unknown as Record<string, unknown>).__side = side;
+      // 关键：锚点是 sky 层元素，点击会被 leafer 编辑器自己的监听判定为
+      // 「点击空白」而清除选择（随后 AFTER_SELECT 触发 refresh 把锚点删掉，
+      // 冒泡到 app 的 onDown 再命中就扑空）。在锚点自身阻断传播并启动拖出，
+      // 编辑器与 app 都看不到这次 DOWN——选择保持、拖出正常建立
+      dot.on(PointerEvent.DOWN, (e) => {
+        e.stop();
+        // 先建草稿（捕获 source），再清理编辑器状态——清理触发的
+        // refresh 已被上面的 dragging 短路跳过
+        if (!this.beginDrag(side)) {
+          return;
+        }
+        this.deps.onAnchorDown();
+      });
       this.anchors.push(dot);
       this.deps.app.sky.add(dot);
     }
@@ -102,6 +123,7 @@ export class ConnectorController {
     this.anchors = [];
     this.source = null;
     this.lastKey = "";
+    this.dragStartPt = null;
     if (this.draft) {
       this.draft.remove();
       this.draft = null;
@@ -126,7 +148,7 @@ export class ConnectorController {
     return null;
   }
 
-  /** 从指定边锚点开始拖出：创建 sky 层临时连线 */
+  /** 从指定边锚点开始拖出：创建 sky 层临时连线并记录起点（点击防退化用） */
   beginDrag(side: Side): boolean {
     const src = this.source;
     const b = src?.worldBoxBounds;
@@ -135,6 +157,7 @@ export class ConnectorController {
     }
     this.activeSide = side;
     const start = anchorPositions(b)[side];
+    this.dragStartPt = { ...start };
     this.draft = new Line({
       points: [{ ...start }, { ...start }],
       stroke: CONNECTOR_STROKE,
@@ -156,7 +179,8 @@ export class ConnectorController {
   }
 
   /**
-   * 松手：命中目标元素 → 创建 route 绑定箭头；落在空白 → 创建普通箭头。
+   * 松手：实际拖动（≥4px）才创建箭头——命中目标元素 → route 绑定箭头，
+   * 落在空白 → 普通箭头；点击锚点无位移则忽略。
    * 返回是否处理了本次抬起（处于拖出状态）。
    */
   finishDrag(ax: number, ay: number): boolean {
@@ -165,7 +189,13 @@ export class ConnectorController {
     }
     const src = this.source;
     const side = this.activeSide ?? "e";
+    const start = this.dragStartPt;
     this.cancel();
+    // 点击而非拖拽（位移 <4px）：不产生退化箭头
+    if (!start || Math.hypot(ax - start.x, ay - start.y) < 4) {
+      this.refresh();
+      return true;
+    }
     const target = this.deps.findTargetAt(ax, ay, src);
     this.deps.createArrow(
       this.deps.aiIdOf(src),
