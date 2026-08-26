@@ -14,15 +14,13 @@
 
 ## P1 · 大型独立项目（每项 1~3 天，单独开分支）
 
+已落地四项（增量画布感知 / 智能对齐参考线 / 框架名称标签 / 落框高亮，详见 CHANGELOG）。剩余：
+
 | 项目 | 设计要点 |
 | --- | --- |
-| **增量画布感知** | Board 维护 `perceptionVersion++`（commitHistory 时自增）；describeCanvas 缓存上次输出 + 版本号，版本一致返回「无变化」摘要；不一致时 diff 元素集合（id → type/x/y 指纹）只输出变更集。预计节省长对话 50%+ token |
-| **智能对齐参考线** | 拖动单元素时收集其余元素的中心线/边缘线候选，阈值吸附并画 sky 层参考线；复用 bounds.ts 包围盒。注意 page/world 基准统一（见 ARCHITECTURE.md） |
-| **框架名称标签** | name 字段已持久化未渲染：Box 外挂左上角 Text 子级（随折叠隐藏），点击标签=选中整框；注意标签不可进入序列化 children |
-| **落框高亮** | 拖动中计算联合 bbox 与各框架的包含关系，满足归属条件时框架描边临时高亮；DragEvent.END 清理 |
 | **正交折线连接线** | line 增加 route 类型（L 形路径点集），端点绑定复用 bindStart/bindEnd；重算时机跟随节点移动 |
 | **连接器模式** | 选中节点→边缘锚点拖出→落到目标节点自动建绑定箭头（已有端点绑定基础） |
-| **AI 增强三件套** | ask_user 澄清工具（中断循环等待用户结构化回答）；draw_flowchart 方向/间距参数；tools.ts 拆 perception/schemas/executors |
+| **AI 增强三件套** | ask_user 澄清工具（中断循环等待用户结构化回答）；draw_flowchart 方向/间距参数；tools.ts 拆 perception/schemas/executors（perception 已部分拆出 ai/perception.ts） |
 
 ## P2 · 小尾巴（各项 ≤ 半天）
 
