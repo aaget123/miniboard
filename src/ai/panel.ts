@@ -12,6 +12,7 @@ import {
   toolsForMode,
 } from "./tools";
 import { iconHTML } from "../ui/icons";
+import { showConfirm } from "../ui/confirm";
 import type { ElementData } from "../types";
 import type { AiContentPart, AiMode, AiToolExecution, ChatMessage } from "./types";
 import { LS_CHAT_PREFIX, sanitizeForStorage, textOf } from "./history";
@@ -932,22 +933,28 @@ export class AiPanel {
             } catch {
               // 参数解析失败按 0 处理，交由执行器返回具体错误
             }
-            if (
-              affected > BATCH_CONFIRM_THRESHOLD &&
-              !window.confirm(`该操作将影响 ${affected} 个元素，确认执行？`)
-            ) {
-              this.pushHistory({
-                role: "tool",
-                tool_call_id: call.id,
-                content: "用户取消了该批量操作",
+            if (affected > BATCH_CONFIRM_THRESHOLD) {
+              // 应用内弹窗替代 window.confirm：同步对话框在不支持的 WebView
+              // 中静默返回 false，会让确认闸门变成"一律拒绝"
+              const ok = await showConfirm({
+                title: "批量操作确认",
+                message: `该操作将影响 ${affected} 个元素，确认执行？`,
+                confirmLabel: "执行",
               });
-              this.renderToolReceipt({
-                name: call.function.name,
-                args: {},
-                result: "用户取消了该批量操作",
-                changed: false,
-              });
-              continue;
+              if (!ok) {
+                this.pushHistory({
+                  role: "tool",
+                  tool_call_id: call.id,
+                  content: "用户取消了该批量操作",
+                });
+                this.renderToolReceipt({
+                  name: call.function.name,
+                  args: {},
+                  result: "用户取消了该批量操作",
+                  changed: false,
+                });
+                continue;
+              }
             }
           }
           const exec = tool

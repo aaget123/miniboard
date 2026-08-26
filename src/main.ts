@@ -18,6 +18,7 @@ import {
 import type { ThemePref } from "./ui/settings";
 import { ProjectDialog } from "./ui/projects";
 import { ExportDialog } from "./ui/exportdialog";
+import { showConfirm } from "./ui/confirm";
 import { CommandPalette, showShortcutHelp, getShortcutHelpRows } from "./ui/palette";
 import { ShortcutManager, comboFromEvent, formatCombo } from "./ui/shortcuts";
 import { StatusBar } from "./ui/statusbar";
@@ -614,10 +615,18 @@ async function main() {
       toast("画布本来就是空的");
       return;
     }
-    if (window.confirm("确定清空画布？此操作可撤销。")) {
-      board.clearAll();
-      toast("已清空画布");
-    }
+    // 应用内弹窗替代 window.confirm：Tauri WKWebView 等环境不支持同步对话框
+    void showConfirm({
+      title: "清空画布",
+      message: "确定清空画布？此操作可撤销。",
+      confirmLabel: "清空",
+      danger: true,
+    }).then((ok) => {
+      if (ok) {
+        board.clearAll();
+        toast("已清空画布");
+      }
+    });
   };
 
   // ---- 右侧圆形悬浮栏（常驻可拖拽）：文件/AI/清空 ----

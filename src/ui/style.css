@@ -1306,6 +1306,19 @@ body.theme-light #statusbar.docked {
   font-weight: 600;
 }
 
+/* 应用内确认弹窗（window.confirm 替代品，见 ui/confirm.ts） */
+.confirm-modal .confirm-message {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--fg);
+}
+
+.confirm-btn-danger {
+  background: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
 /* AI 设置弹窗：多模态开关、测试连接、模型列表 */
 .ai-modal-row {
   display: flex;
