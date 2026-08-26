@@ -249,7 +249,62 @@ export type ConnectionTestResult = {
   models: string[];
   /** 展示用消息 */
   message: string;
+  /** 是否支持工具调用（function calling）；不支持时编辑模式不可用 */
+  tools: boolean;
 };
+
+/**
+ * 工具调用能力探测：发一次携带假工具的最小请求。
+ * - 正常响应（任何形状）→ 支持工具调用；
+ * - HTTP 400 且报文提及 tool/function → 不支持；
+ * - 其他失败（网络/鉴权等）→ 无法判定，按支持处理（交由主流程报错）。
+ */
+async function probeToolCalling(cfg: AiConfig): Promise<boolean> {
+  try {
+    const resp = await fetchWithTimeout(
+      chatURL(cfg.baseURL),
+      {
+        method: "POST",
+        headers: headers(cfg),
+        body: JSON.stringify({
+          model: cfg.model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+          stream: false,
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "__capability_probe",
+                description: "capability probe",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+        }),
+      },
+      undefined,
+      PROBE_TIMEOUT,
+    );
+    if (resp.ok) {
+      return true;
+    }
+    if (resp.status === 400 || resp.status === 404) {
+      const text = await resp.text().catch(() => "");
+      return !/tool|function/i.test(text);
+    }
+    return true;
+  } catch {
+    // 探测本身失败不作为「不支持」依据：主流程已有连接结果兜底
+    return true;
+  }
+}
+
+function withToolHint(message: string, tools: boolean): string {
+  return tools
+    ? message
+    : `${message}；⚠ 该端点未通过工具调用探测，编辑模式可能不可用`;
+}
 
 /**
  * 测试连接：优先 GET /models（一次验证 Key 并取模型列表），
@@ -258,12 +313,17 @@ export type ConnectionTestResult = {
 export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResult> {
   try {
     const models = await fetchModels(cfg);
+    const tools = await probeToolCalling(cfg);
     return {
       ok: true,
       models,
-      message: models.length
-        ? `连接成功，可用模型 ${models.length} 个`
-        : "连接成功（服务未返回模型列表）",
+      tools,
+      message: withToolHint(
+        models.length
+          ? `连接成功，可用模型 ${models.length} 个`
+          : "连接成功（服务未返回模型列表）",
+        tools,
+      ),
     };
   } catch (modelsErr) {
     const modelsMsg =
@@ -287,16 +347,22 @@ export async function testConnection(cfg: AiConfig): Promise<ConnectionTestResul
       if (!resp.ok) {
         throw await toApiError(resp);
       }
+      const tools = await probeToolCalling(cfg);
       return {
         ok: true,
         models: [],
-        message: "连接成功（该服务未提供 /models 接口，已通过最小请求验证）",
+        tools,
+        message: withToolHint(
+          "连接成功（该服务未提供 /models 接口，已通过最小请求验证）",
+          tools,
+        ),
       };
     } catch (chatErr) {
       const chatMsg = chatErr instanceof Error ? chatErr.message : String(chatErr);
       return {
         ok: false,
         models: [],
+        tools: false,
         message: `连接失败：/models 不可用（${modelsMsg}）；最小请求：${chatMsg}`,
       };
     }

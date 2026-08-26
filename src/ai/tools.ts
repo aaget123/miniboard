@@ -746,6 +746,23 @@ function chatTools(): AiTool[] {
       mutating: true,
     },
     {
+      name: "delete_elements",
+      description:
+        "按 id 删除画布元素：ids 为元素 id 列表（来自 get_canvas 或 @选区）；仅在使用者明确要求删除时调用；锁定元素自动跳过；同组成员整组参与（只传组内一个 id 即可）。适合「删掉/去掉/移除这些元素」类请求",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: {
+            type: "array",
+            items: { type: "string" },
+            description: "要删除的元素 id 列表",
+          },
+        },
+        required: ["ids"],
+      },
+      mutating: true,
+    },
+    {
       name: "beautify_elements",
       description:
         "把手绘笔迹整理为标准图形（beautify）：闭合笔迹识别为圆/椭圆/矩形/三角形/多边形等标准元素，近似直线转为标准线段，其余弯曲线条拉直简化；保留颜色与粗细。只整理 ids 指定的元素，其他元素原样不动；ids 为元素 id 列表（来自 get_canvas 或 @选区）；锁定元素自动跳过；同组成员整组参与（只传组内一个 id 即可）；没有手绘笔迹的目标会自动跳过（返回未执行时不要重复提交相同调用）。适合“整理/识别/清理这些手绘图形”类请求",
@@ -1432,6 +1449,45 @@ export async function executeTool(
         name: tool.name,
         args,
         result: `已完成${ACTION_LABELS[action] ?? action}：${done} 个元素${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
+        changed: true,
+      };
+    }
+
+    case "delete_elements": {
+      if (mode !== "chat") {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：delete_elements 仅交流模式可用",
+          changed: false,
+        };
+      }
+      const ids = Array.isArray(args.ids)
+        ? args.ids.filter((s): s is string => typeof s === "string")
+        : [];
+      if (!ids.length) {
+        return {
+          name: tool.name,
+          args,
+          result: "错误：ids 不能为空（至少传 1 个元素 id）",
+          changed: false,
+        };
+      }
+      const { removed, skipped } = board.deleteByIds(ids);
+      if (!removed) {
+        return {
+          name: tool.name,
+          args,
+          result: skipped
+            ? `未执行：${skipped} 个目标元素全部锁定（删除前请先解锁）`
+            : "未执行：id 不存在或已被删除",
+          changed: false,
+        };
+      }
+      return {
+        name: tool.name,
+        args,
+        result: `已删除 ${removed} 个元素${skipped ? `（跳过 ${skipped} 个锁定元素）` : ""}`,
         changed: true,
       };
     }

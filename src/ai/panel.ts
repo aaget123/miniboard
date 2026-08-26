@@ -236,6 +236,34 @@ export class AiPanel {
     this.clearBtn = document.getElementById("ai-clear-btn") as HTMLButtonElement;
     this.clearBtn.innerHTML = iconHTML("trash", 13);
     this.clearBtn.addEventListener("click", () => this.clearConversation());
+    // 复制最后回复 / 重试最后一次请求（动态插入头部，免改 index.html）
+    const headerBtn = document.createElement("button");
+    headerBtn.className = this.clearBtn.className;
+    headerBtn.type = "button";
+    headerBtn.innerHTML = iconHTML("clipboard", 13);
+    headerBtn.title = "复制最后回复";
+    headerBtn.addEventListener("click", () => {
+      const last = [...this.st.history]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      const text =
+        typeof last?.content === "string" && last.content ? last.content : "";
+      if (!text) {
+        headerBtn.title = "暂无可复制的回复";
+        return;
+      }
+      void navigator.clipboard.writeText(text).then(() => {
+        headerBtn.title = "已复制 ✓";
+      });
+    });
+    const retryBtn = document.createElement("button");
+    retryBtn.className = this.clearBtn.className;
+    retryBtn.type = "button";
+    retryBtn.innerHTML = iconHTML("rotate", 13);
+    retryBtn.title = "重试最后一次请求（多模态附件不会重发）";
+    retryBtn.addEventListener("click", () => this.retryLast());
+    this.clearBtn.parentElement?.insertBefore(headerBtn, this.clearBtn);
+    this.clearBtn.parentElement?.insertBefore(retryBtn, this.clearBtn);
     this.bindEvents();
     // 输入草稿实时同步到当前分桶（切换模式/持久化时一并带走）
     this.inputEl.addEventListener("input", () => {
@@ -322,6 +350,45 @@ export class AiPanel {
     this.schedulePersist();
   }
 
+  /**
+   * 重试最后一次请求：回退到最近一条 user 消息之前并原样重发
+   * （多模态消息的图片附件不重发，仅文本部分；生成中忽略）。
+   */
+  private retryLast() {
+    if (this.busy) {
+      return;
+    }
+    const h = this.st.history;
+    let lastUser = -1;
+    for (let i = h.length - 1; i >= 0; i--) {
+      if (h[i].role === "user") {
+        lastUser = i;
+        break;
+      }
+    }
+    if (lastUser === -1) {
+      return;
+    }
+    const msg = h[lastUser];
+    const text =
+      typeof msg.content === "string"
+        ? msg.content
+        : Array.isArray(msg.content)
+          ? msg.content
+              .filter((p) => p.type === "text")
+              .map((p) => ("text" in p ? p.text : ""))
+              .join("\n")
+          : "";
+    if (!text.trim() && !Array.isArray(msg.content)) {
+      return;
+    }
+    this.st.history = h.slice(0, lastUser);
+    this.inputEl.value = text;
+    this.st.inputText = text;
+    this.renderConversation();
+    void this.send();
+  }
+
   // ---------- 对话持久化（按 项目×模式 分桶存档） ----------
 
   /** 当前模式分桶的存档键 */
@@ -335,11 +402,37 @@ export class AiPanel {
     this.persistTimer = window.setTimeout(() => this.persistNow(), 500);
   }
 
-  /** 立即落盘当前分桶：治理后仅存 user/assistant 文本轮次 */
+  /**
+   * 落盘前的压缩：工具调用轮次不存原始请求/结果，替换为一行摘要
+   * （［工具调用：create_elements、get_canvas］），恢复后模型仍能知道
+   * "之前做过什么"，不再因刷新而完全失忆；图片数据照旧不落盘。
+   */
+  private compactForStorage(msgs: ChatMessage[]): ChatMessage[] {
+    const out: ChatMessage[] = [];
+    for (const m of msgs) {
+      if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length) {
+        const names = m.tool_calls.map(
+          (c) => c.function?.name ?? "?",
+        );
+        out.push({
+          role: "assistant",
+          content: `［工具调用：${names.join("、")}］`,
+        });
+        continue;
+      }
+      if (m.role === "tool") {
+        continue;
+      }
+      out.push(m);
+    }
+    return out;
+  }
+
+  /** 立即落盘当前分桶：治理后仅存 user/assistant 文本轮次（工具轮压缩为摘要） */
   private persistNow() {
     clearTimeout(this.persistTimer);
     try {
-      const cleaned = sanitizeForStorage(this.st.history);
+      const cleaned = sanitizeForStorage(this.compactForStorage(this.st.history));
       if (!cleaned.length) {
         localStorage.removeItem(this.storageKey());
       } else {

@@ -3873,6 +3873,61 @@ export class Board {
     }
   }
 
+  /**
+   * AI 按 id 删除元素：同组成员整组参与、锁定元素跳过计入手数；
+   * 整轮合并一步撤销，删除后清理点编辑/裁剪/编辑器选中状态。
+   */
+  deleteByIds(ids: string[]): { removed: number; skipped: number } {
+    const found: UI[] = [];
+    const seen = new Set<UI>();
+    let locked = 0;
+    for (const raw of ids) {
+      const el = this.findByAiId(raw);
+      if (!el || seen.has(el)) {
+        continue;
+      }
+      if (el.locked) {
+        locked++;
+        continue;
+      }
+      seen.add(el);
+      found.push(el);
+    }
+    if (!found.length) {
+      return { removed: 0, skipped: locked };
+    }
+    // 同组成员整组参与（与 arrange/beautify 的组联动语义一致）
+    const gids = new Set<string>();
+    for (const el of found) {
+      const g = (el as unknown as { __groupId?: string }).__groupId;
+      if (g) {
+        gids.add(g);
+      }
+    }
+    if (gids.size) {
+      for (const el of this.app.tree.children as UI[]) {
+        const g = (el as unknown as { __groupId?: string }).__groupId;
+        if (g && gids.has(g) && !seen.has(el)) {
+          if (el.locked) {
+            locked++;
+            continue;
+          }
+          seen.add(el);
+          found.push(el);
+        }
+      }
+    }
+    for (const el of found) {
+      el.destroy();
+    }
+    this.editor.cancel();
+    this.exitPointEdit();
+    this.cropCtrl.cancel();
+    this.commitHistory();
+    this.opts.onMutated();
+    return { removed: found.length, skipped: locked };
+  }
+
   /** 粘贴剪贴板内容：优先跟随鼠标最后位置（剪贴板实际渲染包围盒中心对齐），
    * 鼠标未进入过画布时回退为原位置偏移 12px；粘贴后选中新元素 */
   paste() {
