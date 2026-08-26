@@ -11,6 +11,7 @@ import {
   applyTheme,
   applyThemePref,
   loadGrid,
+  loadDrawPrefs,
   loadTheme,
   saveThemePref,
   watchSystemTheme,
@@ -309,6 +310,8 @@ async function main() {
   watchSystemTheme(board);
   // 画布网格设置（显示/吸附/间距，默认关闭）
   board.applyGrid(loadGrid());
+  // 绘制偏好：绘制后自动切回选择工具（默认开启，Excalidraw 同款）
+  board.setAutoBackToSelect(loadDrawPrefs().autoBackToSelect);
 
   // AI 面板懒加载：panel/tools/client 约 2900 行仅在首次唤起时加载（主包瘦身）。
   // 未加载期间所有引用点安全空转；工厂创建时兜底同步当前项目对话分桶

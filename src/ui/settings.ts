@@ -85,6 +85,45 @@ export function saveGrid(g: GridSettings) {
   }
 }
 
+// ---------- 绘制偏好 ----------
+
+const DRAW_PREFS_KEY = "miniboard:draw-prefs";
+
+/** 绘制偏好设置 */
+export type DrawPrefs = {
+  /** 绘制完成后自动切回选择工具（Excalidraw 同款默认行为） */
+  autoBackToSelect: boolean;
+};
+
+const DEFAULT_DRAW_PREFS: DrawPrefs = { autoBackToSelect: true };
+
+/** 读取绘制偏好（localStorage，数据损坏/缺失时回退默认值） */
+export function loadDrawPrefs(): DrawPrefs {
+  try {
+    const raw = localStorage.getItem(DRAW_PREFS_KEY);
+    if (!raw) {
+      return { ...DEFAULT_DRAW_PREFS };
+    }
+    const p = JSON.parse(raw) as Partial<DrawPrefs>;
+    return {
+      autoBackToSelect:
+        typeof p.autoBackToSelect === "boolean"
+          ? p.autoBackToSelect
+          : DEFAULT_DRAW_PREFS.autoBackToSelect,
+    };
+  } catch {
+    return { ...DEFAULT_DRAW_PREFS };
+  }
+}
+
+export function saveDrawPrefs(p: DrawPrefs) {
+  try {
+    localStorage.setItem(DRAW_PREFS_KEY, JSON.stringify(p));
+  } catch {
+    // localStorage 不可用时仅本次会话生效
+  }
+}
+
 // ---------- 主题 ----------
 
 const THEME_KEY = "miniboard:theme";
@@ -412,6 +451,30 @@ export class SettingsDialog {
     gridSection.append(sizeLabel, sizeInput, showRow, snapRow);
     appearancePane.appendChild(gridSection);
     this.gridForm = { size: sizeInput, show: showBox, snap: snapBox };
+
+    // ---- 绘制 ----
+    const drawSection = document.createElement("section");
+    drawSection.className = "settings-section";
+    const drawLabel = document.createElement("h4");
+    drawLabel.className = "settings-label";
+    drawLabel.textContent = "绘制";
+    drawSection.appendChild(drawLabel);
+    const backRow = document.createElement("label");
+    backRow.className = "ai-modal-row";
+    const backBox = document.createElement("input");
+    backBox.type = "checkbox";
+    backBox.checked = loadDrawPrefs().autoBackToSelect;
+    backRow.append(
+      document.createTextNode("绘制完成后自动切回选择工具"),
+      backBox,
+    );
+    backBox.addEventListener("change", () => {
+      const p: DrawPrefs = { autoBackToSelect: backBox.checked };
+      saveDrawPrefs(p);
+      this.board.setAutoBackToSelect(p.autoBackToSelect);
+    });
+    drawSection.appendChild(backRow);
+    appearancePane.appendChild(drawSection);
 
     // ---- AI 模型页签 ----
     const modelPane = document.createElement("div");

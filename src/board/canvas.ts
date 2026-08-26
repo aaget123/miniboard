@@ -337,6 +337,8 @@ export class Board {
   // 网格：设置（大小/显示/吸附）与网格线层（挂在 zoomLayer 最底层，随缩放/平移重建）
   private grid: GridSettings = { size: 20, show: false, snap: false };
   private gridPath: Path | null = null;
+  /** 绘制后自动切回选择工具（Excalidraw 同款默认行为；设置页可关） */
+  private autoBackToSelect = true;
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
@@ -1474,11 +1476,13 @@ export class Board {
     this.drawing = false;
     this.drawingFrame = null;
     if (this.draft) {
+      let created = true;
       if (this.isTinyDraft()) {
         this.draft.remove();
         for (const el of this.draftExtras) {
           el.remove();
         }
+        created = false;
       } else if (this.opts.registry.getKind(this.tool) === "freehand") {
         // 笔迹转正：挂载采样点元数据，序列化时输出 freehand 元素（供整理识别/重绘）
         const t = this.draft as unknown as Record<string, unknown>;
@@ -1497,6 +1501,12 @@ export class Board {
       this.draftExtras = [];
       this.draftData = null;
       this.commitHistory();
+      // 绘制后自动回选择工具（Excalidraw 同款；设置可关）：仅在实际生成元素时
+      // 切换（点击落空不切），双击空白建文本走 onTap 管线不受影响
+      if (created && this.autoBackToSelect && this.tool !== "select") {
+        this.setTool("select");
+        this.opts.onToolChange?.(this.tool);
+      }
     }
   }
 
@@ -5171,6 +5181,11 @@ export class Board {
   applyGrid(g: GridSettings) {
     this.grid = { ...g };
     this.updateGrid();
+  }
+
+  /** 公开：设置「绘制后自动切回选择工具」开关（设置弹窗/启动装载调用） */
+  setAutoBackToSelect(v: boolean) {
+    this.autoBackToSelect = v;
   }
 
   /** 数值对齐到网格（吸附关闭或网格尺寸非法时原样返回） */
