@@ -97,6 +97,9 @@ const MARQUEE_STROKE = "#4f8cff";
 const POINT_HANDLE_SIZE = 10;
 // 端点吸附绑定的屏幕距离（px，缩放后世界距离换算保证手感恒定）
 const SNAP_BIND_PX = 10;
+// 智能对齐吸附的屏幕距离阈值（px）与参考线颜色（画在 sky 层）
+const ALIGN_SNAP_PX = 6;
+const ALIGN_GUIDE_STROKE = "#f24aa0";
 // 内容约束的归属阈值：元素与 constrain 框架的包围盒重叠面积占比下限
 const CONSTRAINT_ADOPT_RATIO = 0.6;
 
@@ -342,6 +345,9 @@ export class Board {
   private autoBackToSelect = true;
   /** 画布感知版本：内容变更点自增（AI 增量感知缓存命中判定用） */
   private perceptionVersionN = 0;
+  // 智能对齐参考线（单选拖动）：候选边每手势收集一次，参考线画在 sky 层
+  private alignCandidates: { xs: number[]; ys: number[] } | null = null;
+  private alignGuides: UI[] = [];
   /** 取色模式：下一次画布点击采样像素色（Esc/右键取消） */
   private pickState: {
     resolve: (hex: string | null) => void;
@@ -379,6 +385,46 @@ export class Board {
             const ty = (target.y ?? 0) + ny;
             nx = this.snapGrid(tx) - (target.x ?? 0);
             ny = this.snapGrid(ty) - (target.y ?? 0);
+          }
+          // 智能对齐吸附（单选拖动）：期望 bbox 的左/中/右、上/中/下与其它元素
+          // 对应边/中心线距离 ≤ 阈值时吸附并画 sky 层参考线；对齐命中覆盖网格
+          // 吸附（同轴）。候选边在手势首次进入前收集一次（O(n)，拖动高频调用零开销）
+          const singleTarget =
+            target && (this.editor as unknown as { list?: UI[] }).list?.length === 1;
+          if (singleTarget) {
+            const t = target as UI;
+            if (!this.alignCandidates) {
+              this.alignCandidates = this.collectAlignCandidates(t);
+            }
+            // nx/ny 为 local 增量：转世界增量后在世界基准上比对
+            // （worldBoxBounds 含缩放，阈值即屏幕恒定手感）
+            const wd0 = t.getWorldPointByLocal({ x: nx, y: ny }, undefined, true);
+            const b = t.worldBoxBounds;
+            if (b && this.alignCandidates) {
+              const hitX = this.snapAxis(
+                [b.x + wd0.x, b.x + b.width / 2 + wd0.x, b.x + b.width + wd0.x],
+                this.alignCandidates.xs,
+              );
+              const hitY = this.snapAxis(
+                [b.y + wd0.y, b.y + b.height / 2 + wd0.y, b.y + b.height + wd0.y],
+                this.alignCandidates.ys,
+              );
+              if (hitX || hitY) {
+                const wd = {
+                  x: wd0.x + (hitX?.offset ?? 0),
+                  y: wd0.y + (hitY?.offset ?? 0),
+                };
+                const aw = t.getWorldPoint({ x: 0, y: 0 });
+                const lp = t.getLocalPoint({ x: aw.x + wd.x, y: aw.y + wd.y });
+                nx = lp.x - (t.x ?? 0);
+                ny = lp.y - (t.y ?? 0);
+                this.showAlignGuides(hitX?.line, hitY?.line);
+              } else {
+                this.clearAlignGuides();
+              }
+            }
+          } else if (this.alignGuides.length) {
+            this.clearAlignGuides();
           }
           // 约束框架夹紧：非框架元素与 constrain 框架重叠率达标时，期望位置整体
           // 夹回框架（Alt 按住豁免拖出；修正发生在移动前，编辑器按修正值
@@ -633,6 +679,8 @@ export class Board {
       if (!this.selectDragging) {
         this.commitAltCopy();
       }
+      // 对齐参考线手势收尾清空（候选缓存一并失效）
+      this.clearAlignGuides();
     });
     this.app.on(ZoomEvent.END, () => {
       this.frameScaleSnap = null;
@@ -1040,6 +1088,9 @@ export class Board {
     this.altCopySnap = null;
     this.altCopyBlocked = false;
     this.altCopyMoved = false;
+    // 新手势：对齐候选重新收集，参考线清空
+    this.alignCandidates = null;
+    this.clearAlignGuides();
     // 取色模式下右键 = 取消
     if (e.right && this.pickState) {
       this.finishPick(null);
@@ -5344,6 +5395,96 @@ export class Board {
       return v;
     }
     return Math.round(v / this.grid.size) * this.grid.size;
+  }
+
+  // ================= 智能对齐参考线 =================
+
+  /**
+   * 收集对齐候选线（每手势一次）：其余元素（含锁定，排除编辑器内部层与
+   * 移动框架的归属内容——它们随框移动，手势起点坐标会失效）包围盒的
+   * 左/中/右 x 与上/中/下 y。世界基准（含缩放），阈值即屏幕恒定。
+   */
+  private collectAlignCandidates(moving: UI): { xs: number[]; ys: number[] } {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const movingFrameId = isFrameEl(moving) ? this.aiIdOf(moving) : undefined;
+    for (const el of this.app.tree.children as UI[]) {
+      if (el === moving || this.isEditorInternal(el)) {
+        continue;
+      }
+      // 拖动框架时其归属内容随框平移，手势起点的候选坐标会失真
+      if (movingFrameId && this.frameIdOf(el) === movingFrameId) {
+        continue;
+      }
+      const b = el.worldBoxBounds;
+      if (!b || b.width <= 0 || b.height <= 0) {
+        continue;
+      }
+      xs.push(b.x, b.x + b.width / 2, b.x + b.width);
+      ys.push(b.y, b.y + b.height / 2, b.y + b.height);
+    }
+    return { xs, ys };
+  }
+
+  /** 单轴吸附：期望边值与候选线的最小距离 ≤ 阈值时返回修正量与参考线位置 */
+  private snapAxis(
+    edges: number[],
+    candidates: number[],
+  ): { offset: number; line: number } | null {
+    let best: { dist: number; offset: number; line: number } | null = null;
+    for (const e of edges) {
+      for (const c of candidates) {
+        const d = Math.abs(c - e);
+        if (d <= ALIGN_SNAP_PX && (!best || d < best.dist)) {
+          best = { dist: d, offset: c - e, line: c };
+        }
+      }
+    }
+    return best ? { offset: best.offset, line: best.line } : null;
+  }
+
+  /** 在 sky 层画对齐参考线（竖/横各一条；sky 不随缩放变化，线宽恒定） */
+  private showAlignGuides(vx?: number, hy?: number) {
+    this.clearAlignGuides();
+    const view = this.app.canvas.view as HTMLElement;
+    const w = this.app.width ?? view.clientWidth;
+    const h = this.app.height ?? view.clientHeight;
+    if (vx !== undefined) {
+      const v = new Line({
+        points: [
+          { x: vx, y: 0 },
+          { x: vx, y: h },
+        ],
+        stroke: ALIGN_GUIDE_STROKE,
+        strokeWidth: 1,
+      });
+      this.alignGuides.push(v);
+      this.app.sky.add(v);
+    }
+    if (hy !== undefined) {
+      const g = new Line({
+        points: [
+          { x: 0, y: hy },
+          { x: w, y: hy },
+        ],
+        stroke: ALIGN_GUIDE_STROKE,
+        strokeWidth: 1,
+      });
+      this.alignGuides.push(g);
+      this.app.sky.add(g);
+    }
+  }
+
+  /** 清除对齐参考线（手势结束 / 无命中时调用） */
+  private clearAlignGuides() {
+    if (!this.alignGuides.length) {
+      return;
+    }
+    for (const g of this.alignGuides) {
+      g.remove();
+    }
+    this.alignGuides = [];
+    this.alignCandidates = null;
   }
 
   /**
