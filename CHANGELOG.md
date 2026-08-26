@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-26
+
 ### 新增
 
 - **正交折线连接线**：line/arrow 新增 route 语义——端点变化（绑定节点移动、点编辑拖端点）自动重建 L 形中间路径，出入方向优先按绑定节点中心相对方位；纯函数 buildOrthoWaypoints 落在 geometry 层并补单测

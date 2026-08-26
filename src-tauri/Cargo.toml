@@ -1,6 +1,6 @@
 [package]
 name = "miniboard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Miniboard - 极简离线白板"
 authors = ["aaget123"]
 license = "MIT"
