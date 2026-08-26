@@ -41,6 +41,8 @@ export type SelectionBarHandlers = {
   onCornerRadiusChange: (radius: number) => void;
   /** 粗糙度变化（0-2，仅作用于已手绘元素，同一 seed 重绘） */
   onRoughnessChange: (roughness: number) => void;
+  /** 从画布取色（宿主调起 Board.pickColor，结果经 applyPicked 回流） */
+  onPickColor: () => void;
 };
 
 function makeButton(icon: IconName, title: string, onClick: () => void): HTMLButtonElement {
@@ -182,7 +184,12 @@ export class SelectionBar {
     channelGroup.className = "channel-group";
     this.strokeChannelBtn = this.makeChannelBtn("描边", () => this.setChannel("stroke"));
     this.fillChannelBtn = this.makeChannelBtn("填充", () => this.setChannel("fill"));
-    channelGroup.append(this.strokeChannelBtn, this.fillChannelBtn);
+    // 吸管：从画布取色到当前激活通道（结果经 applyPicked 回流）
+    const pickBtn = this.makeIconBtn("pipette", "从画布取色（Esc 取消）", () =>
+      handlers.onPickColor(),
+    );
+    pickBtn.classList.add("pick-btn");
+    channelGroup.append(this.strokeChannelBtn, this.fillChannelBtn, pickBtn);
     this.popover.appendChild(channelGroup);
 
     const swatches = document.createElement("div");
@@ -708,6 +715,21 @@ export class SelectionBar {
     this.fillChannelBtn.querySelector<HTMLElement>(".channel-chip")!.style.background = color;
     if (this.activeChannel === "fill") {
       this.setActiveColor(color);
+    }
+  }
+
+  /**
+   * 取色结果应用：按当前激活通道走对应回调（更新默认样式/选中元素/顶栏圆点），
+   * 非基础色板颜色记入「最近」（与自定义颜色输入同一记忆规则）。
+   */
+  applyPicked(color: string) {
+    if (this.activeChannel === "fill") {
+      this.handlers.onFillColorChange(color);
+    } else {
+      this.handlers.onStrokeChange(color);
+    }
+    if (!SWATCHES.some((s) => s.toLowerCase() === color)) {
+      this.recordRecent(color);
     }
   }
 

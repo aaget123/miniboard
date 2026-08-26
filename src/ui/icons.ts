@@ -47,6 +47,7 @@ export type IconName =
   | "monitor"
   | "download"
   | "upload"
+  | "pipette"
   | "caret"
   | "grip"
   | "clipboard"
@@ -219,6 +220,11 @@ const DEFS: Record<IconName, IconDef> = {
   },
   upload: {
     body: `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 8 5-5 5 5"/><path d="M12 3v12"/>`,
+  },
+  pipette: {
+    body:
+      `<path d="m2 22 1-1h3l9-9"/><path d="M3 21v-3l9-9"/>` +
+      `<path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3L11.8 8.8a2.1 2.1 0 1 1 3-3l.2.2Z"/>`,
   },
   caret: { body: `<path d="m6 9 6 6 6-6"/>` },
   grip: {

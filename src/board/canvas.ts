@@ -339,6 +339,12 @@ export class Board {
   private gridPath: Path | null = null;
   /** 绘制后自动切回选择工具（Excalidraw 同款默认行为；设置页可关） */
   private autoBackToSelect = true;
+  /** 取色模式：下一次画布点击采样像素色（Esc/右键取消） */
+  private pickState: {
+    resolve: (hex: string | null) => void;
+    onKey: (e: KeyboardEvent) => void;
+  } | null = null;
+  private pickPromise: Promise<string | null> | null = null;
 
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
@@ -993,6 +999,11 @@ export class Board {
     this.altCopySnap = null;
     this.altCopyBlocked = false;
     this.altCopyMoved = false;
+    // 取色模式下右键 = 取消
+    if (e.right && this.pickState) {
+      this.finishPick(null);
+      return;
+    }
     // 右键（button=2）不参与绘制/选择交互：选择变更仅由 contextmenu 流程决定，
     // 避免多选后右键时 leafer 的 DOWN 事件把选择取消/替换
     if (e.right) {
@@ -1001,6 +1012,11 @@ export class Board {
     // 内联文本编辑中：交互交由 TextEditor 处理
     // （点击输入框内定位光标，点击外部由它负责关闭编辑）
     if (this.editor.innerEditor) {
+      return;
+    }
+    // 取色模式：本次点击即采样（不进入绘制/选择管线）
+    if (this.pickState) {
+      this.finishPick(this.samplePixelAt(e.x ?? 0, e.y ?? 0));
       return;
     }
     // 手型平移：拖动整块画布（zoomLayer），用 app 坐标差值即可
@@ -5192,6 +5208,71 @@ export class Board {
   /** 公开：设置「绘制后自动切回选择工具」开关（设置弹窗/启动装载调用） */
   setAutoBackToSelect(v: boolean) {
     this.autoBackToSelect = v;
+  }
+
+  // ================= 取色器 =================
+
+  /**
+   * 进入取色模式：下一次画布点击采样该点渲染像素（所见即所得，含透明度合成），
+   * Esc / 右键取消。重复调用返回同一个进行中的 Promise。
+   * 实现：直接读 leafer 画布 backing store（app 坐标 × CSS→物理缩放），不经过
+   * 元素命中——取的是"像素色"而非元素属性色。
+   */
+  pickColor(): Promise<string | null> {
+    if (this.pickPromise) {
+      return this.pickPromise;
+    }
+    this.pickPromise = new Promise<string | null>((resolve) => {
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          this.finishPick(null);
+        }
+      };
+      this.pickState = { resolve, onKey };
+      document.addEventListener("keydown", onKey, true);
+      (this.app.canvas.view as HTMLElement).classList.add("picking-cursor");
+    });
+    return this.pickPromise;
+  }
+
+  /** 结束取色：清理光标与监听并兑现结果（hex 或 null=取消/失败） */
+  private finishPick(hex: string | null) {
+    const state = this.pickState;
+    this.pickState = null;
+    this.pickPromise = null;
+    if (!state) {
+      return;
+    }
+    document.removeEventListener("keydown", state.onKey, true);
+    (this.app.canvas.view as HTMLElement).classList.remove("picking-cursor");
+    state.resolve(hex);
+  }
+
+  /** 采样 app 坐标处的画布像素 → #rrggbb；画布污染/不可读时返回 null */
+  private samplePixelAt(ax: number, ay: number): string | null {
+    const view = this.app.canvas.view as HTMLCanvasElement;
+    try {
+      const ctx = view.getContext("2d");
+      if (!ctx || !view.width || !view.height) {
+        return null;
+      }
+      const rect = view.getBoundingClientRect();
+      const sx = view.width / Math.max(rect.width, 1);
+      const sy = view.height / Math.max(rect.height, 1);
+      const d = ctx.getImageData(
+        Math.round(ax * sx),
+        Math.round(ay * sy),
+        1,
+        1,
+      ).data;
+      const h = (n: number) => n.toString(16).padStart(2, "0");
+      return `#${h(d[0])}${h(d[1])}${h(d[2])}`;
+    } catch {
+      // 画布被跨域图片污染等场景：getImageData 抛错
+      return null;
+    }
   }
 
   /** 数值对齐到网格（吸附关闭或网格尺寸非法时原样返回） */

@@ -347,6 +347,11 @@ body,
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
+/* 取色模式光标（Board.pickColor 挂到画布 view 上） */
+.picking-cursor {
+  cursor: crosshair !important;
+}
+
 .swatch {
   width: 18px;
   height: 18px;

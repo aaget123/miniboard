@@ -361,6 +361,15 @@ async function main() {
       board.applyStyleToSelection({ fillColor: color });
       saveStyle();
     },
+    onPickColor: () => {
+      // 从画布取色到当前激活通道（描边/填充），结果经 applyPicked 回流
+      void board.pickColor().then((hex) => {
+        if (hex) {
+          selectionBar.applyPicked(hex);
+          toast(`已取色 ${hex}`);
+        }
+      });
+    },
     onWidthChange: (width) => {
       style.strokeWidth = width;
       selectionBar.setWidth(width);
