@@ -65,6 +65,11 @@ export type GeneratorContext = {
   x1: number;
   y1: number;
   style: BoardStyle;
+  /** 当前画布缩放（世界/屏幕比）：做"屏幕恒定大小"元素时用于换算 */
+  zoom?: number;
+  /** 拖拽/点击时按住的修饰键（可选字段，向后兼容） */
+  shiftKey?: boolean;
+  altKey?: boolean;
 };
 
 /**

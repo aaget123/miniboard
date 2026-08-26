@@ -67,7 +67,7 @@ ${kinds}
 
 生成器接口：
 - 签名：(ctx) => ElementData 或 ElementData[]
-- ctx 字段：x0、y0（拖拽起点画布坐标）、x1、y1（当前拖拽点坐标；click 工具 x0=x1、y0=y1 均为点击点）、style（当前样式：stroke 描边色、strokeWidth 粗细、fillEnabled 填充开关、fillColor 填充色）
+- ctx 字段：x0、y0（拖拽起点画布坐标）、x1、y1（当前拖拽点坐标；click 工具 x0=x1、y0=y1 均为点击点）、style（当前样式：stroke 描边色、strokeWidth 粗细、fillEnabled 填充开关、fillColor 填充色）；可选扩展字段：zoom（当前画布缩放倍数，做「屏幕恒定大小」元素时用它换算尺寸，如 size / zoom）、shiftKey / altKey（拖拽/点击时按住的修饰键，可实现按 Shift 正比、Alt 中心对称等交互惯例）
 - 单个元素必须包含 type（${GENERATABLE_TYPES.join("/")} 之一）与位置尺寸：
   - rect/ellipse：x、y、width、height（左上角 + 宽高，允许负数方向拖拽需取 min/abs）
   - line/arrow：points 端点数组 [{x,y},{x,y}]（画布绝对坐标），x/y 置 0

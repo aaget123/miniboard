@@ -258,7 +258,7 @@ export class Board {
   private drawing = false;
   private draft: UI | null = null;
   /** 修饰键状态（编辑器 MOVE/SCALE 事件不携带按键信息，由 DOM 键盘事件维护） */
-  private modKeys = { alt: false };
+  private modKeys = { alt: false, shift: false };
   /** 组合工具草稿的其余元素（拖拽中与主草稿同步实时预览，松手时无需再补齐） */
   private draftExtras: UI[] = [];
   /** 拖拽统一管线：最近一次生成器输出的元素数据列表（首个为主元素，用于实时刷新草稿与微小判定；组合工具其余元素随草稿实时预览） */
@@ -472,14 +472,18 @@ export class Board {
     );
     // 修饰键状态：编辑器 MOVE/SCALE 事件不携带按键信息，用 DOM 键盘事件维护
     // （夹紧豁免 Alt 拖出等交互依赖；窗口失焦时重置避免 Alt 卡死）
+    // shift 同步给自定义工具生成器（ctx.shiftKey，正比约束等用途）
     document.addEventListener("keydown", (e) => {
       this.modKeys.alt = e.altKey;
+      this.modKeys.shift = e.shiftKey;
     });
     document.addEventListener("keyup", (e) => {
       this.modKeys.alt = e.altKey;
+      this.modKeys.shift = e.shiftKey;
     });
     window.addEventListener("blur", () => {
       this.modKeys.alt = false;
+      this.modKeys.shift = false;
     });
     // 初始视图：画布原点 (0,0) 居中显示（X0Y0 居中，与 zoomReset 一致）
     this.centerOriginView();
@@ -1240,7 +1244,14 @@ export class Board {
       return null;
     }
     try {
-      const out = gen({ x0, y0, x1, y1, style: this.opts.getStyle() });
+      const out = gen({
+        x0, y0, x1, y1,
+        style: this.opts.getStyle(),
+        // ctx v2 可选字段：屏幕恒定大小换算与修饰键约束
+        zoom: this.zoomScale(),
+        shiftKey: this.modKeys.shift,
+        altKey: this.modKeys.alt,
+      });
       const list = Array.isArray(out) ? out : [out];
       // 轻量校验：高频调用不做全量 schema 校验，只拦明显非法输出
       if (

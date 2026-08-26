@@ -279,6 +279,9 @@ export class ToolRegistry {
       x1: 10,
       y1: 10,
       style: { stroke: "#000000", strokeWidth: 2, fillEnabled: false, fillColor: "#000000" },
+      zoom: 1,
+      shiftKey: false,
+      altKey: false,
     });
     const checked = validateElementList(probe);
     if (!checked.ok) {
@@ -347,6 +350,9 @@ export class ToolRegistry {
         fillEnabled: false,
         fillColor: "#4f8cff",
       },
+      zoom: 1,
+      shiftKey: false,
+      altKey: false,
     };
     const workerSrc = `
       const code = ${JSON.stringify(generator)};
