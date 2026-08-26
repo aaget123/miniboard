@@ -140,7 +140,8 @@ async function mtimeOf(path: string): Promise<number | null> {
   }
 }
 
-function downloadText(text: string, filename: string) {
+/** 文本下载（浏览器 anchor 方案，Tauri WebView 同样适用；工具导入/导出等复用） */
+export function downloadText(text: string, filename: string) {
   const blob = new Blob([text], { type: "application/json" });
   downloadBlob(blob, filename);
 }

@@ -2656,6 +2656,28 @@ body.theme-light #statusbar.docked {
   user-select: text;
 }
 
+/* 工具管理：源码编辑框（textarea 形态）与导入/导出行 */
+.tm-generator-edit {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline: none;
+}
+
+.tm-io-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tm-io-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ---------- 命令面板（Ctrl+K：搜索工具/操作） ---------- */
 .palette-mask {
   position: fixed;
