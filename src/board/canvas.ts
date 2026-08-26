@@ -113,6 +113,9 @@ const ALIGN_GUIDE_STROKE = "#f24aa0";
 const FRAME_NAME_LABEL_SIZE = 11;
 const FRAME_NAME_LABEL_GAP = 5;
 const FRAME_NAME_LABEL_COLOR = "#8a8f98";
+// 框架默认填充：框架一律带填充（内部可命中走增量拖动管线，也便于视觉识别
+// 为容器）；转换/载入时 fill 缺失则补此色
+const FRAME_DEFAULT_FILL = "rgba(79, 140, 255, 0.08)";
 // 内容约束的归属阈值：元素与 constrain 框架的包围盒重叠面积占比下限
 const CONSTRAINT_ADOPT_RATIO = 0.6;
 
@@ -311,7 +314,7 @@ export class Board {
   // 选中框内拖动：点击点在选中元素包围盒内（而非元素本体）时手动移动整个选择
   private selectDragging = false;
   private dragStart = { x: 0, y: 0 };
-  private dragEls: { el: UI; x: number; y: number; lastDx?: number; lastDy?: number }[] = [];
+  private dragEls: { el: UI; x: number; y: number; lastPosX?: number; lastPosY?: number }[] = [];
   private movedAny = false;
   /** Alt+拖拽复制（落点克隆）：手势内按住 Alt 拖动元素时快照，松手后在拖动前
    * 原位重建快照元素——移动中的元素即副本。约束开启的框架内禁用（Alt 在那里
@@ -584,13 +587,9 @@ export class Board {
     app.on(PointerEvent.MOVE, (e: IPointerEvent) => this.onMove(e));
     app.on(PointerEvent.UP, () => this.onUp());
     app.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
-    // 连接器：非锚点按下隐藏边缘锚点（主 onDown 已短路锚点拖出，dragging 中跳过）；
-    // 抬起时按最新选中状态重建（点击空白取消选择等 AFTER_SELECT 覆盖不到的情形）
-    app.on(PointerEvent.DOWN, () => {
-      if (!this.connectorCtrl.dragging) {
-        this.connectorCtrl.cancel();
-      }
-    });
+    // 抬起时按最新选中状态重建连接器锚点（点击空白取消选择等 AFTER_SELECT
+    // 覆盖不到的情形）。锚点的「非锚点按下隐藏」收敛在 onDown 内完成——
+    // 独立监听器无法保证与主 onDown 的触发顺序，会把刚开始的拖出清掉
     app.on(PointerEvent.UP, () => this.connectorCtrl.refresh());
 
     this.editor.on(EditorMoveEvent.MOVE, (e) => {
@@ -1234,6 +1233,11 @@ export class Board {
           return;
         }
       }
+      // 非锚点按下（或锚点拖出未建立）：隐藏连接器锚点。
+      // 收敛在 onDown 内而不依赖监听器顺序，避免竞态把拖出清掉
+      if (!this.connectorCtrl.dragging) {
+        this.connectorCtrl.cancel();
+      }
       // 点编辑中：命中手柄开始拖点；点击空白退出；点击其他元素切换编辑目标
       if (this.pointEditEl) {
         const idx = this.hitPointHandle(e.x ?? 0, e.y ?? 0);
@@ -1530,16 +1534,19 @@ export class Board {
         // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
         this.normalizeContractEl(item.el);
         // frame 框架拖动：框内元素（frameId 归属）跟随位移。
-        // dx/dy 是相对手势起点的总位移而框架本体按绝对位置设置——直接透传
-        // 会让内容每帧叠加一次总位移而“飞出”框架，必须只传本帧增量
-        if (isFrameEl(item.el) && (dx || dy)) {
-          const stepX = dx - (item.lastDx ?? 0);
-          const stepY = dy - (item.lastDy ?? 0);
+        // 框架本体按吸附后的绝对位置设置，内容必须按「上一帧实际位置」的
+        // 差值增量移动——直接透传相对手势起点的总位移会每帧累计叠加，
+        // 网格吸附开启时按未吸附差值传递也会累积量化漂移
+        if (isFrameEl(item.el)) {
+          const curX = item.el.x ?? 0;
+          const curY = item.el.y ?? 0;
+          const stepX = curX - (item.lastPosX ?? curX);
+          const stepY = curY - (item.lastPosY ?? curY);
           if (stepX || stepY) {
             this.moveFrameContents(item.el, stepX, stepY);
           }
-          item.lastDx = dx;
-          item.lastDy = dy;
+          item.lastPosX = curX;
+          item.lastPosY = curY;
         }
       }
       // 落框预判高亮（手动拖动管线与编辑器拖动同语义）
@@ -3614,6 +3621,21 @@ export class Board {
     const meta = el as unknown as Record<string, unknown>;
     meta[FRAME_FLAG] = true;
     (el as unknown as { dashPattern?: number[] }).dashPattern = [8, 5];
+    // 框架一律带填充：内部可命中走增量拖动管线，也强化容器视觉。
+    // 旧矩形无填充时补默认色
+    if (el.fill === undefined || el.fill === "none") {
+      el.fill = FRAME_DEFAULT_FILL;
+    }
+    // 转换前已画在框内的元素补挂归属（此前只有绘制/导入时才会自动归属）
+    const fid = this.aiIdOf(el);
+    for (const other of this.app.tree.children as UI[]) {
+      if (other === el || isFrameEl(other) || this.frameIdOf(other)) {
+        continue;
+      }
+      if (this.frameContaining(other) === el) {
+        this.setFrameId(other, fid);
+      }
+    }
     this.commitHistory();
     this.opts.onMutated();
     return true;
@@ -5401,7 +5423,8 @@ export class Board {
           ...common,
           width: boxW,
           height: boxH,
-          fill,
+          // 框架一律带填充（fill 缺失时补默认色）：内部可命中走增量拖动管线
+          fill: fill ?? FRAME_DEFAULT_FILL,
           dashPattern: d.constrain ? undefined : (d.strokeDash ?? [8, 5]),
           // 折叠状态：裁剪超出内容，scrollY 偏移子级渲染。overflow 必须含
           // "scroll"（leafer Box 只在 overflow 含 scroll 时应用 scrollX/scrollY
