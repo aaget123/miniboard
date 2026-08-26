@@ -14,13 +14,14 @@
 
 ## P1 · 大型独立项目（每项 1~3 天，单独开分支）
 
-已落地四项（增量画布感知 / 智能对齐参考线 / 框架名称标签 / 落框高亮，详见 CHANGELOG）。剩余：
+七项已全部落地（增量画布感知 / 智能对齐参考线 / 框架名称标签 / 落框高亮 /
+正交折线连接线 / 连接器模式 / AI 增强三件套，详见 CHANGELOG）。后续延伸候选：
 
-| 项目 | 设计要点 |
-| --- | --- |
-| **正交折线连接线** | line 增加 route 类型（L 形路径点集），端点绑定复用 bindStart/bindEnd；重算时机跟随节点移动 |
-| **连接器模式** | 选中节点→边缘锚点拖出→落到目标节点自动建绑定箭头（已有端点绑定基础） |
-| **AI 增强三件套** | ask_user 澄清工具（中断循环等待用户结构化回答）；draw_flowchart 方向/间距参数；tools.ts 拆 perception/schemas/executors（perception 已部分拆出 ai/perception.ts） |
+- **正交路由升级**：当前为单拐点 L 形；避障绕行（多段 Z/门形）与多连线
+  分层间距可作为增强方向
+- **tools.ts 继续拆分**：schemas 已拆出 ai/tool-schemas.ts、perception 纯函数
+  已拆出 ai/perception.ts；执行器（executeTool 各 case）仍约 900 行，
+  可按 create/update/arrange/beautify 再切
 
 ## P2 · 小尾巴（各项 ≤ 半天）
 
