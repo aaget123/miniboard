@@ -3,15 +3,14 @@
 按优先级分层的未实施项。每条附关键设计提示，避免重复踩坑。
 完成一批请同步更新本文件与 CHANGELOG。
 
-## P0 · 待决策（需维护者拍板后实施）
+## P0 · 已拍板并落地
 
-1. **Alt+拖拽复制 vs Alt 出框豁免冲突**
-   现有约束框架用 Alt 作"拖出豁免"修饰键；若引入 Alt+拖拽复制，
-   约束框内元素的两个语义会打架。可选方案：
-   - 复制改用 Ctrl+拖拽（leafer 编辑器默认多选键冲突需验证）
-   - 或约束开启的框架内禁用拖拽复制
-2. **biome format 是否强制进 CI**：`npm run lint` 只跑 lint；
-   强制格式需接受一次性全量重排 diff（formatter 配置已就绪：空格缩进/宽 100）
+原两项决策已于本轮实施（详见 CHANGELOG [Unreleased]）：
+
+1. ~~Alt+拖拽复制 vs Alt 出框豁免冲突~~ → **约束开启的框架内禁用复制**，
+   框架外 Alt 用作复制修饰键；Alt 的「拖出豁免」语义不受影响。
+2. ~~biome format 是否强制进 CI~~ → **强制**；一次性全量重排已登记
+   `.git-blame-ignore-revs`。
 
 ## P1 · 大型独立项目（每项 1~3 天，单独开分支）
 
@@ -27,19 +26,19 @@
 
 ## P2 · 小尾巴（各项 ≤ 半天）
 
-- [ ] 编辑模式工具导入/导出（custom-tools.json 已是开放格式；导入强制过冒烟测试）
-- [ ] 自定义工具源码可编辑（设置页只读展示改为可编辑提交，仍走冒烟管线）
-- [ ] 使用统计（registry 记 useCount，设置页排序/清理）
-- [ ] 绘制后自动回选择工具（Excalidraw 默认行为；加设置开关）
-- [ ] 取色器（从画布取色到当前描边通道）
-- [ ] 选区尺寸已有 ✓；小地图（可先做 Ctrl 概览浮层）
-- [ ] window.confirm 替换为应用内弹窗（清空画布 + 批量确认两处）
-- [ ] README.en.md 功能清单同步中文版
+- [ ] 其余 window.confirm 迁移到应用内弹窗：`ui/confirm.ts` 的 `showConfirm`
+      已就绪，设置页/项目管理/工具删除等 7 处仍用原生 confirm
+      （WKWebView 环境同样会静默失败）
 - [ ] 快照历史 CPU 成本剖析（内存自适应前提不成立，已放弃；如需优化改增量序列化）
+- [ ] 小地图升级：Ctrl 概览浮层已有 ✓；常驻迷你小地图 / 滚轮缩放联动视口框待定
 
 ## 已知技术债
 
-- canvas.ts 仍约 5400 行：FrameController / PointEditController / 序列化转换层待拆
+- canvas.ts 仍约 5500 行：FrameController / PointEditController / 序列化转换层待拆
   （模板参考 crop-controller.ts 的 deps 注入模式）
 - settings.ts 约 2000 行单类，建议按页签拆模块
 - 橡皮悬停预览在大画布（万级元素）下的 hitTest 成本：必要时做空间索引
+- 待查·剪贴板「框架连同内容一起复制」的坐标双移嫌疑：copy() 序列化的是世界坐标，
+  粘贴管线却按「相对坐标」契约走 resolveFrameContents → toWorldElement 再加框架
+  原点，内容落点疑似偏移（Alt+拖拽复制已通过剥离 frameId 规避该路径）。复现后
+  统一 copy/paste 的 frameId 坐标契约
