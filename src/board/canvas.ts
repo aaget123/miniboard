@@ -866,6 +866,11 @@ export class Board {
 
   setTool(tool: string) {
     this.tool = tool;
+    // 编辑器内置框选（boxSelect）只在 select 工具下保留：框选/套索工具由
+    // 本应用自己结算选择（包围盒式、无遮挡语义）。若编辑器并行框选，松手时
+    // 会用「命中式」结果覆盖我们的选择——被顶层填充元素遮挡的元素选不中、
+    // 框架内容永远抢在框架本体之前（覆盖/框架无法选中的根因）
+    this.editor.config.boxSelect = tool === "select";
     // 内联文本编辑中：先关闭编辑器（触发收尾：空文本删除/历史提交）
     if (this.editor.innerEditor) {
       this.editor.closeInnerEditor();
