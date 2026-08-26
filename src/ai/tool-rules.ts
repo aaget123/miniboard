@@ -88,5 +88,18 @@ ${groups}
 
 验证与反馈：
 
-添加/修改工具时系统会先验证生成器（危险代码扫描 → 隔离执行 → 返回值格式校验），未通过会返回具体原因（如"生成器包含不允许的代码：while 循环"、"第 1 个元素：line/arrow 需要至少 2 个 points 点"），请根据原因修正生成器后重试；验证通过后会自动在画布右侧试画示例元素，可直接看到工具效果。`;
+添加/修改工具时系统会先验证生成器（危险代码扫描 → 隔离执行 → 返回值格式校验），未通过会返回具体原因（如"生成器包含不允许的代码：while 循环"、"第 1 个元素：line/arrow 需要至少 2 个 points 点"），请根据原因修正生成器后重试；验证通过后会自动在画布右侧试画示例元素，可直接看到工具效果。
+
+生成器范例（照此风格与坐标语义编写，可按需变形）：
+
+范例一 · 五角星印章（click，点击即生成，以点击点为中心）：
+(ctx) => { const cx = ctx.x0, cy = ctx.y0, R = 30, r = R * 0.42;
+  const pts = Array.from({ length: 10 }, (_, i) => { const a = -Math.PI / 2 + (i * Math.PI) / 5, rad = i % 2 ? r : R; return (cx + rad * Math.cos(a)).toFixed(2) + " " + (cy + rad * Math.sin(a)).toFixed(2); });
+  return { type: "path", x: 0, y: 0, width: R * 2, height: R * 2, path: "M " + pts.join(" L ") + " Z", fill: "#f7c948", stroke: "#b8860b", strokeWidth: ctx.style.strokeWidth }; }
+
+范例二 · 带标题便签（drag，数组=组合工具：主元素拖拽中实时预览，其余松手补齐）：
+(ctx) => { const x = Math.min(ctx.x0, ctx.x1), y = Math.min(ctx.y0, ctx.y1), w = Math.abs(ctx.x1 - ctx.x0), h = Math.abs(ctx.y1 - ctx.y0);
+  return [ { type: "rect", x, y, width: w, height: h, fill: "#fff9c4", stroke: "#c9bc5a", strokeWidth: 1 }, { type: "text", x: x + 8, y: y + h / 2 - 9, text: "便签", fontSize: 14, stroke: "#7a6d1f" } ]; }
+
+修改已有自定义工具前，先调用 list_tools 并传该工具的 id 取回 generator 源码，在其基础上做增量修改；不要凭记忆重写。`;
 }

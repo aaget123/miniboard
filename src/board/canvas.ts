@@ -144,6 +144,8 @@ export type BoardOptions = {
   onEraserRadiusChange?: (radiusPx: number) => void;
   /** 首次约束夹紧触发（拖动撞墙）：宿主提示 Alt 豁免（每次会话只报一次） */
   onConstraintHint?: () => void;
+  /** 自定义工具运行时异常回执（每工具每会话一次）：宿主 toast 并引导修复 */
+  onToolRuntimeError?: (toolId: string, message: string) => void;
 };
 
 /** 橡皮默认半径（px，屏幕像素）：分段擦除命中与光标圆圈共用 */
@@ -291,6 +293,8 @@ export class Board {
   private frameClampDirty = false;
   // 约束夹紧首次触发提示（Alt 豁免）只报一次
   private constraintHintShown = false;
+  // 已报过运行时错误的自定义工具（每工具每次会话一次）
+  private toolRuntimeErrShown = new Set<string>();
   /** 橡皮手势轨迹（app 坐标）：分段擦除按轨迹剔除笔迹区间 */
   private eraseTrail: { x: number; y: number }[] = [];
   /** 分段擦除快照：本手势已拆分的笔迹元素 → 原始点列（元素局部坐标） */
@@ -1248,6 +1252,13 @@ export class Board {
       return list;
     } catch (err) {
       console.error("[board] 生成器执行失败", err);
+      // 运行时错误回执：冒烟测试拦不住的执行期异常（此前完全黑盒），
+  // 每个工具每次会话只报一次，避免拖拽高频调用刷屏
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!this.toolRuntimeErrShown.has(this.tool)) {
+        this.toolRuntimeErrShown.add(this.tool);
+        this.opts.onToolRuntimeError?.(this.tool, msg);
+      }
       return null;
     }
   }

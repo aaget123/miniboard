@@ -2,7 +2,7 @@ import type { Board } from "../board/canvas";
 import { TEXT_FONT_SIZE } from "../board/canvas";
 import type { ToolRegistry } from "../board/registry";
 import type { Toolbar } from "../ui/toolbar";
-import type { CustomToolInput, ElementData } from "../types";
+import type { CustomToolDef, CustomToolInput, ElementData } from "../types";
 import { describeFreehandShape } from "../board/beautify";
 import { canvasToLocal, localToCanvas, round1 } from "../board/coords";
 import { elementBounds } from "../board/bounds";
@@ -849,8 +849,14 @@ function editTools(): AiTool[] {
     {
       name: "list_tools",
       description:
-        "查看功能区全部绘制工具（内置 + AI 生成的）的 id、名称、图标、快捷键、类型",
-      parameters: { type: "object", properties: {} },
+        "查看功能区绘制工具（内置 + AI 生成的）的 id、名称、图标、快捷键、类型。可选 id 过滤单个工具；includeSource=true 或按 id 过滤时附带自定义工具的 generator 源码——修改工具前必须先取源码做增量修改，不要凭记忆重写",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "可选：只查这一个工具（自动附带其 generator 源码）" },
+          includeSource: { type: "boolean", description: "可选：true 时为所有自定义工具附带 generator 源码" },
+        },
+      },
     },
     {
       name: "add_tool",
@@ -1681,15 +1687,25 @@ export async function executeTool(
           changed: false,
         };
       }
-      const tools = registry.list().map((t) => ({
-        id: t.id,
-        name: t.name,
-        icon: t.icon,
-        shortcut: t.shortcut ?? null,
-        kind: t.kind,
-        source: t.source,
-        group: t.group ?? null,
-      }));
+      const query = args as { id?: unknown; includeSource?: unknown };
+      const filterId = typeof query.id === "string" ? query.id : "";
+      const withSource = query.includeSource === true || !!filterId;
+      const tools = registry.list()
+        .filter((t) => !filterId || t.id === filterId)
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          icon: t.icon,
+          shortcut: t.shortcut ?? null,
+          kind: t.kind,
+          source: t.source,
+          group: t.group ?? null,
+          // 源码可见是增量修改的前提：凭空重写会造成功能回退
+          generator:
+            withSource && t.source === "custom"
+              ? ((t as CustomToolDef).generator ?? null)
+              : undefined,
+        }));
       return {
         name: tool.name,
         args,

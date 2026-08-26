@@ -86,6 +86,16 @@ export function scanGeneratorSource(code: string, kind?: string): string[] {
  */
 const ICON_PATTERN = /^[\u4e00-\u9fff\w▭◯△▲▽▼◇◆□■○●★☆✦✧→←↑↓↔╱╲∥∣✚＋＊※♥♠♦♣⚡]{1,2}$/;
 
+/** 图标兜底：非法/缺失时依次尝试 名称首字符 → 默认 "★"（中文/字母/数字首字符几乎必过白名单） */
+export function coerceIcon(icon: string | undefined, name: string): string {
+  for (const candidate of [icon?.trim(), name.trim()[0], "★"]) {
+    if (candidate && ICON_PATTERN.test(candidate)) {
+      return candidate;
+    }
+  }
+  return "★";
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace("#", "");
   const r = parseInt(h.slice(0, 2), 16);
@@ -491,9 +501,9 @@ export class ToolRegistry {
     if (!input.name?.trim()) {
       throw new Error("工具名称不能为空");
     }
-    if (!input.icon?.trim()) {
-      throw new Error("工具图标不能为空（1-2 个字符，如 ★、星）");
-    }
+    // 图标兜底：AI 自报图标不合法时按工具名首字符降级（中文/字母/数字几乎必过），
+    // 而非直接拒绝整个 add/update 调用
+    input.icon = coerceIcon(input.icon, input.name);
     if (!ICON_PATTERN.test(input.icon.trim())) {
       throw new Error("工具图标只支持 1-2 个字符的中文/字母/数字/常见符号（如 ★、▭、箭头），不能使用 emoji 或长文本");
     }

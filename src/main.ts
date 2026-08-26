@@ -203,6 +203,11 @@ async function main() {
     },
     // 首次约束夹紧（拖动撞墙）：一次性提示 Alt 豁免
     onConstraintHint: () => toast("已吸附在约束框架内 · 按住 Alt 可拖出"),
+    // 自定义工具运行时异常：toast 引导修复（每工具每会话一次）
+    onToolRuntimeError: (toolId, message) => {
+      const name = registry.list().find((t) => t.id === toolId)?.name ?? toolId;
+      toast(`工具「${name}」执行出错：${message}（可在 ⚙→AI 工具 中对话修复）`);
+    },
   });
   // 恢复上次使用的橡皮半径
   board.setEraserRadius(loadEraserRadius());
