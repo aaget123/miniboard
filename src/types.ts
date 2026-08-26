@@ -166,6 +166,8 @@ export type ElementData = {
   /** line/arrow: 端点绑定的元素稳定 id（被绑元素移动时端点自动跟随） */
   bindStart?: string;
   bindEnd?: string;
+  /** line/arrow: 正交折线路由——端点变化时自动重建 L 形中间路径点（连接器创建的连线默认开启） */
+  route?: boolean;
   /** line/arrow: 起点端点样式（undefined = 无） */
   startArrow?: ArrowHead;
   /** line/arrow: 终点端点样式（undefined = 无；arrow 类型创建时默认 triangle） */

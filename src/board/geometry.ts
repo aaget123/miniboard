@@ -143,3 +143,20 @@ export function polygonHitsBox(poly: Pt[], box: Box): boolean {
   }
   return false;
 }
+
+/**
+ * 正交折线（L 形 / 直角路由）的中间路径点（不含首尾端点）：
+ * - S/E 已共轴（某轴差 < 0.5）返回空，退化为直线；
+ * - 单拐点 L 形——水平主导（|dx| ≥ |dy| 或 prefer="h"）拐点取 (e.x, s.y)
+ *   （先横后纵），否则取 (s.x, e.y)（先纵后横）；连接器按绑定节点的
+ *   中心相对方位传 prefer 覆盖默认主导判定。
+ */
+export function buildOrthoWaypoints(s: Pt, e: Pt, prefer?: "h" | "v"): Pt[] {
+  const dx = Math.abs(e.x - s.x);
+  const dy = Math.abs(e.y - s.y);
+  if (dx < 0.5 || dy < 0.5) {
+    return [];
+  }
+  const horizontalFirst = prefer ? prefer === "h" : dx >= dy;
+  return horizontalFirst ? [{ x: e.x, y: s.y }] : [{ x: s.x, y: e.y }];
+}

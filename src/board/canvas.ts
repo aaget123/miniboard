@@ -75,7 +75,13 @@ import {
   toLeaferArrow,
   typeOf,
 } from "./element-utils";
-import { distToSegment, nearestBorderPoint, polygonHitsBox, rectsIntersect } from "./geometry";
+import {
+  buildOrthoWaypoints,
+  distToSegment,
+  nearestBorderPoint,
+  polygonHitsBox,
+  rectsIntersect,
+} from "./geometry";
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
 import { penSizeOf, splitArrowHeads, splitErasedPoints, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
@@ -1834,6 +1840,10 @@ export class Board {
     }
     pts[idx] = p;
     el.points = pts;
+    // 正交折线：端点拖动实时重建 L 形中间路径（中点被拖动时同样按新几何重排）
+    if ((el as unknown as { __isRoute?: boolean }).__isRoute === true) {
+      this.rebuildRoutePoints(el);
+    }
     this.buildPointHandles();
   }
 
@@ -1964,8 +1974,41 @@ export class Board {
       }
       if (changed) {
         el.points = pts;
+        // 正交折线（route）：端点变化后重建 L 形中间路径点
+        if ((el as unknown as { __isRoute?: boolean }).__isRoute === true) {
+          this.rebuildRoutePoints(el);
+        }
       }
     }
+  }
+
+  /**
+   * 正交折线重建：以两端点的世界坐标生成 L 形中间路径点（不含端点），
+   * 出入方向优先按两个绑定节点中心的相对方位（水平/垂直连接），
+   * 无绑定时按端点主导轴。仅替换中间点，端点保持调用方刚写入的位置。
+   */
+  private rebuildRoutePoints(el: Line) {
+    const pts = pointsOf(el);
+    if (pts.length < 2) {
+      return;
+    }
+    const t = el as unknown as { __bindStart?: string; __bindEnd?: string };
+    let prefer: "h" | "v" | undefined;
+    if (t.__bindStart && t.__bindEnd) {
+      const a = this.findByAiId(t.__bindStart)?.worldBoxBounds;
+      const b = this.findByAiId(t.__bindEnd)?.worldBoxBounds;
+      if (a && b) {
+        prefer =
+          Math.abs(b.x + b.width / 2 - (a.x + a.width / 2)) >=
+          Math.abs(b.y + b.height / 2 - (a.y + a.height / 2))
+            ? "h"
+            : "v";
+      }
+    }
+    const s = el.getWorldPoint(pts[0]);
+    const e = el.getWorldPoint(pts[pts.length - 1]);
+    const mid = buildOrthoWaypoints(s, e, prefer).map((p) => el.getLocalPoint(p));
+    el.points = [pts[0], ...mid, pts[pts.length - 1]];
   }
 
   // ================= 选择命中 =================
@@ -5004,7 +5047,7 @@ export class Board {
       };
     }
     if (el instanceof Line) {
-      const t = el as unknown as { __bindStart?: string; __bindEnd?: string };
+      const t = el as unknown as { __bindStart?: string; __bindEnd?: string; __isRoute?: boolean };
       return {
         ...base,
         // leafer 2.x 的 endArrow 默认值是字符串 "none"（truthy），需排除；
@@ -5015,6 +5058,7 @@ export class Board {
         points: el.points as { x: number; y: number }[] | undefined,
         bindStart: t.__bindStart,
         bindEnd: t.__bindEnd,
+        route: t.__isRoute === true ? true : undefined,
         startArrow: arrowHeadOf(el.startArrow),
         endArrow: arrowHeadOf(el.endArrow),
       };
@@ -5255,6 +5299,9 @@ export class Board {
           endArrow: toLeaferArrow(d.endArrow),
         });
         bindingsToEl(el, d);
+        if (d.route === true) {
+          (el as unknown as { __isRoute?: boolean }).__isRoute = true;
+        }
         return el;
       }
       case "arrow": {
@@ -5266,6 +5313,9 @@ export class Board {
           endArrow: d.endArrow !== undefined ? toLeaferArrow(d.endArrow) : "triangle",
         });
         bindingsToEl(el, d);
+        if (d.route === true) {
+          (el as unknown as { __isRoute?: boolean }).__isRoute = true;
+        }
         return el;
       }
       case "path": {
