@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  diffElementSnapshots,
-  fingerprintElement,
-  hasChanges,
-} from "./perception";
+import { diffElementSnapshots, fingerprintElement, hasChanges } from "./perception";
 import type { ElementData } from "../types";
 
 function rect(id: string, x: number, y: number, extra?: Partial<ElementData>): ElementData {
@@ -29,8 +25,24 @@ describe("fingerprintElement", () => {
     const a = rect("e1", 0, 0, { stroke: "#ff0000" });
     const b = rect("e1", 0, 0, { stroke: "#00ff00" });
     expect(fingerprintElement(a)).not.toBe(fingerprintElement(b));
-    const t1: ElementData = { id: "t", type: "text", x: 0, y: 0, width: 40, height: 20, text: "旧" };
-    const t2: ElementData = { id: "t", type: "text", x: 0, y: 0, width: 40, height: 20, text: "新" };
+    const t1: ElementData = {
+      id: "t",
+      type: "text",
+      x: 0,
+      y: 0,
+      width: 40,
+      height: 20,
+      text: "旧",
+    };
+    const t2: ElementData = {
+      id: "t",
+      type: "text",
+      x: 0,
+      y: 0,
+      width: 40,
+      height: 20,
+      text: "新",
+    };
     expect(fingerprintElement(t1)).not.toBe(fingerprintElement(t2));
   });
 });
@@ -60,7 +72,17 @@ describe("diffElementSnapshots", () => {
   });
 
   it("完全相同的快照无变更", () => {
-    const prev = [rect("a", 1.234, 2.345), { id: "l", type: "line" as const, points: [{ x: 0, y: 0 }, { x: 9.876, y: 5 }] } as ElementData];
+    const prev = [
+      rect("a", 1.234, 2.345),
+      {
+        id: "l",
+        type: "line" as const,
+        points: [
+          { x: 0, y: 0 },
+          { x: 9.876, y: 5 },
+        ],
+      } as ElementData,
+    ];
     const next = structuredClone(prev);
     const diff = diffElementSnapshots(prev, next);
     expect(hasChanges(diff)).toBe(false);

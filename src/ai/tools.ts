@@ -455,7 +455,11 @@ function describeNoChange(board: Board, snapshot: ElementData[]): string {
  * 版本推进时的增量变更集输出；变更面超过 MAX_DESCRIBE 时返回 null，
  * 由调用方退回完整快照（此时逐条列出反而更长且信息密度更低）。
  */
-function describePerceptionDiff(board: Board, next: ElementData[], diff: ElementDiff): string | null {
+function describePerceptionDiff(
+  board: Board,
+  next: ElementData[],
+  diff: ElementDiff,
+): string | null {
   const total = diff.added.length + diff.updated.length;
   if (total > MAX_DESCRIBE) {
     return null;

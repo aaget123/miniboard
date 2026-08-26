@@ -57,6 +57,7 @@ import {
 import type { ArrangeAction, ReorderMode } from "./arrange";
 import { elementBounds, unionBounds } from "./bounds";
 import { CropController } from "./crop-controller";
+import { ConnectorController, type Side } from "./connector-controller";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
 import {
@@ -328,6 +329,8 @@ export class Board {
   private nextElId = 1;
   /** 鼠标最后位置（画布坐标，粘贴跟随鼠标用）；null 表示鼠标从未进入画布 */
   private lastPointer: { x: number; y: number } | null = null;
+  /** 指针最后 app 坐标（连接器拖出松手取落点用；onUp 不携带事件） */
+  private lastAppPoint: { x: number; y: number } | null = null;
   /** 当前画布背景色（主题切换/导出共用，默认深色） */
   private background = BACKGROUND;
   // 线性元素点编辑：双击 line/arrow 进入，sky 层手柄拖点/双击线段加点
@@ -339,6 +342,7 @@ export class Board {
   private dragUnbindEnd = false;
   // 图片裁剪：独立交互控制器（sky 层裁剪框 + 8 手柄，松手即应用）
   private cropCtrl!: CropController;
+  private connectorCtrl!: ConnectorController;
   /** 文本缩放语义：横向拉伸换行、纵向/对角改字号（记录缩放前的原始状态） */
   private textScaleOrig = new Map<Text, { fontSize: number; width: number }>();
   /** 框架缩放手势的内容快照（幂等重算基准；手势结束清空） */
@@ -522,6 +526,23 @@ export class Board {
       commitHistory: () => this.commitHistory(),
       onMutated: () => this.opts.onMutated(),
     });
+    this.connectorCtrl = new ConnectorController({
+      app: this.app,
+      allowed: () =>
+        this.tool === "select" &&
+        !this.editor.innerEditor &&
+        !this.cropCtrl.active &&
+        !this.pointEditEl,
+      selectedList: () => this.selectedList,
+      isConnectable: (el) => {
+        const t = typeOf(el);
+        return t === "rect" || t === "ellipse" || t === "text" || t === "frame" || t === "image";
+      },
+      findTargetAt: (ax, ay, exclude) => this.hitTest({ x: ax, y: ay }, 5, exclude),
+      aiIdOf: (el) => this.aiIdOf(el),
+      createArrow: (sourceId, targetId, endWorld, prefer) =>
+        this.createBoundArrow(sourceId, targetId, endWorld, prefer),
+    });
     this.bindEvents();
     // 自研滚轮缩放：以鼠标位置为不动点
     (this.app.canvas.view as HTMLElement).addEventListener("wheel", this.onWheel, {
@@ -556,6 +577,14 @@ export class Board {
     app.on(PointerEvent.MOVE, (e: IPointerEvent) => this.onMove(e));
     app.on(PointerEvent.UP, () => this.onUp());
     app.on(PointerEvent.TAP, (e: IPointerEvent) => this.onTap(e));
+    // 连接器：非锚点按下隐藏边缘锚点（主 onDown 已短路锚点拖出，dragging 中跳过）；
+    // 抬起时按最新选中状态重建（点击空白取消选择等 AFTER_SELECT 覆盖不到的情形）
+    app.on(PointerEvent.DOWN, () => {
+      if (!this.connectorCtrl.dragging) {
+        this.connectorCtrl.cancel();
+      }
+    });
+    app.on(PointerEvent.UP, () => this.connectorCtrl.refresh());
 
     this.editor.on(EditorMoveEvent.MOVE, (e) => {
       const ev = e as EditorMoveEvent;
@@ -701,6 +730,8 @@ export class Board {
     });
     this.app.on(ZoomEvent.END, () => {
       this.frameScaleSnap = null;
+      // 视口变化后重建 sky 层连接器锚点（与点编辑手柄同策略）
+      this.connectorCtrl.refresh();
     });
   }
 
@@ -819,6 +850,8 @@ export class Board {
       opacity,
       cornerRadius,
     });
+    // 连接器锚点跟随选中状态（单选可连接节点时显示）
+    this.connectorCtrl.refresh();
   }
 
   // ================= 工具 =================
@@ -835,6 +868,8 @@ export class Board {
       this.exitPointEdit();
       this.cancelCrop();
     }
+    // 连接器锚点仅在 select 工具显示（allowed 判定在 refresh 内）
+    this.connectorCtrl.refresh();
     // 切换工具时终止未完成的拖拽/框选/擦除，并同步光标
     this.panning = false;
     this.erasing = false;
@@ -1173,6 +1208,15 @@ export class Board {
         this.cropCtrl.handleDown(e.x ?? 0, e.y ?? 0);
         return;
       }
+      // 连接器锚点拖出（选中节点四边中点圆点）：短路后续选择/拖动流程
+      const side: Side | null = this.connectorCtrl.hitAnchor(e.x ?? 0, e.y ?? 0);
+      if (side) {
+        this.editor.cancel();
+        this.exitPointEdit();
+        if (this.connectorCtrl.beginDrag(side)) {
+          return;
+        }
+      }
       // 点编辑中：命中手柄开始拖点；点击空白退出；点击其他元素切换编辑目标
       if (this.pointEditEl) {
         const idx = this.hitPointHandle(e.x ?? 0, e.y ?? 0);
@@ -1406,6 +1450,7 @@ export class Board {
     if (e.x != null && e.y != null) {
       const p = this.app.tree.getInnerPoint({ x: e.x, y: e.y });
       this.lastPointer = { x: p.x, y: p.y };
+      this.lastAppPoint = { x: e.x, y: e.y };
     }
     // 手型拖拽：按指针位移移动 zoomLayer
     if (this.panning) {
@@ -1427,6 +1472,11 @@ export class Board {
         this.eraseTrail.push({ x: ax, y: ay });
         this.eraseAt(ax, ay);
       }
+      return;
+    }
+    // 连接器拖出中：临时连线跟随指针
+    if (this.connectorCtrl.dragging) {
+      this.connectorCtrl.updateDrag(e.x ?? 0, e.y ?? 0);
       return;
     }
     // 橡皮悬停（未按下）：同样显示待删预览，给用户反悔预期
@@ -1541,6 +1591,12 @@ export class Board {
   private onUp() {
     // 框架缩放快照兜底清理（手势结束事件漏发时防残留；通常由 DragEvent.END 清理）
     this.frameScaleSnap = null;
+    // 连接器拖出结束：按落点创建箭头（onUp 不携带事件，用最近 app 坐标）
+    if (this.connectorCtrl.dragging) {
+      const p = this.lastAppPoint ?? { x: 0, y: 0 };
+      this.connectorCtrl.finishDrag(p.x, p.y);
+      return;
+    }
     // 手型拖拽结束
     if (this.panning) {
       this.panning = false;
@@ -2011,16 +2067,71 @@ export class Board {
     el.points = [pts[0], ...mid, pts[pts.length - 1]];
   }
 
+  /**
+   * 连接器落点：创建箭头。targetId 非空 → route 绑定连线（端点取双方边框
+   * 最近点，bindStart/bindEnd 记录绑定，L 形按绑定节点方位重算）；为空 →
+   * 普通直线箭头延伸到落点。样式取当前默认描边，创建即入历史。
+   */
+  createBoundArrow(
+    sourceId: string,
+    targetId: string | null,
+    endWorld: { x: number; y: number },
+    _prefer: "h" | "v" = "h",
+  ): boolean {
+    const source = this.findByAiId(sourceId);
+    if (!source) {
+      return false;
+    }
+    const target = targetId ? this.findByAiId(targetId) : null;
+    if (targetId && !target) {
+      return false;
+    }
+    const startW = nearestBorderPoint(source, endWorld);
+    if (!startW) {
+      return false;
+    }
+    const endW = target ? nearestBorderPoint(target, startW) : { x: endWorld.x, y: endWorld.y };
+    if (!endW) {
+      return false;
+    }
+    const style = this.opts.getStyle();
+    const data: ElementData = {
+      type: "arrow",
+      x: 0,
+      y: 0,
+      width: Math.abs(endW.x - startW.x),
+      height: Math.abs(endW.y - startW.y),
+      points: [{ ...startW }, { ...endW }],
+      stroke: style.stroke,
+      strokeWidth: style.strokeWidth,
+      bindStart: target ? sourceId : undefined,
+      bindEnd: target ? (targetId ?? undefined) : undefined,
+      route: target ? true : undefined,
+    };
+    const el = this.dataToElement(data);
+    if (!el) {
+      return false;
+    }
+    this.addToTree(el);
+    // L 形按绑定节点中心的相对方位重排（rebuildRoutePoints 自行推导方向）
+    if (el instanceof Line && target) {
+      this.rebuildRoutePoints(el);
+    }
+    this.adoptIntoFrame(el);
+    this.commitHistory();
+    return true;
+  }
+
   // ================= 选择命中 =================
 
-  private hitTest(world: { x: number; y: number }, radius = 5): UI | null {
+  private hitTest(world: { x: number; y: number }, radius = 5, exclude?: UI | null): UI | null {
     // 逐元素像素级命中：线段/箭头/画笔按实际描边命中；
     // 空心图形内部透明区域不命中，可穿透选中下层元素。
     // hitRadius 扩大命中容差（细线也容易点中；橡皮按光标半径命中）
     const children = this.app.tree.children as UI[];
     for (let i = children.length - 1; i >= 0; i--) {
       const el = children[i];
-      if (this.isEditorInternal(el)) {
+      if (el === exclude || this.isEditorInternal(el)) {
         continue; // editor 内部元素（多选模拟层）不可交互
       }
       if (el.hit(world, radius)) {
@@ -5437,8 +5548,8 @@ export class Board {
    * tree 层自己的画布上；tree 画布空区域为透明，需与画布背景色合成。
    */
   private samplePixelAt(ax: number, ay: number): string | null {
-    const view = (this.app.tree as unknown as { canvas?: { view?: HTMLCanvasElement } })
-      .canvas?.view;
+    const view = (this.app.tree as unknown as { canvas?: { view?: HTMLCanvasElement } }).canvas
+      ?.view;
     if (!(view instanceof HTMLCanvasElement)) {
       return null;
     }
@@ -5507,10 +5618,7 @@ export class Board {
   }
 
   /** 单轴吸附：期望边值与候选线的最小距离 ≤ 阈值时返回修正量与参考线位置 */
-  private snapAxis(
-    edges: number[],
-    candidates: number[],
-  ): { offset: number; line: number } | null {
+  private snapAxis(edges: number[], candidates: number[]): { offset: number; line: number } | null {
     let best: { dist: number; offset: number; line: number } | null = null;
     for (const e of edges) {
       for (const c of candidates) {

@@ -18,11 +18,7 @@ describe("buildOrthoWaypoints（正交折线 L 形路径）", () => {
   });
 
   it("prefer 显式覆盖主导判定（连接器按绑定边出入方向传入）", () => {
-    expect(buildOrthoWaypoints({ x: 0, y: 0 }, { x: 120, y: 40 }, "v")).toEqual([
-      { x: 0, y: 40 },
-    ]);
-    expect(buildOrthoWaypoints({ x: 0, y: 0 }, { x: 30, y: 90 }, "h")).toEqual([
-      { x: 30, y: 0 },
-    ]);
+    expect(buildOrthoWaypoints({ x: 0, y: 0 }, { x: 120, y: 40 }, "v")).toEqual([{ x: 0, y: 40 }]);
+    expect(buildOrthoWaypoints({ x: 0, y: 0 }, { x: 30, y: 90 }, "h")).toEqual([{ x: 30, y: 0 }]);
   });
 });
