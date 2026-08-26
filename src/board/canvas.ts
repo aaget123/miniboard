@@ -306,6 +306,14 @@ export class Board {
   private dragStart = { x: 0, y: 0 };
   private dragEls: { el: UI; x: number; y: number }[] = [];
   private movedAny = false;
+  /** Alt+拖拽复制（落点克隆）：手势内按住 Alt 拖动元素时快照，松手后在拖动前
+   * 原位重建快照元素——移动中的元素即副本。约束开启的框架内禁用（Alt 在那里
+   * 保留「出框豁免」语义，BACKLOG P0 决策）。 */
+  private altCopySnap: { data: ElementData; z: number }[] | null = null;
+  /** 本手势已判定为不可复制（约束框架内等），不再逐帧重试 */
+  private altCopyBlocked = false;
+  /** 快照后实际发生过位移才产生副本（Alt+轻点不生成隐形重复） */
+  private altCopyMoved = false;
   /** leafer 拖动涉及的契约元素（拖动结束统一归一化 x/y → points/path） */
   private moveNormalizeEls = new Set<UI>();
   // 内部剪贴板（复制/剪切/粘贴）
@@ -502,6 +510,19 @@ export class Board {
 
     this.editor.on(EditorMoveEvent.MOVE, (e) => {
       const ev = e as EditorMoveEvent;
+      // Alt+拖拽复制挂靠：按住 Alt 且尚未快照/未判禁用时，以编辑器选中集为
+      // 移动单元尝试快照（支持拖动中途按下 Alt，下一帧生效）
+      if (!this.altCopySnap && !this.altCopyBlocked && this.modKeys.alt) {
+        const movers = (
+          (this.editor as unknown as { list?: UI[] }).list ?? []
+        ).filter((m) => m && !m.locked);
+        if (!movers.length || !this.tryLatchAltCopy(movers)) {
+          this.altCopyBlocked = true;
+        }
+      }
+      if (this.altCopySnap && (ev.moveX || ev.moveY)) {
+        this.altCopyMoved = true;
+      }
       // 被移动元素：leafer 2.2.9 的 MOVE 事件 data 为 { target, editor, moveX,
       // moveY }，不含 operateEvent（历史写法导致 moved 恒为 undefined，框内
       // 跟随/组联动/吸附/拖动夹紧全部失效）
@@ -643,6 +664,11 @@ export class Board {
         }
         this.moveNormalizeEls.clear();
         this.scheduleHistory();
+      }
+      // Alt+拖拽复制收尾（落点克隆）：编辑器拖动路径在此还原快照；手动拖动
+      // （selectDragging）路径由 onUp 提交，此处跳过避免双提交
+      if (!this.selectDragging) {
+        this.commitAltCopy();
       }
     });
     this.app.on(ZoomEvent.END, () => {
@@ -1014,6 +1040,10 @@ export class Board {
   // ================= 绘制交互 =================
 
   private onDown(e: IPointerEvent) {
+    // 新手势：清空 Alt+拖拽复制的挂靠状态（快照 / 禁用判定 / 位移标记）
+    this.altCopySnap = null;
+    this.altCopyBlocked = false;
+    this.altCopyMoved = false;
     // 右键（button=2）不参与绘制/选择交互：选择变更仅由 contextmenu 流程决定，
     // 避免多选后右键时 leafer 的 DOWN 事件把选择取消/替换
     if (e.right) {
@@ -1333,8 +1363,19 @@ export class Board {
       const p = this.app.tree.getInnerPoint({ x: e.x ?? 0, y: e.y ?? 0 });
       const dx = p.x - this.dragStart.x;
       const dy = p.y - this.dragStart.y;
+      // Alt+拖拽复制挂靠（手动拖动管线）：应用本帧位移前以 dragEls 为移动单元
+      // 快照（组感知已含于 dragEls）
+      if (!this.altCopySnap && !this.altCopyBlocked && this.modKeys.alt) {
+        const movers = this.dragEls.map((i) => i.el);
+        if (!movers.length || !this.tryLatchAltCopy(movers)) {
+          this.altCopyBlocked = true;
+        }
+      }
       if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
         this.movedAny = true;
+        if (this.altCopySnap) {
+          this.altCopyMoved = true;
+        }
       }
       for (const item of this.dragEls) {
         item.el.x = this.snapGrid(item.x + dx);
@@ -1478,7 +1519,11 @@ export class Board {
       this.selectDragging = false;
       this.dragEls = [];
       if (this.movedAny) {
+        // Alt+拖拽复制收尾（手动拖动路径的落点克隆），与位移并入同一步历史
+        this.commitAltCopy();
         this.commitHistory();
+      } else {
+        this.commitAltCopy(); // 未移动：内部按空操作清理挂靠状态
       }
       return;
     }
@@ -2604,7 +2649,14 @@ export class Board {
 
   /** 选中集合的组感知展开：选中含组成员时返回整组（拖拽联动用），否则原样返回 */
   private groupExpandedSelection(): UI[] {
-    const list = this.selectedList;
+    return this.groupExpanded(this.selectedList);
+  }
+
+  /**
+   * 组感知展开：列表含组成员时返回整组成员并集（保持传入成员在内），
+   * 供选中拖动与 Alt+拖拽复制的移动单元计算共用。
+   */
+  private groupExpanded(list: UI[]): UI[] {
     const gids = new Set(
       list
         .map((el) => (el as unknown as { __groupId?: string }).__groupId)
@@ -2621,6 +2673,128 @@ export class Board {
       }
     }
     return [...picked];
+  }
+
+  // ================= Alt+拖拽复制（落点克隆） =================
+
+  /**
+   * Alt+拖拽复制挂靠：以 movers（编辑器选中集或手动拖动列表）为粒度做落点
+   * 克隆快照。返回是否成功快照；false = 本手势不可复制（约束框架内禁用 /
+   * 无可序列化元素），调用方据此停止逐帧重试。
+   *
+   * 维护者决策（BACKLOG P0-1）：约束开启的框架内禁用 Alt+拖拽复制——Alt 在
+   * 约束拖动中保留「出框豁免」语义；框架外 Alt 无其他含义，用作复制修饰键。
+   */
+  private tryLatchAltCopy(movers: UI[]): boolean {
+    if (!this.modKeys.alt || !movers.length) {
+      return false;
+    }
+    const units = this.groupExpanded(this.expandMoversForSnap(movers)).filter(
+      (el) => !el.locked,
+    );
+    if (
+      !units.length ||
+      units.some((m) => !isFrameEl(m) && this.constrainFrameOf(m))
+    ) {
+      return false;
+    }
+    const children = this.app.tree.children as UI[];
+    const snap: { data: ElementData; z: number }[] = [];
+    for (const el of units) {
+      const d = this.elementToData(el);
+      if (!d) {
+        continue;
+      }
+      // 副本分配全新 id（id 置空）；剥离 frameId——快照是世界坐标，保留会走
+      // 「相对坐标契约」被二次换算，提交时改由 adoptIntoFrame 按 bbox 重新
+      // 归属；groupId 保留原值，提交时整组重映射，避免与原组联动串门
+      snap.push({
+        data: { ...d, id: undefined, frameId: undefined },
+        z: Math.max(children.indexOf(el), 0),
+      });
+    }
+    if (!snap.length) {
+      return false;
+    }
+    this.altCopySnap = snap;
+    return true;
+  }
+
+  /**
+   * 移动单元补全：拖动框架时其归属内容元素随框架平移（moveFrameContents
+   * 驱动，不在编辑器选中列表里），快照需覆盖它们才能整组还原。
+   */
+  private expandMoversForSnap(movers: UI[]): UI[] {
+    const picked = new Set<UI>(movers);
+    const fids = new Set<string>();
+    for (const m of movers) {
+      if (isFrameEl(m)) {
+        const id = this.aiIdOf(m);
+        if (id) {
+          fids.add(id);
+        }
+      }
+    }
+    if (fids.size) {
+      for (const el of this.app.tree.children as UI[]) {
+        if (picked.has(el) || el.locked || isFrameEl(el)) {
+          continue;
+        }
+        const fid = this.frameIdOf(el);
+        if (fid && fids.has(fid)) {
+          picked.add(el);
+        }
+      }
+    }
+    return [...picked];
+  }
+
+  /**
+   * Alt+拖拽复制收尾（落点克隆）：DragEvent.END / 手动拖动结束时调用，
+   * 无快照或未实际位移时为空操作。快照元素在拖动前原位重建——新 id、新组 id、
+   * 尽量插回原 z 序、按 bbox 重新归属框架。留在原位的是克隆出的“原件”，
+   * 被拖到落点的是原元素（保持选中，符合“副本跟随光标”的直觉）。
+   */
+  private commitAltCopy() {
+    const snap = this.altCopySnap;
+    const moved = this.altCopyMoved;
+    this.altCopySnap = null;
+    this.altCopyBlocked = false;
+    this.altCopyMoved = false;
+    if (!snap || !moved) {
+      return;
+    }
+    // 组关系重映射：副本组与原组彻底脱离（同 groupId 会排列/删除/拖动联动）
+    const gidMap = new Map<string, string>();
+    for (const s of snap) {
+      const g = s.data.groupId;
+      if (g && !gidMap.has(g)) {
+        gidMap.set(g, `grp-${this.nextElId++}`);
+      }
+    }
+    let inserted = 0;
+    const created: UI[] = [];
+    for (const s of [...snap].sort((a, b) => a.z - b.z)) {
+      const g = s.data.groupId;
+      const d = g ? { ...s.data, groupId: gidMap.get(g) } : s.data;
+      const el = this.dataToElement(d);
+      if (!el) {
+        continue;
+      }
+      // 尽量插回拖动前的层序（同批插入使序号偏移，越界由 splice 兜底追加）
+      this.app.tree.add(el, s.z + inserted);
+      created.push(el);
+      inserted++;
+    }
+    if (!inserted) {
+      return;
+    }
+    // 定向重新归属：克隆件落在原位置，仍完全包含于某框架则挂回归属。
+    // 不全局 resolveFrameContents——避免既有归属成员被相对坐标换算二次位移
+    for (const el of created) {
+      this.adoptIntoFrame(el);
+    }
+    this.commitHistory();
   }
 
   // ================= 样式应用 =================
