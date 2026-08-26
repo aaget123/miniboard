@@ -106,6 +106,8 @@ const POINT_HANDLE_SIZE = 10;
 const SNAP_BIND_PX = 10;
 // 智能对齐吸附的屏幕距离阈值（px）与参考线颜色（画在 sky 层）
 const ALIGN_SNAP_PX = 6;
+// 已锁定吸附线的迟滞退出阈值（> 进入阈值，避免阈值边界反复命中/丢失导致参考线闪烁）
+const ALIGN_HYST_PX = 18;
 const ALIGN_GUIDE_STROKE = "#f24aa0";
 // 框架名称标签：字号 / 与框架上沿的间距 / 颜色（子级 Text，hit:false 点击穿透）
 const FRAME_NAME_LABEL_SIZE = 11;
@@ -309,7 +311,7 @@ export class Board {
   // 选中框内拖动：点击点在选中元素包围盒内（而非元素本体）时手动移动整个选择
   private selectDragging = false;
   private dragStart = { x: 0, y: 0 };
-  private dragEls: { el: UI; x: number; y: number }[] = [];
+  private dragEls: { el: UI; x: number; y: number; lastDx?: number; lastDy?: number }[] = [];
   private movedAny = false;
   /** Alt+拖拽复制（落点克隆）：手势内按住 Alt 拖动元素时快照，松手后在拖动前
    * 原位重建快照元素——移动中的元素即副本。约束开启的框架内禁用（Alt 在那里
@@ -362,6 +364,9 @@ export class Board {
   // 智能对齐参考线（单选拖动）：候选边每手势收集一次，参考线画在 sky 层
   private alignCandidates: { xs: number[]; ys: number[] } | null = null;
   private alignGuides: UI[] = [];
+  // 已锁定的吸附线（世界坐标）：迟滞期内只认锁定线，防阈值边界抖动
+  private alignLockX: number | null = null;
+  private alignLockY: number | null = null;
   // 落框高亮：拖动中联合 bbox 完全落入某框架时，sky 层画高亮框预判归属
   // （不修改框架本体属性——拖动中的防抖历史快照不会捕获高亮态）
   private dropHighlightFrame: UI | null = null;
@@ -419,13 +424,15 @@ export class Board {
             const wd0 = t.getWorldPointByLocal({ x: nx, y: ny }, undefined, true);
             const b = t.worldBoxBounds;
             if (b && this.alignCandidates) {
-              const hitX = this.snapAxis(
+              const hitX = this.snapAxisLocked(
                 [b.x + wd0.x, b.x + b.width / 2 + wd0.x, b.x + b.width + wd0.x],
                 this.alignCandidates.xs,
+                "x",
               );
-              const hitY = this.snapAxis(
+              const hitY = this.snapAxisLocked(
                 [b.y + wd0.y, b.y + b.height / 2 + wd0.y, b.y + b.height + wd0.y],
                 this.alignCandidates.ys,
+                "y",
               );
               if (hitX || hitY) {
                 const wd = {
@@ -724,9 +731,12 @@ export class Board {
       if (!this.selectDragging) {
         this.commitAltCopy();
       }
-      // 对齐参考线与落框高亮手势收尾清空（候选缓存一并失效）
+      // 对齐参考线与落框高亮手势收尾清空（候选缓存与迟滞锁一并失效）
       this.clearAlignGuides();
       this.clearDropHighlight();
+      this.alignCandidates = null;
+      this.alignLockX = null;
+      this.alignLockY = null;
     });
     this.app.on(ZoomEvent.END, () => {
       this.frameScaleSnap = null;
@@ -1051,6 +1061,8 @@ export class Board {
     if (this.cropCtrl.active) {
       this.cropCtrl.rebuild();
     }
+    // 自研滚轮缩放不走 leafer 缩放管线（无 ZoomEvent），连接器锚点在此跟随
+    this.connectorCtrl.refresh();
   };
 
   get currentTool() {
@@ -1136,12 +1148,17 @@ export class Board {
   // ================= 绘制交互 =================
 
   private onDown(e: IPointerEvent) {
+    // 修饰键以指针事件为准同步（同 onMove：浏览器可能吞掉 Alt 的 keydown）
+    this.modKeys.alt = !!e.altKey;
+    this.modKeys.shift = !!e.shiftKey;
     // 新手势：清空 Alt+拖拽复制的挂靠状态（快照 / 禁用判定 / 位移标记）
     this.altCopySnap = null;
     this.altCopyBlocked = false;
     this.altCopyMoved = false;
-    // 新手势：对齐候选重新收集，参考线与落框高亮清空
+    // 新手势：对齐候选重新收集，参考线与落框高亮清空（吸附迟滞锁一并重置）
     this.alignCandidates = null;
+    this.alignLockX = null;
+    this.alignLockY = null;
     this.clearAlignGuides();
     this.clearDropHighlight();
     // 取色模式下右键 = 取消
@@ -1446,6 +1463,11 @@ export class Board {
   }
 
   private onMove(e: IPointerEvent) {
+    // 修饰键以指针事件为准实时同步：Alt 在按下前单独按住时，浏览器的菜单
+    // 焦点行为可能吞掉后续 keydown（tracked 状态失真导致 Alt+拖拽复制失效）；
+    // 拖动中每次 move 都用事件携带的真实修饰键校正
+    this.modKeys.alt = !!e.altKey;
+    this.modKeys.shift = !!e.shiftKey;
     // 记录鼠标画布坐标（粘贴跟随鼠标；状态栏坐标由 main.ts 另行监听）
     if (e.x != null && e.y != null) {
       const p = this.app.tree.getInnerPoint({ x: e.x, y: e.y });
@@ -1507,9 +1529,17 @@ export class Board {
         item.el.y = this.snapGrid(item.y + dy);
         // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
         this.normalizeContractEl(item.el);
-        // frame 框架拖动：框内元素（世界 bbox 完全包含）跟随位移
+        // frame 框架拖动：框内元素（frameId 归属）跟随位移。
+        // dx/dy 是相对手势起点的总位移而框架本体按绝对位置设置——直接透传
+        // 会让内容每帧叠加一次总位移而“飞出”框架，必须只传本帧增量
         if (isFrameEl(item.el) && (dx || dy)) {
-          this.moveFrameContents(item.el, dx, dy);
+          const stepX = dx - (item.lastDx ?? 0);
+          const stepY = dy - (item.lastDy ?? 0);
+          if (stepX || stepY) {
+            this.moveFrameContents(item.el, stepX, stepY);
+          }
+          item.lastDx = dx;
+          item.lastDy = dy;
         }
       }
       // 落框预判高亮（手动拖动管线与编辑器拖动同语义）
@@ -5631,6 +5661,46 @@ export class Board {
     return best ? { offset: best.offset, line: best.line } : null;
   }
 
+  /**
+   * 带迟滞的单轴吸附：命中即锁定该候选线，此后只认锁定线（偏离超过退出
+   * 阈值才解锁重找）——否则指针在阈值边界抖动时参考线会反复出现/消失。
+   */
+  private snapAxisLocked(
+    edges: number[],
+    candidates: number[],
+    axis: "x" | "y",
+  ): { offset: number; line: number } | null {
+    const lock = axis === "x" ? this.alignLockX : this.alignLockY;
+    if (lock !== null) {
+      let nearest = Infinity;
+      let nearestEdge = edges[0] ?? lock;
+      for (const e of edges) {
+        if (Math.abs(lock - e) < nearest) {
+          nearest = Math.abs(lock - e);
+          nearestEdge = e;
+        }
+      }
+      if (nearest <= ALIGN_HYST_PX) {
+        return { offset: lock - nearestEdge, line: lock };
+      }
+      // 超出迟滞范围：解锁并继续走正常搜索
+      if (axis === "x") {
+        this.alignLockX = null;
+      } else {
+        this.alignLockY = null;
+      }
+    }
+    const hit = this.snapAxis(edges, candidates);
+    if (hit) {
+      if (axis === "x") {
+        this.alignLockX = hit.line;
+      } else {
+        this.alignLockY = hit.line;
+      }
+    }
+    return hit;
+  }
+
   /** 在 sky 层画对齐参考线（竖/横各一条；sky 不随缩放变化，线宽恒定） */
   private showAlignGuides(vx?: number, hy?: number) {
     this.clearAlignGuides();
@@ -5663,7 +5733,7 @@ export class Board {
     }
   }
 
-  /** 清除对齐参考线（手势结束 / 无命中时调用） */
+  /** 清除对齐参考线（手势结束 / 无命中时调用；候选缓存与锁定随手势独立管理） */
   private clearAlignGuides() {
     if (!this.alignGuides.length) {
       return;
@@ -5672,7 +5742,6 @@ export class Board {
       g.remove();
     }
     this.alignGuides = [];
-    this.alignCandidates = null;
   }
 
   // ================= 落框高亮 =================
