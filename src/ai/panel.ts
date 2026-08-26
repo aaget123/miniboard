@@ -537,6 +537,107 @@ export class AiPanel {
     this.scrollBottom();
   }
 
+  /**
+   * ask_user 澄清提问：在消息流中展示问题与候选项，等待用户点选或输入。
+   * Promise 在用户回答（或点击跳过 / 中断请求）后兑现，回答文本作为工具
+   * 结果回传给模型，工具循环据此继续——实现"中断循环等待结构化回答"。
+   */
+  private runAskUser(argsJson: string): Promise<AiToolExecution> {
+    let question = "";
+    const options: string[] = [];
+    try {
+      const parsed = JSON.parse(argsJson || "{}") as { question?: unknown; options?: unknown };
+      if (typeof parsed.question === "string") {
+        question = parsed.question;
+      }
+      if (Array.isArray(parsed.options)) {
+        for (const o of parsed.options.slice(0, 4)) {
+          if (typeof o === "string" && o.trim()) {
+            options.push(o);
+          }
+        }
+      }
+    } catch {
+      // 参数不合法：仍给出自由输入入口
+    }
+    return new Promise<AiToolExecution>((resolve) => {
+      const wrap = document.createElement("div");
+      wrap.className = "ai-msg ai-assistant ai-ask";
+      const bubble = document.createElement("div");
+      bubble.className = "ai-bubble";
+      const title = document.createElement("div");
+      title.className = "ai-ask-title";
+      title.textContent = "需要向你确认";
+      const q = document.createElement("div");
+      q.className = "ai-ask-question";
+      q.textContent = question || "（模型未提供问题内容）";
+      bubble.append(title, q);
+
+      let settled = false;
+      const signal = this.abortCtrl?.signal;
+      const finish = (answer: string) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        controls.remove();
+        const echo = document.createElement("div");
+        echo.className = "ai-ask-answer";
+        echo.textContent = `↩ ${answer}`;
+        bubble.appendChild(echo);
+        this.scrollBottom();
+        resolve({ name: "ask_user", args: {}, result: `用户回答：${answer}`, changed: false });
+      };
+      const onAbort = () => finish("（用户中断了请求）");
+      signal?.addEventListener("abort", onAbort);
+
+      const controls = document.createElement("div");
+      controls.className = "ai-ask-controls";
+      for (const opt of options) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "ai-ask-chip";
+        chip.textContent = opt;
+        chip.addEventListener("click", () => finish(opt));
+        controls.appendChild(chip);
+      }
+      const row = document.createElement("div");
+      row.className = "ai-ask-row";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = options.length ? "或输入其他回答…" : "输入你的回答…";
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && input.value.trim()) {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(input.value.trim());
+        }
+      });
+      const sendBtn = document.createElement("button");
+      sendBtn.type = "button";
+      sendBtn.className = "tool-btn";
+      sendBtn.textContent = "回答";
+      sendBtn.addEventListener("click", () => {
+        if (input.value.trim()) {
+          finish(input.value.trim());
+        }
+      });
+      const skipBtn = document.createElement("button");
+      skipBtn.type = "button";
+      skipBtn.className = "tool-btn";
+      skipBtn.textContent = "跳过";
+      skipBtn.addEventListener("click", () => finish("(用户选择跳过此问题，请基于现有信息继续)"));
+      row.append(input, sendBtn, skipBtn);
+      controls.appendChild(row);
+      bubble.appendChild(controls);
+      wrap.appendChild(bubble);
+      this.messagesEl.appendChild(wrap);
+      this.scrollBottom();
+      input.focus();
+    });
+  }
+
   /** 工具执行回执：功能区工具操作显示工具卡片（图标+名称+分组/快捷键徽章），其余保持居中灰条 */
   private renderToolReceipt(exec: AiToolExecution) {
     const el = document.createElement("div");
@@ -957,19 +1058,25 @@ export class AiPanel {
               }
             }
           }
-          const exec = tool
-            ? await executeTool(tool, call.function.arguments, {
-                board: this.board,
-                registry: this.registry,
-                toolbar: this.toolbar,
-                mode,
-              })
-            : {
-                name: call.function.name,
-                args: {},
-                result: "错误：未知工具",
-                changed: false,
-              };
+          let exec: AiToolExecution;
+          if (tool && tool.name === "ask_user") {
+            // 澄清提问由面板接管：展示结构化问题并等待用户回答
+            exec = await this.runAskUser(call.function.arguments);
+          } else if (tool) {
+            exec = await executeTool(tool, call.function.arguments, {
+              board: this.board,
+              registry: this.registry,
+              toolbar: this.toolbar,
+              mode,
+            });
+          } else {
+            exec = {
+              name: call.function.name,
+              args: {},
+              result: "错误：未知工具",
+              changed: false,
+            };
+          }
           if (exec.changed) {
             canvasChanged = true;
           }
