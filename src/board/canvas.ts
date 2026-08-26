@@ -615,9 +615,7 @@ export class Board {
       const moved = (e as EditorMoveEvent).target as UI | undefined;
       const movedReal =
         moved && this.isEditorInternal(moved)
-          ? ((this.editor as unknown as { list?: UI[] }).list ?? []).filter(
-              (m) => m && !m.locked,
-            )
+          ? ((this.editor as unknown as { list?: UI[] }).list ?? []).filter((m) => m && !m.locked)
           : moved
             ? [moved]
             : [];
@@ -2839,13 +2837,7 @@ export class Board {
           }
         : { minX: b.x, minY: b.y, maxX: b.x + b.width, maxY: b.y + b.height };
     }
-    return (
-      box !== null &&
-      ax >= box.minX &&
-      ax <= box.maxX &&
-      ay >= box.minY &&
-      ay <= box.maxY
-    );
+    return box !== null && ax >= box.minX && ax <= box.maxX && ay >= box.minY && ay <= box.maxY;
   }
 
   /**
@@ -3644,8 +3636,8 @@ export class Board {
       el.fill = FRAME_DEFAULT_FILL;
     }
     // 抓边=移动（见 dataToElementInner 的说明）；转换后的矩形同样生效
-    (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } })
-      .editConfig = { resizeable: false, rotateable: false };
+    (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } }).editConfig =
+      { resizeable: false, rotateable: false };
     // 转换前已画在框内的元素补挂归属（此前只有绘制/导入时才会自动归属）
     const fid = this.aiIdOf(el);
     for (const other of this.app.tree.children as UI[]) {
@@ -5469,8 +5461,9 @@ export class Board {
         // 禁用手柄缩放与旋转（抓边/抓角 = 移动框架；leafer 在手柄不可缩放时
         // 会把 resize 点当旋转用，形成“抓边无反应”的死区，一并关闭）；
         // 尺寸调整交给内容 autoSize 或转回矩形
-        (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } })
-          .editConfig = { resizeable: false, rotateable: false };
+        (
+          el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } }
+        ).editConfig = { resizeable: false, rotateable: false };
         return el;
       }
       case "ellipse": {

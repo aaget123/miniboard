@@ -683,7 +683,7 @@ export class AiPanel {
       const label = TOOL_LABELS[exec.name] ?? exec.name;
       // 读图结果含图片 dataURL：面板不展示 base64，仅保留说明前缀
       const shown = exec.result.includes("data:image/")
-        ? exec.result.slice(0, exec.result.indexOf("data:image/")) + "[图片数据已发送给模型]"
+        ? `${exec.result.slice(0, exec.result.indexOf("data:image/"))}[图片数据已发送给模型]`
         : exec.result;
       el.textContent = `${label}：${shown}`;
     }

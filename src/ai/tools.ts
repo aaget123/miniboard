@@ -1,19 +1,19 @@
+import type { ArrangeAction } from "../board/arrange";
+import { describeFreehandShape } from "../board/beautify";
+import { elementBounds } from "../board/bounds";
 import type { Board } from "../board/canvas";
 import { TEXT_FONT_SIZE } from "../board/canvas";
-import type { ToolRegistry } from "../board/registry";
-import type { Toolbar } from "../ui/toolbar";
-import type { CustomToolDef, CustomToolInput, ElementData } from "../types";
-import { describeFreehandShape } from "../board/beautify";
 import { canvasToLocal, localToCanvas, round1 } from "../board/coords";
-import { elementBounds } from "../board/bounds";
-import type { ArrangeAction } from "../board/arrange";
-import type { AiMode, AiTool, AiToolExecution } from "./types";
+import type { ToolRegistry } from "../board/registry";
+import type { CustomToolDef, CustomToolInput, ElementData } from "../types";
+import type { Toolbar } from "../ui/toolbar";
 import {
   diffElementSnapshots,
+  type ElementDiff,
   getPerceptionSnapshot,
   setPerceptionSnapshot,
-  type ElementDiff,
 } from "./perception";
+import type { AiMode, AiTool, AiToolExecution } from "./types";
 
 // ================= 画布感知（非多模态：把画布转成 JSON 给模型看） =================
 
@@ -655,7 +655,7 @@ export function parseLeaferJSON(raw: unknown): { data?: ElementData; error?: str
 }
 
 // 工具定义已拆分到 ai/tool-schemas.ts（schemas 与执行器分离）；此处保留向后兼容导出
-export { toolsForMode, toOpenAiTools } from "./tool-schemas";
+export { toOpenAiTools, toolsForMode } from "./tool-schemas";
 
 // ================= 工具执行器 =================
 
