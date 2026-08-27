@@ -9,7 +9,13 @@
 ### 新增
 
 - **空间索引（命中类查询加速）**：新增 `board/spatial-grid.ts` 均匀网格索引 + 模糊测试（与暴力扫描全量对照）——hitTest 点击命中、橡皮待删预览、框选/套索结算从「每次指针事件全量遍历」降为 O(候选数)，万级元素下空点命中进入微秒级；框架相关判定（归属/约束/落框高亮/可滚动折叠框）统一走同批维护的框架子集列表，拖动中每帧不再全树扫描。脏标记由 tree 层 property.change / child.add / child.remove 全局冒泡兜底（自研滚轮缩放改 zoomLayer 属性同样触发），配合 loadElements 显式打标；候选按重建时缓存的 z 序表排序，全选万级时 O(k log k) 而非 indexOf 链路退化出的 O(k²)
-- **E2E 回归进 CI**：test.yml 新增 `e2e` job（windows runner + 自带 Edge，起 dev server 跑 board-regress 9 项 / settings-smoke 14 项真实交互剧本）
+- **E2E 回归进 CI**：test.yml 新增 `e2e` job（windows runner + 自带 Edge，起 dev server 跑 board-regress / settings-smoke 真实交互剧本）
+- **系统剪贴板互通**：Ctrl+C/Ctrl+X 复制选中的同时把选中区域渲染为系统剪贴板图片（Web Clipboard API，微信/PPT/聊天工具直接粘贴）——粘贴端以 miniboard 标记文本区分来源，自家复制仍走内部元素粘贴；反向 Ctrl+V 剪贴板里有图片时直插画布（此前仅支持文件拖入），E2E 剧本由 keydown 改为 document paste 事件统一分流（元素/外部图片/纯文本）
+- **笔迹形状吸附（画完即识别，Excalidraw 招牌交互）**：画笔收笔时本地识别引擎自动把近似圆/椭圆/矩形/多边形（三角等）/直线的笔迹替换为标准图形（纯启发式：闭合性 + 拟合残差 + 顶点数，无 ML），继承稳定 id 与 z 序（连接绑定/AI 引用连续），单步撤销；设置 → 外观 → 绘制可关；复用整理引擎 beautifyScene
+
+### 变更
+
+- **手动「整理」入口下线**（左侧选中栏 ✨ 按钮 / 右键「整理」/ 命令面板）：画时笔迹形状吸附取代了"先画乱再整理"的手动流程；AI 对话工具 `beautify_elements` 保留（对既有笔迹的对话式整理入口）
 
 ### 修复
 

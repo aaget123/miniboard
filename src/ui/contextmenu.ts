@@ -1,8 +1,7 @@
-// 右键上下文菜单：整理/手绘/复制/粘贴/剪切/删除/全选/置顶/置底/锁定/解锁
+// 右键上下文菜单：手绘/复制/粘贴/剪切/删除/全选/置顶/置底/锁定/解锁
 import { iconHTML, type IconName } from "./icons";
 
 export type ContextMenuAction =
-  | "beautify"
   | "sketchify"
   | "copy"
   | "paste"
@@ -23,8 +22,6 @@ export type ContextMenuState = {
   hasSelection: boolean;
   anyLocked: boolean;
   canPaste: boolean;
-  /** 选中含手绘笔迹（✨ 整理项显隐） */
-  hasFreehand: boolean;
   /** 选中含可手绘化的标准图形（✎ 手绘项显隐） */
   hasSketchable: boolean;
   /** 单选未锁定矩形（📦 转为框架项显隐） */
@@ -54,18 +51,12 @@ type MenuItem = {
 
 const ITEMS: MenuItem[] = [
   {
-    action: "beautify",
-    label: "整理",
-    icon: "sparkle",
-    enabled: (s) => s.hasSelection && s.hasFreehand,
-  },
-  {
     action: "sketchify",
     label: "手绘",
     icon: "scribble",
     enabled: (s) => s.hasSelection && s.hasSketchable,
   },
-  { divider: true, enabled: (s) => s.hasFreehand || s.hasSketchable },
+  { divider: true, enabled: (s) => s.hasSketchable },
   {
     action: "copy",
     label: "复制",
@@ -248,7 +239,6 @@ export class ContextMenu {
       if (item.action === "unlock" || item.action === "lock") {
         el.style.display = (item.action === "lock") === showLock ? "" : "none";
       } else if (
-        item.action === "beautify" ||
         item.action === "sketchify" ||
         item.action === "toFrame" ||
         item.action === "toRect" ||
@@ -256,7 +246,7 @@ export class ContextMenu {
         item.action === "toggleFrameCollapse" ||
         item.action === "toggleFrameFocus"
       ) {
-        // 整理/手绘/框架操作：无资格时隐藏（与左侧选中栏显隐语义一致）
+        // 手绘/框架操作：无资格时隐藏（与左侧选中栏显隐语义一致）
         el.style.display = item.enabled(state) ? "" : "none";
         // 动态文案：跟随框架当前开关状态
         const labelEl = el.querySelector(".ctx-label");

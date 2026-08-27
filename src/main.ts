@@ -1,7 +1,7 @@
 import { Board } from "./board/canvas";
 import { pdfFirstPageToImage } from "./board/pdf";
 import { ToolRegistry } from "./board/registry";
-import { ProjectStore, isDesktop, resolveDataDir } from "./storage";
+import { ProjectStore, isDesktop, resolveDataDir, CLIPBOARD_MARKER } from "./storage";
 import type { CustomToolDef, FontWeight } from "./types";
 import { Toolbar } from "./ui/toolbar";
 import { SelectionBar } from "./ui/selectionbar";
@@ -183,8 +183,7 @@ async function main() {
         hasSelection: list.length > 0,
         anyLocked: list.some((el) => el.locked),
         canPaste: board.canPaste,
-        // 整理/手绘资格与左侧选中栏显隐条件一致
-        hasFreehand: lastSelectionInfo?.hasFreehand ?? false,
+        // 手绘资格与左侧选中栏显隐条件一致
         hasSketchable: lastSelectionInfo?.hasSketchable ?? false,
         // 框架操作资格：单选未锁定 rect / frame（含约束/折叠/聚焦状态）
         canToFrame: fs.canToFrame,
@@ -244,15 +243,7 @@ async function main() {
     );
   };
 
-  // 整理/手绘（左侧选中栏与右键菜单共用）：结果用 toast 反馈
-  const doBeautify = () => {
-    const { changed, stats } = board.beautifySelection();
-    if (!changed) {
-      toast("✨ 没有需要整理的画笔笔迹（先选中手绘笔迹）");
-      return;
-    }
-    toast(`✨ 整理完成：${stats.map((s) => `${s.label} ${s.count} 处`).join(" · ")}`);
-  };
+  // 手绘（左侧选中栏与右键菜单共用）：结果用 toast 反馈
   const doSketchify = () => {
     const ok = board.sketchifySelection();
     toast(ok ? "✎ 已应用手绘风格（选中图形）" : "✎ 请先选中图形（矩形/椭圆/直线/箭头等）");
@@ -319,6 +310,32 @@ async function main() {
   board.applyGrid(loadGrid());
   // 绘制偏好：绘制后自动切回选择工具（默认开启，Excalidraw 同款）
   board.setAutoBackToSelect(loadDrawPrefs().autoBackToSelect);
+  // 绘制偏好：画完笔迹自动吸附为标准图形（圆/方/三角/直线，默认开启）
+  board.setShapeDetect(loadDrawPrefs().shapeDetect);
+
+  // ---- 系统剪贴板互通（Ctrl+V 统一走 paste 事件，keydown 快捷键不再接管避免双重处理）----
+  // - 自家元素复制（系统剪贴板图片附带 miniboard 标记文本）→ 粘贴内部元素
+  // - 外部图片（微信/PPT/截图复制）→ 直插画布
+  // - 其余（无图或读取被拒）→ 照常粘贴内部元素（兼容仅站内复制的流程）
+  document.addEventListener("paste", (e: ClipboardEvent) => {
+    const dt = e.clipboardData;
+    if (dt?.getData("text/plain") === CLIPBOARD_MARKER) {
+      board.paste();
+      e.preventDefault();
+      return;
+    }
+    const file =
+      Array.from(dt?.files ?? []).find((f) => f.type.startsWith("image/")) ??
+      Array.from(dt?.items ?? [])
+        .map((i) => i.getAsFile())
+        .find((f): f is File => !!f && f.type.startsWith("image/"));
+    if (file) {
+      e.preventDefault();
+      void board.insertImage(file).then((ok) => toast(ok ? "已插入剪贴板图片" : "图片插入失败"));
+      return;
+    }
+    board.paste();
+  });
 
   // ---- Ctrl 概览浮层（小地图）：按住裸 Ctrl 短暂延迟后显示，松开/组合键收起 ----
   const minimap = new Minimap(board);
@@ -391,9 +408,8 @@ async function main() {
     onManageTools: () => settingsDialog.open("tools"),
   });
 
-  // ---- 左侧悬浮栏（选中时出现）：整理/手绘/样式 ----
+  // ---- 左侧悬浮栏（选中时出现）：手绘/样式 ----
   const selectionBar = new SelectionBar(document.body, {
-    onBeautify: doBeautify,
     onSketchify: doSketchify,
     onStrokeChange: (color) => {
       style.stroke = color;
@@ -919,7 +935,6 @@ async function main() {
   });
 
   const MENU_ACTIONS: Record<ContextMenuAction, () => void> = {
-    beautify: doBeautify,
     sketchify: doSketchify,
     copy: () => board.copy(),
     paste: () => board.paste(),
@@ -995,9 +1010,25 @@ async function main() {
     open: () => storage.openFromFile().catch((err) => toast(`打开失败：${err}`)),
     undo: () => board.undo(),
     redo: () => board.redo(),
-    copy: () => board.copy(),
-    cut: () => board.cut(),
-    paste: () => board.paste(),
+    // 元素复制/剪切：内部剪贴板供站内粘贴的同时，把选中区域渲染为系统剪贴板
+    // 图片（附带来源标记）——微信/PPT 等外部应用可直接粘贴为图片。
+    // 剪切必须先渲染再删（删除后选中为空取不到区域）；导出失败静默，
+    // 内部元素粘贴不受影响
+    copy: () => {
+      if (board.copy()) {
+        void board
+          .exportSelectionPNG()
+          .then((url) => (url ? storage.copyDataURLToClipboard(url) : false))
+          .catch(() => false);
+      }
+    },
+    cut: () => {
+      const png = board.exportSelectionPNG();
+      board.cut();
+      void png
+        .then((url) => (url ? storage.copyDataURLToClipboard(url) : false))
+        .catch(() => false);
+    },
     bold: () => board.toggleBold(),
     selectAll: () => board.selectAll(),
     delete: () => board.deleteSelected(),

@@ -130,8 +130,6 @@ export type SelectionInfo = {
   ids: string[];
   types: (ElementData["type"] | null)[];
   hasText: boolean;
-  /** 是否含手绘笔迹（✨ 整理按钮显隐） */
-  hasFreehand: boolean;
   /** 是否含可手绘化的标准图形（✎ 手绘按钮显隐） */
   hasSketchable: boolean;
   hasImage: boolean;
@@ -236,6 +234,8 @@ export class Board {
   private gridPath: Path | null = null;
   /** 绘制后自动切回选择工具（Excalidraw 同款默认行为；设置页可关） */
   private autoBackToSelect = true;
+  /** 画完笔迹自动吸附为标准图形（圆/方/三角/直线；Excalidraw 同款，设置页可关） */
+  private shapeDetect = true;
   /** 画布感知版本：内容变更点自增（AI 增量感知缓存命中判定用） */
   private perceptionVersionN = 0;
   // 智能对齐吸附（单选拖动）：候选边每手势收集一次；已锁定的吸附线在迟滞
@@ -830,7 +830,6 @@ export class Board {
     const ids: string[] = [];
     const types: (ElementData["type"] | null)[] = [];
     let hasText = false;
-    let hasFreehand = false;
     let hasSketchable = false;
     let hasImage = false;
     let anyLocked = false;
@@ -852,8 +851,6 @@ export class Board {
         if (!el.locked) {
           texts.push(el as Text);
         }
-      } else if (t === "freehand") {
-        hasFreehand = true;
       } else if (t === "image") {
         hasImage = true;
       }
@@ -919,7 +916,6 @@ export class Board {
       ids,
       types,
       hasText,
-      hasFreehand,
       hasSketchable,
       hasImage,
       anyLocked,
@@ -1628,6 +1624,34 @@ export class Board {
     }
   }
 
+  /**
+   * 笔迹形状吸附（画完即识别，Excalidraw 招牌交互）：手绘笔迹经本地识别引擎
+   * 转为标准图形——闭合笔迹拟合圆/椭圆/矩形/多边形（三角等），开放笔迹近似
+   * 直线时完善为 Line。仅接受「类型升级」结果（freehand → 标准类型），纯折线
+   * 拉直不自动替换（避免误改涂鸦）；继承稳定 id（连接绑定/AI 引用保持连续）
+   * 与原 z 序。返回替换后的新元素；未识别或重建失败返回 null。
+   */
+  private snapFreehand(el: UI): UI | null {
+    const data = this.elementToData(el);
+    if (data?.type !== "freehand" || !data.id) {
+      return null;
+    }
+    const { elements, stats } = beautifyScene([data], [data.id]);
+    const next = elements[0];
+    if (!next || !stats.length || next.type === "freehand") {
+      return null;
+    }
+    const created = this.dataToElement({ ...next, id: undefined });
+    if (!created) {
+      return null;
+    }
+    (created as unknown as { __aiId?: string }).__aiId = data.id;
+    const index = kidsIndexOf(this.app.tree, el);
+    this.app.tree.add(created, index < 0 ? undefined : index);
+    el.remove();
+    return created;
+  }
+
   private onUp() {
     // 框架缩放快照兜底清理（手势结束事件漏发时防残留；通常由 DragEvent.END 清理）
     this.frameCtrl.resetScaleSnap();
@@ -1682,6 +1706,13 @@ export class Board {
         const t = this.draft as unknown as Record<string, unknown>;
         t.__freehandPoints = this.penPoints.map((p) => [...p]);
         t.__penSize = this.penSize;
+        // 画完即识别（Excalidraw 同款）：近圆/方/三角/直线自动吸附为标准图形
+        if (this.tool === "pen" && this.shapeDetect) {
+          const snapped = this.snapFreehand(this.draft);
+          if (snapped) {
+            this.draft = snapped;
+          }
+        }
       }
       // 组合工具草稿其余元素已在画布上（拖拽中实时预览），无需补齐
       // 框架内容归属：绘制结果完全落在框架 bbox 内 → 挂上该框架的 frameId
@@ -2676,45 +2707,6 @@ export class Board {
     return this.frameCtrl.createContent(x, y, info);
   }
 
-  /**
-   * 局部整理：只整理选中元素（手绘笔迹 → 标准图形/拉直），未选中的原样保留。
-   * 元素 id 稳定（freehand → rect/ellipse/line/path 后保持），整理后恢复选中；
-   * z-order 不变（loadElements 按数组顺序重建）；整轮改动合并为一步撤销。
-   * 返回整理统计（空数组 = 没有需要整理的笔迹）。
-   */
-  beautifySelection(): { changed: number; stats: BeautifyStats } {
-    const list = this.selectedList.filter((el) => !el.locked && !this.isEditorInternal(el));
-    if (!list.length) {
-      return { changed: 0, stats: [] };
-    }
-    // serialize 会为所有元素分配稳定 id，先序列化再取选中 id；
-    // 内容归属元素先展开为世界坐标（相对坐标会让对齐/分布计算失真）
-    const before = this.serialize();
-    const ids = list.map((el) => this.aiIdOf(el)).filter((id): id is string => !!id);
-    const { elements, stats } = beautifyScene(expandFrameContents(before), ids);
-    if (!stats.length) {
-      return { changed: 0, stats: [] };
-    }
-    // 整理输出已是世界坐标：worldCoords 模式跳过相对→世界换算，
-    // 无 frameId 的元素按 bbox 包含自动重新归属（整理后仍在框架内的内容
-    // 继续跟随框架）
-    this.loadElements(elements, { worldCoords: true });
-    // 整理后按 id 恢复选中（类型可能已变，id 保持稳定），方便连续整理/调整
-    const restored = (this.app.tree.children as UI[]).filter((el) => {
-      const id = (el as unknown as { __aiId?: string }).__aiId;
-      return !!id && ids.includes(id);
-    });
-    if (restored.length === 1) {
-      this.editor.target = restored[0];
-    } else if (restored.length > 1) {
-      this.editor.select(restored);
-    }
-    this.pushSnapshot(before);
-    // 整理后的场景重新序列化（相对坐标），保证历史快照坐标系一致
-    this.pushSnapshot(this.serialize());
-    return { changed: stats.length, stats };
-  }
-
   // ================= 右键菜单 =================
 
   /** 当前选中的元素（editor.list 运行时即 UI 实例，类型声明为 IUI 需转换） */
@@ -3436,6 +3428,11 @@ export class Board {
     this.autoBackToSelect = v;
   }
 
+  /** 公开：设置「画完笔迹自动吸附为标准图形」开关（设置弹窗/启动装载调用） */
+  setShapeDetect(v: boolean) {
+    this.shapeDetect = v;
+  }
+
   // ================= 取色器 =================
 
   /**
@@ -3770,6 +3767,49 @@ export class Board {
       });
     }
     throw new Error("导出失败：无法识别的结果");
+  }
+
+  /**
+   * 选中区域渲染为 PNG dataURL（系统剪贴板互通：Ctrl+C 直接复制为图片，
+   * 可粘贴到微信/PPT 等）。截图区域 = 选中元素联合包围盒（app 坐标基准，
+   * 与 exportViewportImage 同基准）外扩 8px；无选中或导出失败返回 null。
+   */
+  async exportSelectionPNG(): Promise<string | null> {
+    const list = this.selectedList;
+    if (!list.length) {
+      return null;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const el of list) {
+      const b = el.worldBoxBounds;
+      if (!b) {
+        continue;
+      }
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.width);
+      maxY = Math.max(maxY, b.y + b.height);
+    }
+    if (!Number.isFinite(minX)) {
+      return null;
+    }
+    try {
+      const out = await this.app.export("png", {
+        screenshot: {
+          x: round1(minX - 8),
+          y: round1(minY - 8),
+          width: round1(maxX - minX + 16),
+          height: round1(maxY - minY + 16),
+        },
+        fill: this.background,
+      });
+      return await this.toDataUrl(out);
+    } catch {
+      return null;
+    }
   }
 
   /**

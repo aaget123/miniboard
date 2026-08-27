@@ -9,8 +9,6 @@ const RECENT_KEY = "miniboard:recent-colors";
 const MAX_RECENT = 4;
 
 export type SelectionBarHandlers = {
-  /** 局部整理：识别选中手绘笔迹并完善为标准图形/拉直 */
-  onBeautify: () => void;
   /** 手绘风格：选中标准图形转 rough.js 手绘外观 */
   onSketchify: () => void;
   /** 图片裁剪：选中单张图片时进入裁剪模式 */
@@ -60,7 +58,6 @@ const FADE_MS = 180;
 /**
  * 左侧悬浮工具栏：选中元素时出现（Excalidraw 同款）。
  * 类型感知差异化显示（对齐 Excalidraw showSelectedShapeActions）：
- * - ✨ 整理：仅选中含手绘笔迹时显示
  * - ✎ 手绘：仅选中含可手绘化标准图形时显示
  * - ✂ 裁剪：仅单选一张图片时显示
  * - 🎨 样式：选中含可编辑元素（非纯图片）时显示
@@ -85,7 +82,6 @@ export class SelectionBar {
   private widthInput!: HTMLInputElement;
   private widthValue!: HTMLSpanElement;
   // 差异化显隐的按钮引用
-  private beautifyBtn!: HTMLButtonElement;
   private sketchifyBtn!: HTMLButtonElement;
   private cropBtn!: HTMLButtonElement;
   private styleBtn!: HTMLButtonElement;
@@ -135,9 +131,6 @@ export class SelectionBar {
     this.bar.id = "selection-bar";
     this.bar.hidden = true;
 
-    this.beautifyBtn = makeButton("sparkle", "整理选中：识别手绘笔迹并完善为标准图形/拉直", () =>
-      handlers.onBeautify(),
-    );
     this.sketchifyBtn = makeButton("scribble", "手绘风格：选中图形转手绘外观（rough.js）", () =>
       handlers.onSketchify(),
     );
@@ -149,7 +142,7 @@ export class SelectionBar {
     this.styleBtn = makeButton("sliders", "样式：描边/填充颜色与粗细", () =>
       this.toggleStyle(this.bar.getBoundingClientRect()),
     );
-    this.bar.append(this.beautifyBtn, this.sketchifyBtn, this.cropBtn, this.sep, this.styleBtn);
+    this.bar.append(this.sketchifyBtn, this.cropBtn, this.sep, this.styleBtn);
     container.appendChild(this.bar);
 
     // ---- 橡皮模式行：半径滑条（直接挂在栏上，非样式浮层内）----
@@ -530,7 +523,6 @@ export class SelectionBar {
     }
     if (eraserMode && !hasSelection) {
       // 橡皮模式：只显示半径滑条
-      this.beautifyBtn.style.display = "none";
       this.sketchifyBtn.style.display = "none";
       this.cropBtn.style.display = "none";
       this.styleBtn.style.display = "none";
@@ -551,7 +543,6 @@ export class SelectionBar {
     }
     if (penMode && !hasSelection) {
       // 画笔预设置：只显示样式按钮（颜色/粗细作用于新笔迹）
-      this.beautifyBtn.style.display = "none";
       this.sketchifyBtn.style.display = "none";
       this.cropBtn.style.display = "none";
       this.sep.style.display = "";
@@ -570,10 +561,9 @@ export class SelectionBar {
       return;
     }
     const info2 = info!;
-    // 按钮差异化：✨ 仅手绘笔迹、✎ 仅可手绘图形、✂ 仅单选图片、🎨 有可编辑元素
+    // 按钮差异化：✎ 仅可手绘图形、✂ 仅单选图片、🎨 有可编辑元素
     const singleImage = info2.types.length === 1 && info2.types[0] === "image";
     const hasEditable = info2.types.some((t) => t !== "image");
-    this.beautifyBtn.style.display = info2.hasFreehand ? "" : "none";
     this.sketchifyBtn.style.display = info2.hasSketchable ? "" : "none";
     this.cropBtn.style.display = singleImage ? "" : "none";
     this.styleBtn.style.display = hasEditable ? "" : "none";

@@ -249,6 +249,28 @@ const URL = "http://localhost:5173";
       Math.abs(r7.rel2.y - r7.rel0.y) < 1.5,
   );
 
+  // ---------- R8 笔迹形状吸附（画完一圈 → 自动吸附为正圆，Excalidraw 招牌） ----------
+  await page.evaluate(() => { window.__miniboardDebug?.board?.clearAll(); });
+  await page.keyboard.press("p");
+  {
+    const c8 = W(0, 0);
+    await page.mouse.move(c8.x + 60, c8.y);
+    await page.mouse.down();
+    for (let i = 1; i <= 36; i++) {
+      const a = (i / 36) * Math.PI * 2;
+      await page.mouse.move(c8.x + 60 * Math.cos(a), c8.y + 60 * Math.sin(a));
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    const r8 = await page.evaluate(() => {
+      const b = window.__miniboardDebug.board;
+      const data = b.serialize()[0];
+      return { type: data ? data.type : "none" };
+    });
+    check(`R8 stroke snap → ${r8.type}`, r8.type === "ellipse");
+  }
+  await page.keyboard.press("v");
+
   console.log("\nerrors:", errors.length ? errors : "无");
   const fails = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - fails}/${results.length} passed`);

@@ -60,9 +60,11 @@ const DRAW_PREFS_KEY = "miniboard:draw-prefs";
 export type DrawPrefs = {
   /** 绘制完成后自动切回选择工具（Excalidraw 同款默认行为） */
   autoBackToSelect: boolean;
+  /** 画完笔迹自动吸附为标准图形（圆/方/三角/直线；Excalidraw 招牌交互） */
+  shapeDetect: boolean;
 };
 
-const DEFAULT_DRAW_PREFS: DrawPrefs = { autoBackToSelect: true };
+const DEFAULT_DRAW_PREFS: DrawPrefs = { autoBackToSelect: true, shapeDetect: true };
 
 /** 读取绘制偏好（localStorage，数据损坏/缺失时回退默认值） */
 export function loadDrawPrefs(): DrawPrefs {
@@ -77,6 +79,8 @@ export function loadDrawPrefs(): DrawPrefs {
         typeof p.autoBackToSelect === "boolean"
           ? p.autoBackToSelect
           : DEFAULT_DRAW_PREFS.autoBackToSelect,
+      // 旧偏好数据无此键 → 默认开启
+      shapeDetect: typeof p.shapeDetect === "boolean" ? p.shapeDetect : true,
     };
   } catch {
     return { ...DEFAULT_DRAW_PREFS };
@@ -369,11 +373,24 @@ export class SettingsDialog {
     backBox.checked = loadDrawPrefs().autoBackToSelect;
     backRow.append(document.createTextNode("绘制完成后自动切回选择工具"), backBox);
     backBox.addEventListener("change", () => {
-      const p: DrawPrefs = { autoBackToSelect: backBox.checked };
+      const p: DrawPrefs = { ...loadDrawPrefs(), autoBackToSelect: backBox.checked };
       saveDrawPrefs(p);
       this.board.setAutoBackToSelect(p.autoBackToSelect);
     });
     drawSection.appendChild(backRow);
+    // 笔迹形状吸附：画完近似圆/方/三角/直线的笔迹自动替换为标准图形（Excalidraw 招牌）
+    const shapeRow = document.createElement("label");
+    shapeRow.className = "ai-modal-row";
+    const shapeBox = document.createElement("input");
+    shapeBox.type = "checkbox";
+    shapeBox.checked = loadDrawPrefs().shapeDetect;
+    shapeRow.append(document.createTextNode("笔迹自动吸附为标准图形（圆/方/三角/直线）"), shapeBox);
+    shapeBox.addEventListener("change", () => {
+      const p: DrawPrefs = { ...loadDrawPrefs(), shapeDetect: shapeBox.checked };
+      saveDrawPrefs(p);
+      this.board.setShapeDetect(p.shapeDetect);
+    });
+    drawSection.appendChild(shapeRow);
     appearancePane.appendChild(drawSection);
 
     // ---- AI 模型页签：多配置注册/激活/编辑/连接测试（内容收进控制器） ----
