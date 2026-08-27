@@ -15,21 +15,13 @@ import "@leafer-in/arrow";
 import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
 import type { ArrowHead, BoardStyle, ElementData, FontWeight } from "../types";
-import type { CoordBox } from "./coords";
 import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
 import { transformPath, translatePath } from "./path";
 import { offsetElementData } from "./offset";
 import { clampShift, contractFrameContents, expandFrameContents } from "./frame";
-import {
-  alignElements,
-  distributeElements,
-  expandGroupMembers,
-  flipElements,
-  reorderElements,
-} from "./arrange";
-import type { ArrangeAction, ReorderMode } from "./arrange";
-import { unionBounds } from "./bounds";
+import type { ArrangeAction } from "./arrange";
+import { AiOpsController } from "./ai-ops-controller";
 import { CropController } from "./crop-controller";
 import { PointEditController } from "./point-edit-controller";
 import { eraserCursorURL, EraserController } from "./eraser-controller";
@@ -70,7 +62,7 @@ function kidsIndexOf(tree: unknown, el: UI): number {
 }
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
 import { penSizeOf, strokeOutlinePath } from "./stroke";
-import { canvasToLocal, round1 } from "./coords";
+import { round1 } from "./coords";
 import { elementsToSVG } from "./svg";
 import type { GridSettings } from "../ui/settings";
 
@@ -222,8 +214,6 @@ export class Board {
   private clipboard: ElementData[] = [];
   /** 剪贴板内容原始包围盒（复制时从选中元素实际渲染 bounds 记录，含 path/points 坐标语义，粘贴时用于中心对齐） */
   private clipboardBox: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
-  // 元素稳定 id 分配器（AI 编辑模式按 id 引用元素）
-  private nextElId = 1;
   /** 鼠标最后位置（画布坐标，粘贴跟随鼠标用）；null 表示鼠标从未进入画布 */
   private lastPointer: { x: number; y: number } | null = null;
   /** 指针最后 app 坐标（连接器拖出松手取落点用；onUp 不携带事件） */
@@ -237,6 +227,8 @@ export class Board {
   private connectorCtrl!: ConnectorController;
   // 框架域控制器：归属注册表/内容跟随/互转/折叠/聚焦/约束夹紧
   private frameCtrl!: FrameController;
+  // AI 编排控制器：稳定 id 注册 + 按 id 批量操作（排列/整理/手绘/删除/属性）+ 层序重排管线
+  private aiOps!: AiOpsController;
   /** 文本缩放语义：横向拉伸换行、纵向/对角改字号（记录缩放前的原始状态） */
   private textScaleOrig = new Map<Text, { fontSize: number; width: number }>();
   // 网格：设置（大小/显示/吸附）与网格线层（挂在 zoomLayer 最底层，随缩放/平移重建）
@@ -585,6 +577,28 @@ export class Board {
       },
       createArrow: (sourceId, targetId, endWorld, prefer) =>
         this.createBoundArrow(sourceId, targetId, endWorld, prefer),
+    });
+    // AI 编排控制器（稳定 id 注册 + 按 id 批量操作 + 层序重排管线；依赖经门面注入）
+    this.aiOps = new AiOpsController({
+      treeChildren: () => (this.app.tree.children ?? []) as UI[],
+      editorCancel: () => this.editor.cancel(),
+      editorTarget: (el) => {
+        this.editor.target = el;
+      },
+      editorSelect: (list) => this.editor.select(list),
+      selectedList: () => this.selectedList,
+      isEditorInternal: (el) => this.isEditorInternal(el),
+      serialize: () => this.serialize(),
+      loadElements: (data, opts) => this.loadElements(data, opts),
+      pushSnapshot: (snapshot) => this.pushSnapshot(snapshot),
+      elementToData: (el) => this.elementToData(el),
+      dataToElement: (d) => this.dataToElement(d),
+      addToTree: (el) => this.addToTree(el),
+      adoptAndClamp: (el) => this.frameCtrl.adoptAndClamp(el),
+      exitPointEdit: () => this.exitPointEdit(),
+      cancelCrop: () => this.cancelCrop(),
+      commitHistory: () => this.commitHistory(),
+      onMutated: () => this.opts.onMutated(),
     });
     this.bindEvents();
     // 空间索引脏标记：tree 层全局冒泡监听——任何子孙属性变更（含编辑器
@@ -2371,7 +2385,7 @@ export class Board {
     for (const s of snap) {
       const g = s.data.groupId;
       if (g && !gidMap.has(g)) {
-        gidMap.set(g, `grp-${this.nextElId++}`);
+        gidMap.set(g, this.aiOps.nextGroupId());
       }
     }
     let inserted = 0;
@@ -2733,24 +2747,9 @@ export class Board {
 
   /** 复制选中元素到内部剪贴板，返回是否有内容可复制 */
   /** 取元素的稳定 id：首次访问时分配并缓存到实例上（复制/导入/粘贴后保持稳定） */
+  /** 元素稳定 id（分配/缓存走 AiOpsController 注册表） */
   private aiIdOf(el: UI): string {
-    const cached = (el as unknown as { __aiId?: string }).__aiId;
-    if (cached) {
-      return cached;
-    }
-    let id: string;
-    do {
-      id = `el-${this.nextElId++}`;
-    } while (this.idInUse(id));
-    (el as unknown as { __aiId?: string }).__aiId = id;
-    return id;
-  }
-
-  /** 判断 id 是否已被画布中其他元素占用（防止恢复/导入后重复分配冲突） */
-  private idInUse(id: string): boolean {
-    return (this.app.tree.children as UI[]).some(
-      (el) => (el as unknown as { __aiId?: string }).__aiId === id,
-    );
+    return this.aiOps.idOf(el);
   }
 
   copy(): boolean {
@@ -2806,54 +2805,7 @@ export class Board {
    * 整轮合并一步撤销，删除后清理点编辑/裁剪/编辑器选中状态。
    */
   deleteByIds(ids: string[]): { removed: number; skipped: number } {
-    const found: UI[] = [];
-    const seen = new Set<UI>();
-    let locked = 0;
-    for (const raw of ids) {
-      const el = this.findByAiId(raw);
-      if (!el || seen.has(el)) {
-        continue;
-      }
-      if (el.locked) {
-        locked++;
-        continue;
-      }
-      seen.add(el);
-      found.push(el);
-    }
-    if (!found.length) {
-      return { removed: 0, skipped: locked };
-    }
-    // 同组成员整组参与（与 arrange/beautify 的组联动语义一致）
-    const gids = new Set<string>();
-    for (const el of found) {
-      const g = (el as unknown as { __groupId?: string }).__groupId;
-      if (g) {
-        gids.add(g);
-      }
-    }
-    if (gids.size) {
-      for (const el of this.app.tree.children as UI[]) {
-        const g = (el as unknown as { __groupId?: string }).__groupId;
-        if (g && gids.has(g) && !seen.has(el)) {
-          if (el.locked) {
-            locked++;
-            continue;
-          }
-          seen.add(el);
-          found.push(el);
-        }
-      }
-    }
-    for (const el of found) {
-      el.destroy();
-    }
-    this.editor.cancel();
-    this.exitPointEdit();
-    this.cropCtrl.cancel();
-    this.commitHistory();
-    this.opts.onMutated();
-    return { removed: found.length, skipped: locked };
+    return this.aiOps.deleteByIds(ids);
   }
 
   /** 粘贴剪贴板内容：优先跟随鼠标最后位置（剪贴板实际渲染包围盒中心对齐），
@@ -2946,66 +2898,16 @@ export class Board {
   }
 
   toFront() {
-    this.reorderSelection("front");
+    this.aiOps.reorderSelection("front");
   }
 
   toBack() {
-    this.reorderSelection("back");
-  }
-
-  /**
-   * 层序重排通用管线：序列化 → 锁定过滤 + 组归一化 → reorderElements →
-   * 全量重建 → 恢复选中 → 前后快照合并。顺序无变化时（已在目标层）不重建不写历史。
-   */
-  private reorderSelection(mode: ReorderMode) {
-    const before = this.serialize();
-    const selIds = this.selectedUnlockedIds();
-    if (!selIds.length) {
-      return;
-    }
-    const ids = expandGroupMembers(before, selIds);
-    const next = reorderElements(before, [...ids], (d) => d.id ?? "", mode);
-    if (next.every((d, i) => d === before[i])) {
-      return;
-    }
-    this.loadElements(next);
-    this.restoreSelectionByIds([...ids]);
-    this.pushSnapshot(before);
-    this.pushSnapshot(next);
+    this.aiOps.reorderSelection("back");
   }
 
   // ================= AI 排列（对齐/分布/翻转/层序，供 arrange_elements 工具） =================
   arrangeByIds(ids: string[], action: ArrangeAction): { done: number; skipped: number } {
-    // before 为相对坐标（历史快照基准）；计算在世界坐标下进行（frame 内元素
-    // 相对坐标会让对齐/分布失真），loadElements 用 worldCoords 模式重建
-    const before = this.serialize();
-    const world = expandFrameContents(before);
-    const byId = new Map(world.map((d) => [d.id, d]));
-    const found = ids.filter((id) => byId.has(id));
-    const skipped = found.filter((id) => byId.get(id)?.locked).length;
-    const selIds = found.filter((id) => !byId.get(id)?.locked);
-    if (!selIds.length) {
-      return { done: 0, skipped };
-    }
-    const members = expandGroupMembers(world, selIds);
-    const targets = world.filter((d) => members.has(d.id ?? ""));
-    let next: ElementData[];
-    if (action === "front" || action === "back" || action === "forward" || action === "backward") {
-      // 层序作用于全列表（组内成员必须保持相对顺序），其余动作只作用于目标元素
-      next = reorderElements(world, [...members], (d) => d.id ?? "", action);
-    } else {
-      const changed = this.arrangeFn(action)(targets);
-      const changedById = new Map(changed.map((d) => [d.id, d]));
-      next = world.map((d) => changedById.get(d.id) ?? d);
-    }
-    if (next.every((d, i) => d === world[i])) {
-      return { done: 0, skipped };
-    }
-    this.loadElements(next, { worldCoords: true });
-    // 历史快照保持相对坐标（undo/redo 走默认换算路径）
-    this.pushSnapshot(before);
-    this.pushSnapshot(this.serialize());
-    return { done: members.size, skipped };
+    return this.aiOps.arrangeByIds(ids, action);
   }
 
   // ================= AI 整理/手绘/粗糙度（beautify_elements 等工具，按 id 操作） =================
@@ -3015,23 +2917,7 @@ export class Board {
    * 未指名的元素原样保留；同组成员整组参与、锁定元素跳过；整轮改动一步撤销。
    */
   beautifyByIds(ids: string[]): { changed: number; stats: BeautifyStats; skipped: number } {
-    const before = this.serialize();
-    const byId = new Map(before.map((d) => [d.id, d]));
-    const found = ids.filter((id) => byId.has(id));
-    const skipped = found.filter((id) => byId.get(id)?.locked).length;
-    const selIds = found.filter((id) => !byId.get(id)?.locked);
-    if (!selIds.length) {
-      return { changed: 0, stats: [], skipped };
-    }
-    const members = expandGroupMembers(before, selIds);
-    const { elements, stats } = beautifyScene(expandFrameContents(before), [...members]);
-    if (!stats.length) {
-      return { changed: 0, stats: [], skipped };
-    }
-    this.loadElements(elements, { worldCoords: true });
-    this.pushSnapshot(before);
-    this.pushSnapshot(this.serialize());
-    return { changed: stats.length, stats, skipped };
+    return this.aiOps.beautifyByIds(ids);
   }
 
   /**
@@ -3039,47 +2925,7 @@ export class Board {
    * 已手绘/不可手绘的元素自动跳过；同组成员整组参与、锁定元素跳过。
    */
   sketchifyByIds(ids: string[]): { changed: number; skipped: number } {
-    const before = this.serialize();
-    const byId = new Map(before.map((d) => [d.id, d]));
-    const found = ids.filter((id) => byId.has(id));
-    const skipped = found.filter((id) => byId.get(id)?.locked).length;
-    const selIds = found.filter((id) => !byId.get(id)?.locked);
-    if (!selIds.length) {
-      return { changed: 0, skipped };
-    }
-    const members = expandGroupMembers(before, selIds);
-    let changed = 0;
-    const next = expandFrameContents(before).map((d) => {
-      if (!d.id || !members.has(d.id) || !isSketchable(d)) {
-        return d;
-      }
-      const sketched = sketchifyData(d);
-      if (!sketched) {
-        return d;
-      }
-      changed++;
-      return {
-        ...d,
-        type: "path" as const,
-        path: sketched.path,
-        rough: {
-          seed: sketched.seed,
-          original: d.type,
-          roughness: 1,
-          originalPath: d.type === "path" ? d.path : undefined,
-          originalWidth: sketched.originalWidth,
-          originalHeight: sketched.originalHeight,
-          originalPoints: sketched.originalPoints,
-        },
-      };
-    });
-    if (!changed) {
-      return { changed: 0, skipped };
-    }
-    this.loadElements(next, { worldCoords: true });
-    this.pushSnapshot(before);
-    this.pushSnapshot(this.serialize());
-    return { changed, skipped };
+    return this.aiOps.sketchifyByIds(ids);
   }
 
   /**
@@ -3087,86 +2933,7 @@ export class Board {
    * 同一 seed 重绘（抖动态不变仅幅度变化）；无 rough 元数据的元素跳过。
    */
   setRoughnessByIds(ids: string[], value: number): { changed: number; skipped: number } {
-    const before = this.serialize();
-    const byId = new Map(before.map((d) => [d.id, d]));
-    const found = ids.filter((id) => byId.has(id));
-    const skipped = found.filter((id) => byId.get(id)?.locked).length;
-    const selIds = found.filter((id) => !byId.get(id)?.locked);
-    if (!selIds.length) {
-      return { changed: 0, skipped };
-    }
-    const members = expandGroupMembers(before, selIds);
-    let changed = 0;
-    const next = expandFrameContents(before).map((d) => {
-      if (!d.id || !members.has(d.id) || !d.rough) {
-        return d;
-      }
-      const redrawn = redrawRough(d, d.rough, value);
-      if (!redrawn) {
-        return d;
-      }
-      changed++;
-      return { ...d, path: redrawn.path, rough: { ...d.rough, roughness: value } };
-    });
-    if (!changed) {
-      return { changed: 0, skipped };
-    }
-    this.loadElements(next, { worldCoords: true });
-    this.pushSnapshot(before);
-    this.pushSnapshot(this.serialize());
-    return { changed, skipped };
-  }
-
-  /** ArrangeAction → 纯函数变换（对齐/分布/翻转；层序走 reorderElements 分支） */
-  private arrangeFn(action: ArrangeAction): (els: ElementData[]) => ElementData[] {
-    switch (action) {
-      case "align-left":
-        return (els) => alignElements(els, "left");
-      case "align-centerX":
-        return (els) => alignElements(els, "centerX");
-      case "align-right":
-        return (els) => alignElements(els, "right");
-      case "align-top":
-        return (els) => alignElements(els, "top");
-      case "align-centerY":
-        return (els) => alignElements(els, "centerY");
-      case "align-bottom":
-        return (els) => alignElements(els, "bottom");
-      case "distribute-h":
-        return (els) => distributeElements(els, "horizontal");
-      case "distribute-v":
-        return (els) => distributeElements(els, "vertical");
-      case "flip-h":
-      case "flip-v":
-        return (els) => {
-          const b = unionBounds(els);
-          const axis = action === "flip-h" ? "h" : "v";
-          return flipElements(els, axis, (b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
-        };
-      default:
-        // 层序（front/back/forward/backward）不经过此分支
-        return (els) => els;
-    }
-  }
-
-  /** 当前选中中可操作（未锁定、非编辑器内部）元素的稳定 id */
-  private selectedUnlockedIds(): string[] {
-    return this.selectedList
-      .filter((el) => !el.locked && !this.isEditorInternal(el))
-      .map((el) => this.aiIdOf(el));
-  }
-
-  /** 按稳定 id 恢复选中（对齐/分布/翻转/层序后保持连续操作上下文） */
-  private restoreSelectionByIds(ids: string[]) {
-    const restored = (this.app.tree.children as UI[]).filter((el) => {
-      const id = (el as unknown as { __aiId?: string }).__aiId;
-      return !!id && ids.includes(id);
-    });
-    if (restored.length === 1) {
-      this.editor.target = restored[0];
-    } else if (restored.length > 1) {
-      this.editor.select(restored);
-    }
+    return this.aiOps.setRoughnessByIds(ids, value);
   }
 
   /** 重复选中元素：整体偏移 (12, 12) 并自动选中副本（Ctrl+D） */
@@ -3448,139 +3215,35 @@ export class Board {
 
   /** 新增元素（AI 交流模式画流程图等场景），返回分配后的稳定 id；数据非法返回 null */
   addElement(data: ElementData): string | null {
-    const el = this.dataToElement({ ...data, id: undefined });
-    if (!el) {
-      return null;
-    }
-    this.addToTree(el);
-    // AI 创建同样接入框体系：完全落入框架即归属，落在约束框架内即夹紧入框
-    this.frameCtrl.adoptAndClamp(el);
-    return this.aiIdOf(el);
+    return this.aiOps.addElement(data);
   }
 
   /** 当前选中元素的序列化数据（含稳定 id），供 AI 面板 @ 选区使用 */
   getSelectionData(): ElementData[] {
-    return this.selectedList
-      .map((el) => this.elementToData(el))
-      .filter((d): d is ElementData => d !== null);
+    return this.aiOps.getSelectionData();
   }
 
   /** 按稳定 id 查找画布元素（AI 工具执行器/试画清理用）；不存在返回 null */
   findElementByAiId(id: string): UI | null {
-    return this.findByAiId(id);
+    return this.aiOps.find(id);
   }
 
   /** 选区联合包围盒尺寸（状态栏 W×H 展示用）；无选中返回 null */
   getSelectionSize(): { width: number; height: number } | null {
-    let box: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    } | null = null;
-    for (const el of this.selectedList) {
-      const b = el.worldBoxBounds;
-      if (!b) {
-        continue;
-      }
-      box = box
-        ? {
-            x: Math.min(box.x, b.x),
-            y: Math.min(box.y, b.y),
-            width: Math.max(box.x + box.width, b.x + b.width) - Math.min(box.x, b.x),
-            height: Math.max(box.y + box.height, b.y + b.height) - Math.min(box.y, b.y),
-          }
-        : { ...b };
-    }
-    return box ? { width: box.width, height: box.height } : null;
+    return this.aiOps.getSelectionSize();
   }
 
-  /** 按稳定 id 查找画布元素（AI 优化用） */
+  /** 按稳定 id 查找画布元素（绑定重建等内部用） */
   private findByAiId(id: string): UI | null {
-    const list = (this.app.tree.children ?? []) as UI[];
-    return list.find((el) => (el as unknown as { __aiId?: string }).__aiId === id) ?? null;
+    return this.aiOps.find(id);
   }
 
   /**
    * AI 优化：按稳定 id 更新元素属性（颜色/尺寸/位置/旋转/文字等），返回是否成功。
-   * 锁定元素不可修改；fill 为 "none" 时转 undefined（leafer 中 "none" 渲染为黑色实心）。
    * 由调用方（AI 面板）负责合并历史快照。
    */
   updateElement(id: string, patch: Partial<ElementData>): boolean {
-    const el = this.findByAiId(id);
-    if (!el || el.locked) {
-      return false;
-    }
-    if (patch.stroke !== undefined) {
-      if (isFreehandEl(el)) {
-        el.fill = patch.stroke || undefined;
-      } else {
-        el.stroke = patch.stroke || undefined;
-      }
-    }
-    if (patch.strokeWidth !== undefined) {
-      el.strokeWidth = patch.strokeWidth;
-    }
-    if (patch.fill !== undefined) {
-      el.fill = patch.fill === "none" ? undefined : patch.fill;
-    }
-    if (patch.rotation !== undefined) {
-      el.rotation = patch.rotation;
-    }
-    if (patch.x !== undefined) {
-      el.x = patch.x;
-    }
-    if (patch.y !== undefined) {
-      el.y = patch.y;
-    }
-    if (patch.width !== undefined) {
-      el.width = patch.width;
-    }
-    if (patch.height !== undefined) {
-      el.height = patch.height;
-    }
-    if (patch.text !== undefined && el instanceof Text) {
-      el.text = patch.text;
-    }
-    if (patch.fontSize !== undefined && el instanceof Text) {
-      el.fontSize = patch.fontSize;
-    }
-    if (patch.textAlign !== undefined && el instanceof Text) {
-      el.textAlign = patch.textAlign;
-      el.autoSizeAlign = patch.textAlign === "left" ? undefined : true;
-    }
-    if (patch.fontFamily !== undefined && el instanceof Text) {
-      el.fontFamily = patch.fontFamily;
-    }
-    if (patch.fontWeight !== undefined && el instanceof Text) {
-      el.fontWeight = patch.fontWeight;
-    }
-    if (patch.startArrow !== undefined && el instanceof Line) {
-      el.startArrow = toLeaferArrow(patch.startArrow);
-    }
-    if (patch.endArrow !== undefined && el instanceof Line) {
-      el.endArrow = toLeaferArrow(patch.endArrow);
-    }
-    if (patch.points !== undefined && el instanceof Line) {
-      // AI 传入画布绝对坐标（describeCanvas 输出基准），换算回元素局部坐标
-      el.points = (patch.points as { x: number; y: number }[]).map((p) =>
-        canvasToLocal(el as unknown as CoordBox, p),
-      );
-    }
-    if (patch.path !== undefined && el instanceof Path) {
-      el.path = patch.path;
-    }
-    if ("strokeDash" in patch) {
-      (el as unknown as { dashPattern?: number[] }).dashPattern = patch.strokeDash;
-    }
-    if (patch.opacity !== undefined) {
-      el.opacity = patch.opacity;
-    }
-    if (patch.cornerRadius !== undefined) {
-      el.cornerRadius = patch.cornerRadius;
-    }
-    this.opts.onMutated();
-    return true;
+    return this.aiOps.updateElement(id, patch);
   }
 
   clearAll() {
