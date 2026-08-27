@@ -93,9 +93,12 @@ Board 曾是 5000+ 行的上帝类，按"门面 API 不变"原则逐刀拆分：
   草稿增量应用；elementToData 经 ElementToDataContext 注入三个无状态回调）
 - ✅ SpatialGrid（空间网格索引：命中类查询 O(候选数)；脏标记靠 tree 层
   property.change / child.add / remove 全局冒泡 + loadElements 显式打标）
-- ⏳ 后续候选：AI 排列/整理编排、settings.ts 按页签拆模块
+- ✅ AiOpsController（AI 编排：稳定 id 注册 el-N/grp-N、按 id 批量操作
+  排列/整理/手绘化/粗糙度/删除/属性更新——「序列化 → 组/框架展开 → 纯函数
+  变换 → worldCoords 重建 → 前后快照」管线；层序重排管线 toFront/toBack 共用）
+- ⏳ 后续候选：settings.ts 按页签拆模块
 
-canvas.ts 现约 3980 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
+canvas.ts 现约 3730 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
 绘制统一管线、样式应用、选择/剪贴板/历史编排。
 
 新交互特性的模板参考 `crop-controller.ts`：deps 对象注入 Board 能力，
