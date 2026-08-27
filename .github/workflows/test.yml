@@ -37,22 +37,27 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # 仅装驱动包（不落 lockfile）；浏览器复用 runner 自带 Edge
+      # 仅装驱动包（不落 lockfile）；浏览器复用 runner 自带 Edge。
+      # 注意：Actions 在步骤结束时清理子进程树，dev server 必须与测试同步骤运行
       - run: npm i --no-save playwright@1.55.0
-      - name: Start dev server
+      - name: Run E2E (dev server + board regression + settings smoke)
         shell: pwsh
         run: |
-          Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -RedirectStandardOutput "dev.log" -RedirectStandardError "dev-err.log"
-          $deadline = (Get-Date).AddSeconds(60)
-          do {
-            Start-Sleep -Milliseconds 800
-            try { $r = Invoke-WebRequest -Uri http://localhost:5173 -UseBasicParsing -TimeoutSec 2; $ok = ($r.StatusCode -eq 200) } catch { $ok = $false }
-          } while (-not $ok -and (Get-Date) -lt $deadline)
-          if (-not $ok) { throw "dev server did not start" }
-      - name: Run board regression
-        run: node tests/e2e/board-regress.cjs
-      - name: Run settings smoke
-        run: node tests/e2e/settings-smoke.cjs
+          $server = Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -PassThru -RedirectStandardOutput "dev.log" -RedirectStandardError "dev-err.log"
+          try {
+            $deadline = (Get-Date).AddSeconds(60)
+            do {
+              Start-Sleep -Milliseconds 800
+              try { $r = Invoke-WebRequest -Uri http://localhost:5173 -UseBasicParsing -TimeoutSec 2; $ok = ($r.StatusCode -eq 200) } catch { $ok = $false }
+            } while (-not $ok -and (Get-Date) -lt $deadline)
+            if (-not $ok) { throw "dev server did not start" }
+            node tests/e2e/board-regress.cjs
+            if ($LASTEXITCODE -ne 0) { throw "board-regress failed" }
+            node tests/e2e/settings-smoke.cjs
+            if ($LASTEXITCODE -ne 0) { throw "settings-smoke failed" }
+          } finally {
+            if ($server -and -not $server.HasExited) { taskkill /PID $server.Id /T /F /NOUACHECK 2>$null }
+          }
 
   # 桌面端 Rust 壳编译校验：PR 阶段即可暴露破坏 Tauri 构建的问题（此前只在打 tag 时发现）
   rust-check:
