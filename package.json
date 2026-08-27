@@ -14,7 +14,8 @@
     "lint": "biome lint src",
     "format": "biome format --write src",
     "format:check": "biome format src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "node tests/e2e/board-regress.cjs"
   },
   "dependencies": {
     "@leafer-in/arrow": "^2.2.9",

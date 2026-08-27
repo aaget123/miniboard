@@ -80,19 +80,30 @@ x/y 是锚点、path 是局部轮廓、采样点在 `__freehandPoints`。
 
 ## 控制器拆分现状
 
-Board 曾是 5000+ 行的上帝类，正按"门面 API 不变"原则逐刀拆分：
+Board 曾是 5000+ 行的上帝类，按"门面 API 不变"原则逐刀拆分：
 
 - ✅ CropController（图片裁剪）
 - ✅ 纯函数下沉：geometry / element-utils / frame 坐标契约
-- ⏳ 计划中：FrameController、PointEditController、序列化转换层
+- ✅ PointEditController（线性元素点编辑：sky 层手柄/拖点/加点/端点吸附绑定）
+- ✅ FrameController（框架域：归属注册表 __frameId、内容移动/旋转/幂等快照
+  缩放跟随、⇄矩形互转、折叠/滚动/聚焦、内容约束夹紧）
+- ✅ scene-format（序列化转换层：ElementData ⇄ leafer 元素双向纯映射 +
+  草稿增量应用；elementToData 经 ElementToDataContext 注入三个无状态回调）
+- ✅ SpatialGrid（空间网格索引：命中类查询 O(候选数)；脏标记靠 tree 层
+  property.change / child.add / remove 全局冒泡 + loadElements 显式打标）
+- ⏳ 后续候选：橡皮擦控制器（分段擦除/待删预览）、AI 排列/整理编排
+
+canvas.ts 现约 4400 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
+绘制统一管线、样式应用、选择/剪贴板/历史编排。
 
 新交互特性的模板参考 `crop-controller.ts`：deps 对象注入 Board 能力，
 事件管线经控制器短路分发。
 
 ## 测试策略
 
-- 纯函数层 vitest 全覆盖（坐标/分段擦除/排列/解析/契约往返……）
-- Board/UI 集成测试缓行：leafer 强依赖 DOM 渲染，headless 成本高；
-  待控制器拆分完成后对 Controller 层补测试
+- 纯函数层 vitest 全覆盖（坐标/分段擦除/排列/解析/契约往返/空间索引模糊对照……）
+- **E2E 回归**：`npm run test:e2e`（tests/e2e/board-regress.cjs，Playwright +
+  Edge 驱动真实交互）覆盖 多选整组拖动 / 框架转换与内容跟随 / 点编辑端点拖动 /
+  橡皮擦除 / 撤销恢复 / serialize 往返幂等——需本地 dev server (5173) 在跑
 - CI（test.yml）：前端 lint + vitest + vite build；rust-check job 跑
   `cargo check` 守住桌面端编译

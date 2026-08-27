@@ -46,16 +46,18 @@
 
 ## 已知技术债
 
-- canvas.ts 仍约 6000 行：FrameController / PointEditController / 序列化转换层待拆
-  （模板参考 crop-controller.ts 的 deps 注入模式）；本轮接入空间索引后，
-  hitTest / selectByBox / selectByPolygon / 帧相关判定的改造面已收敛到索引层，
-  后续拆分可整体搬运这些函数
+- ~~canvas.ts 拆分~~ ✓ 三刀完成：PointEditController / FrameController /
+  scene-format（序列化转换层）已拆出，canvas.ts 6200→4450 行（事件管线/
+  绘制管线/样式/选择剪贴板/历史编排保留）；候选尾巴：橡皮擦控制器、
+  AI 排列/整理编排（见 ARCHITECTURE.md「控制器拆分现状」）
 - settings.ts 约 2000 行单类，建议按页签拆模块
 - ~~橡皮悬停预览在大画布（万级元素）下的 hitTest 成本~~ ✓ 空间网格索引已落地
   （spatial-grid.ts；脏标记由 property.change / child 事件全局冒泡 + loadElements
   显式打标，空点命中微秒级）。剩余增量：橡皮分段擦除的「纯几何线段距离扫描」
   仍按全量 Line 遍历（纯数字运算快、实测 ~1ms@1万），如需再优化可在同一索引上
   按 Line 子集预筛
+- E2E 回归已固化（npm run test:e2e，本地 dev server 前置）；如需进 CI 需在
+  runner 里起 dev server + 安装 Playwright（成本可控，待定）
 - 待查·剪贴板「框架连同内容一起复制」的坐标双移嫌疑：copy() 序列化的是世界坐标，
   粘贴管线却按「相对坐标」契约走 resolveFrameContents → toWorldElement 再加框架
   原点，内容落点疑似偏移（Alt+拖拽复制已通过剥离 frameId 规避该路径）。复现后
