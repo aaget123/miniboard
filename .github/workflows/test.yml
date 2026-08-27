@@ -56,8 +56,9 @@ jobs:
             node tests/e2e/settings-smoke.cjs
             if ($LASTEXITCODE -ne 0) { throw "settings-smoke failed" }
           } finally {
-            if ($server -and -not $server.HasExited) { taskkill /PID $server.Id /T /F /NOUACHECK 2>$null }
+            if ($server -and -not $server.HasExited) { taskkill /PID $server.Id /T /F 2>$null | Out-Null }
           }
+          exit 0
 
   # 桌面端 Rust 壳编译校验：PR 阶段即可暴露破坏 Tauri 构建的问题（此前只在打 tag 时发现）
   rust-check:
