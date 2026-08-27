@@ -26,12 +26,11 @@ import "@leafer-in/arrow";
 // 注册文本内联编辑器（新建/双击文字后就地 WYSIWYG 编辑），须在创建 App 前导入
 import "@leafer-in/text-editor";
 import type { IPointerEvent } from "@leafer-ui/interface";
-import type { IUI } from "@leafer-ui/interface";
 import type { ArrowHead, BoardStyle, ElementData, FontWeight } from "../types";
 import type { CoordBox } from "./coords";
 import { beautifyScene } from "./beautify";
 import type { BeautifyStats } from "./beautify";
-import { rotatePoint, transformPath, translatePath } from "./path";
+import { transformPath, translatePath } from "./path";
 import { offsetElementData } from "./offset";
 import {
   FRAME_CODE_FONT,
@@ -44,7 +43,6 @@ import {
   contractFrameContents,
   expandFrameContents,
   frameContentSize,
-  frameScrollMax,
   normalizeContent,
 } from "./frame";
 import {
@@ -55,9 +53,16 @@ import {
   reorderElements,
 } from "./arrange";
 import type { ArrangeAction, ReorderMode } from "./arrange";
-import { elementBounds, unionBounds } from "./bounds";
+import { unionBounds } from "./bounds";
 import { CropController } from "./crop-controller";
 import { PointEditController } from "./point-edit-controller";
+import {
+  FRAME_DEFAULT_FILL,
+  FRAME_NAME_LABEL_COLOR,
+  FRAME_NAME_LABEL_GAP,
+  FRAME_NAME_LABEL_SIZE,
+  FrameController,
+} from "./frame-controller";
 import { ConnectorController, type Side } from "./connector-controller";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
@@ -113,15 +118,6 @@ const ALIGN_SNAP_PX = 6;
 const ALIGN_HYST_PX = 18;
 // 落框高亮覆盖框的颜色（sky 层）
 const DROP_HIGHLIGHT_STROKE = "#f24aa0";
-// 框架名称标签：字号 / 与框架上沿的间距 / 颜色（子级 Text，hit:false 点击穿透）
-const FRAME_NAME_LABEL_SIZE = 11;
-const FRAME_NAME_LABEL_GAP = 5;
-const FRAME_NAME_LABEL_COLOR = "#8a8f98";
-// 框架默认填充：框架一律带填充（内部可命中走增量拖动管线，也便于视觉识别
-// 为容器）；转换/载入时 fill 缺失则补此色
-const FRAME_DEFAULT_FILL = "rgba(79, 140, 255, 0.08)";
-// 内容约束的归属阈值：元素与 constrain 框架的包围盒重叠面积占比下限
-const CONSTRAINT_ADOPT_RATIO = 0.6;
 
 type AppWithEditor = App & { editor: Editor };
 
@@ -231,39 +227,6 @@ export type SelectionInfo = {
   roughness?: number;
 };
 
-/**
- * 框架缩放手势的内容元素快照（单选缩放框架时框内内容跟随的幂等重算基准）。
- * SCALE 事件的 scaleX/scaleY 是相对当前状态的增量，拖动中高频触发；就地增量
- * 缩放会让每步的坐标舍入沿 T 命令链累积放大。快照在手势第一次 SCALE 时建立，
- * 之后每次都用“快照 × 累计比例”重算，舍入只发生一次、误差不跨步累积。
- */
-interface FrameContentSnap {
-  el: UI;
-  kind: "line" | "freehand" | "path" | "text" | "box";
-  /** 快照时元素锚点 (0,0) 的世界坐标（x/y 重算基准） */
-  worldAnchor: { x: number; y: number };
-  /** line：各端点快照时的世界坐标 */
-  worldPoints?: { x: number; y: number }[];
-  /** freehand：局部轮廓 path；普通 path：已转世界坐标的 path */
-  path?: string;
-  /** freehand：笔迹采样点（与 path 同基准的局部坐标） */
-  penPoints?: number[][];
-  /** box（rect/ellipse/image）：宽高 */
-  width?: number;
-  height?: number;
-  /** text：字号 */
-  fontSize?: number;
-}
-
-/** 框架缩放手势级状态：累计比例 + 内容快照（手势结束即清空） */
-interface FrameScaleSnap {
-  frameId: string;
-  /** 手势累计缩放比例（每次 SCALE 乘上事件增量） */
-  kx: number;
-  ky: number;
-  items: FrameContentSnap[];
-}
-
 export class Board {
   readonly app: App;
   readonly editor: Editor;
@@ -342,15 +305,10 @@ export class Board {
   // 图片裁剪：独立交互控制器（sky 层裁剪框 + 8 手柄，松手即应用）
   private cropCtrl!: CropController;
   private connectorCtrl!: ConnectorController;
+  // 框架域控制器：归属注册表/内容跟随/互转/折叠/聚焦/约束夹紧
+  private frameCtrl!: FrameController;
   /** 文本缩放语义：横向拉伸换行、纵向/对角改字号（记录缩放前的原始状态） */
   private textScaleOrig = new Map<Text, { fontSize: number; width: number }>();
-  /** 框架缩放手势的内容快照（幂等重算基准；手势结束清空） */
-  private frameScaleSnap: FrameScaleSnap | null = null;
-  /** 框架聚焦状态：保存聚焦前视口，再次聚焦/退出时恢复（会话级，不序列化） */
-  private frameFocus: {
-    id: string;
-    view: { x: number; y: number; sx: number; sy: number };
-  } | null = null;
   // 网格：设置（大小/显示/吸附）与网格线层（挂在 zoomLayer 最底层，随缩放/平移重建）
   private grid: GridSettings = { size: 20, show: false, snap: false };
   private gridPath: Path | null = null;
@@ -555,7 +513,7 @@ export class Board {
           // 多选整体夹紧：以选区联合 bbox 求一次修正量应用到每个成员，
           // 避免逐元素独立夹紧把框内的相对布局拉歪
           if (target && !isFrameEl(target) && !this.modKeys.alt) {
-            const fb = this.constrainFrameOf(target);
+            const fb = this.frameCtrl.constrainOf(target);
             if (fb) {
               const t = target as UI;
               // nx/ny 为 local 增量、bbox 为世界基准：画布缩放/平移后
@@ -625,9 +583,31 @@ export class Board {
       editorCancel: () => this.editor.cancel(),
       cancelCrop: () => this.cancelCrop(),
       aiIdOf: (el) => this.aiIdOf(el),
-      clampConstrained: (el) => this.clampConstrainedMembers([el]),
+      clampConstrained: (el) => this.frameCtrl.clampMembers([el]),
       rebuildRoute: (el) => this.rebuildRoutePoints(el),
       scheduleHistory: () => this.scheduleHistory(),
+    });
+    // 框架域控制器（依赖经注入：空间索引的框架子集、编辑器选中集、契约归一化等）
+    this.frameCtrl = new FrameController({
+      app: this.app,
+      frameList: () => this.frameElements(),
+      treeChildren: () => this.app.tree.children as UI[],
+      selectedList: () => this.selectedList,
+      aiIdOf: (el) => this.aiIdOf(el),
+      normalizeContract: (el) => this.normalizeContractEl(el),
+      defaultFontSize: () => TEXT_FONT_SIZE,
+      zoomRange: { min: MIN_SCALE, max: MAX_SCALE },
+      updateGrid: () => this.updateGrid(),
+      commitHistory: () => this.commitHistory(),
+      onMutated: () => this.opts.onMutated(),
+      editorTarget: (el) => {
+        this.editor.target = el;
+      },
+      editorList: () => (this.editor as unknown as { list?: UI[] }).list ?? [],
+      getStyle: () => this.opts.getStyle(),
+      addToTree: (el) => this.addToTree(el),
+      dataToElement: (d) => this.dataToElement(d),
+      drawingFrame: () => this.drawingFrame,
     });
     this.cropCtrl = new CropController({
       app: this.app,
@@ -769,7 +749,7 @@ export class Board {
       if (ev.moveX || ev.moveY) {
         for (const m of movedReal) {
           if (isFrameEl(m)) {
-            this.moveFrameContents(m, ev.moveX, ev.moveY);
+            this.frameCtrl.moveContents(m, ev.moveX, ev.moveY);
           }
         }
       }
@@ -805,7 +785,7 @@ export class Board {
       this.frameClampDirty = true;
       const target = ev.target as UI | undefined;
       if (target && isFrameEl(target) && ev.rotation && this.selectedList.length === 1) {
-        this.rotateFrameContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, ev.rotation);
+        this.frameCtrl.rotateContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, ev.rotation);
       }
       this.scheduleHistory();
     });
@@ -825,7 +805,7 @@ export class Board {
       const sx = ev.scaleX ?? 1;
       const sy = ev.scaleY ?? 1;
       if (target && isFrameEl(target) && this.selectedList.length === 1 && (sx !== 1 || sy !== 1)) {
-        this.scaleFrameContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, sx, sy);
+        this.frameCtrl.scaleContents(target, ev.worldOrigin ?? { x: 0, y: 0 }, sx, sy);
       }
       this.scheduleHistory();
     });
@@ -849,13 +829,13 @@ export class Board {
     // 框架缩放手势结束：清空内容快照（拖拽/触摸捻合两种手势的结束事件；
     // 快照残留会导致下次缩放复用旧元素引用，必须及时清理）
     this.app.on(DragEvent.END, () => {
-      this.frameScaleSnap = null;
+      this.frameCtrl.resetScaleSnap();
       // 缩放/旋转手势收尾：把受约束成员拉回所属框架（松手后校正，
       // 不与编辑器的增量计算打架；Alt 豁免拖出时跳过）
       if (this.frameClampDirty) {
         this.frameClampDirty = false;
         if (!this.modKeys.alt) {
-          this.clampConstrainedMembers();
+          this.frameCtrl.clampMembers();
         }
       }
       // 拖动结束统一归一化契约元素（line/arrow/path）：位移并入 points/path
@@ -879,7 +859,7 @@ export class Board {
       this.alignLockY = null;
     });
     this.app.on(ZoomEvent.END, () => {
-      this.frameScaleSnap = null;
+      this.frameCtrl.resetScaleSnap();
       // 视口变化后重建 sky 层连接器锚点（与点编辑手柄同策略）
       this.connectorCtrl.refresh();
     });
@@ -1184,9 +1164,9 @@ export class Board {
     // 其余区域维持滚轮缩放（缩放不动点用视口坐标）
     const local = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const world = this.app.tree.getInnerPoint(local);
-    const scrollEl = this.scrollableFrameAt(world);
+    const scrollEl = this.frameCtrl.scrollableAt(world);
     if (scrollEl) {
-      this.scrollFrameContent(scrollEl, e.deltaY);
+      this.frameCtrl.scrollContent(scrollEl, e.deltaY);
       return;
     }
     // 向上滚放大、向下滚缩小
@@ -1466,7 +1446,7 @@ export class Board {
       (el as unknown as Record<string, unknown>).__textBeforeEdit = "";
       this.addToTree(el);
       // 框架内容归属：文本创建点在框架 bbox 内 → 归属该框架
-      this.adoptIntoFrame(el);
+      this.frameCtrl.adopt(el);
       this.openTextEdit(el);
       return;
     }
@@ -1476,7 +1456,7 @@ export class Board {
       this.drawing = true;
       this.penPoints = [[px, py]];
       // 约束框架判定：起点落在 constrain 框架内时，笔迹采样点逐点钳制在框内
-      this.drawingFrame = this.constrainFrameAt(px, py);
+      this.drawingFrame = this.frameCtrl.constrainAt(px, py);
       const style = this.opts.getStyle();
       this.penSize = penSizeOf(style.strokeWidth);
       this.draft = new Path({
@@ -1499,16 +1479,16 @@ export class Board {
       let list = this.runGenerator(sx, sy, sx, sy);
       if (list?.length) {
         // 点击生成同样受约束框架夹紧（起点在 constrain 框架内时）
-        const f = this.constrainFrameAt(sx, sy);
+        const f = this.frameCtrl.constrainAt(sx, sy);
         if (f) {
-          list = this.clampListToFrame(list, f);
+          list = this.frameCtrl.clampListToFrame(list, f);
         }
         for (const d of list) {
           const el = this.dataToElement(d);
           if (el) {
             this.addToTree(el);
             // 框架内容归属：点击生成的元素完全落在框架 bbox 内 → 归属该框架
-            this.adoptIntoFrame(el);
+            this.frameCtrl.adopt(el);
           }
         }
         this.commitHistory();
@@ -1525,7 +1505,7 @@ export class Board {
     this.startX = this.snapGrid(px);
     this.startY = this.snapGrid(py);
     // 约束框架判定：绘制起点落在 constrain 框架内时，生成结果实时夹紧（画不出框）
-    this.drawingFrame = this.constrainFrameAt(this.startX, this.startY);
+    this.drawingFrame = this.frameCtrl.constrainAt(this.startX, this.startY);
     this.draftData = this.runGenerator(this.startX, this.startY, this.startX, this.startY);
     if (!this.draftData) {
       this.drawing = false;
@@ -1691,7 +1671,7 @@ export class Board {
     const kind = this.opts.registry.getKind(this.tool);
     if (kind === "freehand") {
       // 约束夹紧：起点在 constrain 框架内时采样点钳制在框内（笔画画不出框）
-      const cp = this.clampPointToFrame(px, py);
+      const cp = this.frameCtrl.clampPoint(px, py);
       this.penPoints.push([cp.x, cp.y]);
       const path = strokeOutlinePath(this.penPoints, { size: this.penSize });
       if (path) {
@@ -1704,7 +1684,7 @@ export class Board {
       if (data) {
         // 约束夹紧：起点在 constrain 框架内时生成结果整体限制在框内
         if (this.drawingFrame) {
-          data = this.clampListToFrame(data, this.drawingFrame);
+          data = this.frameCtrl.clampListToFrame(data, this.drawingFrame);
         }
         this.draftData = data;
         this.applyDataToDraft(this.draft, data[0]);
@@ -1721,7 +1701,7 @@ export class Board {
 
   private onUp() {
     // 框架缩放快照兜底清理（手势结束事件漏发时防残留；通常由 DragEvent.END 清理）
-    this.frameScaleSnap = null;
+    this.frameCtrl.resetScaleSnap();
     // 连接器拖出结束：按落点创建箭头（onUp 不携带事件，用最近 app 坐标）
     if (this.connectorCtrl.dragging) {
       const p = this.lastAppPoint ?? { x: 0, y: 0 };
@@ -1781,10 +1761,10 @@ export class Board {
       // 组合工具草稿其余元素已在画布上（拖拽中实时预览），无需补齐
       // 框架内容归属：绘制结果完全落在框架 bbox 内 → 挂上该框架的 frameId
       if (this.draft) {
-        this.adoptIntoFrame(this.draft);
+        this.frameCtrl.adopt(this.draft);
       }
       for (const el of this.draftExtras) {
-        this.adoptIntoFrame(el);
+        this.frameCtrl.adopt(el);
       }
       this.draft = null;
       this.draftExtras = [];
@@ -1913,25 +1893,25 @@ export class Board {
     if (isFrameEl(m)) {
       return;
     }
-    const fid = this.frameIdOf(m);
+    const fid = this.frameCtrl.idOf(m);
     if (!fid) {
-      const frame = this.frameContaining(m);
+      const frame = this.frameCtrl.containing(m);
       if (frame) {
-        this.setFrameId(m, this.aiIdOf(frame));
+        this.frameCtrl.setId(m, this.aiIdOf(frame));
       }
       return;
     }
-    const frame = this.frameById(fid);
+    const frame = this.frameCtrl.byId(fid);
     const fb = frame?.worldBoxBounds;
     const eb = m.worldBoxBounds;
     if (!fb || !eb) {
-      this.setFrameId(m, undefined);
+      this.frameCtrl.setId(m, undefined);
       return;
     }
     const cx = eb.x + eb.width / 2;
     const cy = eb.y + eb.height / 2;
     if (cx < fb.x || cx > fb.x + fb.width || cy < fb.y || cy > fb.y + fb.height) {
-      this.setFrameId(m, undefined);
+      this.frameCtrl.setId(m, undefined);
     }
   }
 
@@ -2077,7 +2057,7 @@ export class Board {
     if (el instanceof Line && target) {
       this.rebuildRoutePoints(el);
     }
-    this.adoptIntoFrame(el);
+    this.frameCtrl.adopt(el);
     this.commitHistory();
     return true;
   }
@@ -2284,7 +2264,7 @@ export class Board {
     const m = part as unknown as Record<string, unknown>;
     m.__freehandPoints = seg.map((p) => [...p]);
     m.__penSize = size;
-    this.setFrameId(part, this.frameIdOf(root));
+    this.frameCtrl.setId(part, this.frameCtrl.idOf(root));
     const gid = (root as unknown as { __groupId?: string }).__groupId;
     if (gid) {
       (part as unknown as { __groupId?: string }).__groupId = gid;
@@ -2477,7 +2457,7 @@ export class Board {
     if (binds.bindEnd) {
       m.__bindEnd = binds.bindEnd;
     }
-    this.setFrameId(part, this.frameIdOf(root));
+    this.frameCtrl.setId(part, this.frameCtrl.idOf(root));
     const gid = (root as unknown as { __groupId?: string }).__groupId;
     if (gid) {
       (part as unknown as { __groupId?: string }).__groupId = gid;
@@ -2621,7 +2601,7 @@ export class Board {
       el.y = (el.y ?? 0) + dy;
       if (isFrameEl(el)) {
         // 框架微移带动框内内容（与世界坐标位移语义一致）
-        this.moveFrameContents(el, dxWorld, dyWorld);
+        this.frameCtrl.moveContents(el, dxWorld, dyWorld);
       }
     }
     this.updateBindings();
@@ -2849,7 +2829,7 @@ export class Board {
       return false;
     }
     const units = this.groupExpanded(this.expandMoversForSnap(movers)).filter((el) => !el.locked);
-    if (!units.length || units.some((m) => !isFrameEl(m) && this.constrainFrameOf(m))) {
+    if (!units.length || units.some((m) => !isFrameEl(m) && this.frameCtrl.constrainOf(m))) {
       return false;
     }
     const children = this.app.tree.children as UI[];
@@ -2894,7 +2874,7 @@ export class Board {
         if (picked.has(el) || el.locked || isFrameEl(el)) {
           continue;
         }
-        const fid = this.frameIdOf(el);
+        const fid = this.frameCtrl.idOf(el);
         if (fid && fids.has(fid)) {
           picked.add(el);
         }
@@ -2946,7 +2926,7 @@ export class Board {
     // 定向重新归属：克隆件落在原位置，仍完全包含于某框架则挂回归属。
     // 不全局 resolveFrameContents——避免既有归属成员被相对坐标换算二次位移
     for (const el of created) {
-      this.adoptIntoFrame(el);
+      this.frameCtrl.adopt(el);
     }
     this.commitHistory();
   }
@@ -3169,678 +3149,39 @@ export class Board {
     return changed > 0;
   }
 
-  /**
-   * frame 框架移动：归属于该框架的内容元素（frameId 显式归属）跟随位移。
-   * 与组联动的语义差异：仅框架驱动框内内容（反向不成立，内容移动不带动框架）；
-   * 其他框架与锁定元素不跟随（嵌套框架由各层自行驱动其内容）；
-   * 内容 Text 是 Box 真子级，随父级自动移动。
-   */
-  private moveFrameContents(frame: UI, dx: number, dy: number) {
-    const fid = this.aiIdOf(frame);
-    for (const el of this.app.tree.children as UI[]) {
-      if (el === frame || el.locked || isFrameEl(el)) {
-        continue;
-      }
-      if (this.frameIdOf(el) !== fid) {
-        continue;
-      }
-      el.moveWorld(dx, dy);
-      this.normalizeContractEl(el);
-    }
-  }
+  // ================= 框架域（委托 FrameController；门面保持公开 API 不变） =================
 
-  /**
-   * 框架旋转：归属于该框架的内容元素绕旋转中心同步旋转（位置绕 worldOrigin
-   * 转 rotation 度；x/y 元素叠加自身角度，契约元素逐点旋转并入 points/path）。
-   * 坐标基准：元素 x/y、points 为 tree 局部坐标，worldOrigin 为世界坐标，
-   * 画布缩放/平移后两者不一致，逐点经 getWorldPoint/getLocalPoint 换算。
-   */
-  private rotateFrameContents(frame: UI, worldOrigin: { x: number; y: number }, rotation: number) {
-    const fid = this.aiIdOf(frame);
-    if (!rotation) {
-      return;
-    }
-    for (const el of this.app.tree.children as UI[]) {
-      if (el === frame || el.locked || isFrameEl(el)) {
-        continue;
-      }
-      if (this.frameIdOf(el) !== fid) {
-        continue;
-      }
-      if (this.selectedList.includes(el)) {
-        continue;
-      }
-      this.normalizeContractEl(el);
-      // rotPoint：inner → 世界绕旋转中心转 → 父级局部 → 转回 inner（契约元素
-      // points/path 为 inner 坐标；元素自身带 rotation 时 inner≠local，必须
-      // 两步换算）；anchorPoint：锚点（inner 原点）世界位置旋转后转回父级
-      // 局部即新 x/y——x/y 元素的 x/y 就是父级局部锚点，不能用
-      // getInnerPointByLocal（那会把锚点换算成 inner 值写回 x/y，产生偏移）
-      const rotPoint = (p: { x: number; y: number }) =>
-        el.getInnerPointByLocal(
-          el.getLocalPoint(rotatePoint(el.getWorldPoint(p), rotation, worldOrigin)),
-        );
-      const anchorPoint = () =>
-        el.getLocalPoint(rotatePoint(el.getWorldPoint({ x: 0, y: 0 }), rotation, worldOrigin));
-      if (el instanceof Line) {
-        const pts = (el.points ?? []).filter(
-          (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
-        );
-        el.points = pts.map(rotPoint);
-      } else if (el instanceof Path) {
-        const t = el as unknown as { __freehandPoints?: number[][] };
-        if (t.__freehandPoints) {
-          // freehand 用 x/y + 局部轮廓：锚点绕中心旋转 + 自身角度叠加
-          const p = anchorPoint();
-          el.x = p.x;
-          el.y = p.y;
-          el.rotation = (el.rotation ?? 0) + rotation;
-        } else {
-          el.path = transformPath(el.path as string, rotPoint);
-        }
-      } else {
-        // x/y 元素（rect/ellipse/text/image）：锚点绕中心旋转 + 自身角度叠加
-        const p = anchorPoint();
-        el.x = p.x;
-        el.y = p.y;
-        el.rotation = (el.rotation ?? 0) + rotation;
-      }
-    }
-  }
-
-  /**
-   * 缩放框架时框内内容跟随：单选缩放框架（width/height 分支或 scale 变换分支，
-   * 兄弟元素都不会自动跟随）时，归属于该框架的内容元素（frameId 显式归属）
-   * 绕同一世界缩放中心同步缩放（leafer 框架缩放 = 绕 worldOrigin 等比缩放，
-   * 与 bbox 仿射等价，直接用 SCALE 事件 data 的 worldOrigin + 比例，不依赖
-   * bbox 快照）。坐标基准：元素 x/y、points 为 tree 局部坐标，worldOrigin 为
-   * 世界坐标，逐点经 getWorldPoint/getLocalPoint 换算。
-   */
-  private scaleFrameContents(
-    frame: UI,
-    worldOrigin: { x: number; y: number },
-    scaleX: number,
-    scaleY: number,
-  ) {
-    if (scaleX === 1 && scaleY === 1) {
-      return;
-    }
-    const fid = this.aiIdOf(frame);
-    // 手势快照：一次缩放拖动会高频触发 SCALE（事件比例是相对当前状态的增量），
-    // 若每次都就地增量缩放内容，每步都经过 transformPath 的两位小数舍入，误差沿
-    // T 命令链累积放大（freehand 轮廓直线段被舍成波浪，多次缩放后肉眼可见）。
-    // 改为手势第一次触发时快照内容原始状态，之后每次都用“快照 × 累计比例”幂等
-    // 重算：舍入只发生一次、误差不跨步累积，多次缩放后轮廓仍保持笔直。
-    if (!this.frameScaleSnap || this.frameScaleSnap.frameId !== fid) {
-      this.frameScaleSnap = {
-        frameId: fid,
-        kx: 1,
-        ky: 1,
-        items: this.snapshotFrameContents(frame, fid),
-      };
-    }
-    const snap = this.frameScaleSnap;
-    snap.kx *= scaleX;
-    snap.ky *= scaleY;
-    const kx = snap.kx;
-    const ky = snap.ky;
-    // 世界坐标缩放映射（绕 worldOrigin 缩放；原点在整个手势中恒定）
-    const tx = (v: number) => worldOrigin.x + (v - worldOrigin.x) * kx;
-    const ty = (v: number) => worldOrigin.y + (v - worldOrigin.y) * ky;
-    for (const item of snap.items) {
-      const el = item.el;
-      // 锚点：快照世界锚点绕缩放中心映射后转回父级局部即新 x/y（幂等：反复
-      // 写入同一世界锚点，getLocalPoint 会给出同一结果，不会漂移）
-      const lp = el.getLocalPoint({
-        x: tx(item.worldAnchor.x),
-        y: ty(item.worldAnchor.y),
-      });
-      if (item.kind === "line") {
-        // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
-        (el as Line).points = item.worldPoints!.map((w) =>
-          el.getInnerPointByLocal(el.getLocalPoint({ x: tx(w.x), y: ty(w.y) })),
-        );
-      } else if (item.kind === "freehand") {
-        // freehand 用 x/y + 局部轮廓：锚点随缩放映射，局部轮廓按比例缩放
-        // （等比缩放下直接乘比例与元素旋转可交换）；penPoints 与 path 同为
-        // 局部坐标（绘制时 x/y=0 才恰等于画板坐标），必须绕局部原点缩放——
-        // 若当世界坐标绕 worldOrigin 映射，缩放后数值基准变成世界坐标，
-        // 整理识别（penPoints + x/y）与改粗细重绘会错位
-        const t = el as unknown as { __freehandPoints?: number[][] };
-        el.x = lp.x;
-        el.y = lp.y;
-        el.path = transformPath(item.path as string, (q) => ({
-          x: q.x * kx,
-          y: q.y * ky,
-        }));
-        t.__freehandPoints = item.penPoints!.map((pt) => [pt[0] * kx, pt[1] * ky, ...pt.slice(2)]);
-      } else if (item.kind === "path") {
-        // 普通 path 绝对坐标：快照已是世界坐标，绕缩放中心映射后转回 inner
-        el.path = transformPath(item.path as string, (p) =>
-          el.getInnerPointByLocal(el.getLocalPoint({ x: tx(p.x), y: ty(p.y) })),
-        );
-      } else if (item.kind === "text") {
-        el.x = lp.x;
-        el.y = lp.y;
-        (el as Text).fontSize = Math.max(
-          4,
-          Math.round(item.fontSize! * Math.sqrt(Math.abs(kx * ky))),
-        );
-      } else {
-        // box（rect/ellipse/image）：锚点映射 + 宽高按轴缩放
-        el.x = lp.x;
-        el.y = lp.y;
-        el.width = item.width! * kx;
-        el.height = item.height! * ky;
-      }
-    }
-  }
-
-  /**
-   * 快照框架内容元素的缩放前状态（单选缩放框架手势第一次 SCALE 时调用）。
-   * 快照时把契约元素位移归一化（x/y 并入 points/path），并把参与变换的坐标
-   * 统一转成世界坐标，保证重算只依赖快照与累计比例（幂等，不依赖元素当前值）。
-   */
-  private snapshotFrameContents(frame: UI, fid: string): FrameContentSnap[] {
-    const items: FrameContentSnap[] = [];
-    for (const el of this.app.tree.children as UI[]) {
-      if (el === frame || el.locked || isFrameEl(el)) {
-        continue;
-      }
-      // 归属于该框架的内容才跟随（frameId 显式匹配，不再靠 bbox 猜测）
-      if (this.frameIdOf(el) !== fid) {
-        continue;
-      }
-      // 多选缩放时选中的兄弟元素已由编辑器变换，跳过避免双重变换
-      if (this.selectedList.includes(el)) {
-        continue;
-      }
-      // 契约元素（line/arrow/path）位移并入 points/path，避免双重偏移
-      this.normalizeContractEl(el);
-      const t = el as unknown as { __freehandPoints?: number[][] };
-      if (el instanceof Line) {
-        // 画布内 line 的 points 均为对象数组（扁平 number[] 仅存在于类型定义中）
-        const pts = (el.points ?? []).filter(
-          (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
-        );
-        items.push({
-          el,
-          kind: "line",
-          worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-          worldPoints: pts.map((p) => el.getWorldPoint(p)),
-        });
-      } else if (el instanceof Path) {
-        if (t.__freehandPoints) {
-          items.push({
-            el,
-            kind: "freehand",
-            worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-            path: el.path as string,
-            penPoints: t.__freehandPoints.map((pt) => [...pt]),
-          });
-        } else {
-          // 普通 path 快照即转世界坐标：重算时从世界坐标绕缩放中心映射回，
-          // 避免元素 x/y 在反复重算中漂移导致 getWorldPoint 基准变化
-          items.push({
-            el,
-            kind: "path",
-            worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-            path: transformPath(el.path as string, (p) => el.getWorldPoint(p)),
-          });
-        }
-      } else if (el instanceof Text) {
-        items.push({
-          el,
-          kind: "text",
-          worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-          fontSize: el.fontSize ?? TEXT_FONT_SIZE,
-        });
-      } else if (el instanceof Rect || el instanceof Ellipse) {
-        items.push({
-          el,
-          kind: "box",
-          worldAnchor: el.getWorldPoint({ x: 0, y: 0 }),
-          width: el.width ?? 0,
-          height: el.height ?? 0,
-        });
-      }
-    }
-    return items;
-  }
-
-  // ================= frame 内容归属：frameId + 相对坐标 =================
-
-  /** 读元素的内容归属框架 id（__frameId 实例标记，与序列化字段 frameId 对应） */
-  private frameIdOf(el: UI): string | undefined {
-    return (el as unknown as { __frameId?: string }).__frameId;
-  }
-
-  /** 写元素的内容归属框架 id（undefined = 自由元素） */
-  private setFrameId(el: UI, fid: string | undefined) {
-    (el as unknown as { __frameId?: string }).__frameId = fid;
-  }
-
-  /** 按稳定 id 找框架元素 */
-  private frameById(id: string): UI | null {
-    for (const el of this.frameElements()) {
-      if (isFrameEl(el) && this.aiIdOf(el) === id) {
-        return el;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * 完全包含 el 的框架（归属判定共用：创建/拖入/旧数据升级一致）。
-   * 世界 bbox 含描边外扩，容差取描边半宽 + 1px 浮点余量，避免贴边元素
-   * （如夹紧后与框架边缘重合）因描边外扩 1px 而归属失败。
-   */
-  private frameContaining(el: UI): UI | null {
-    const eb = el.worldBoxBounds;
-    if (!eb) {
-      return null;
-    }
-    const sw = typeof el.strokeWidth === "number" ? el.strokeWidth : 0;
-    const tol = sw / 2 + 1;
-    // 拖动中每帧调用（归属同步）：只在框架子集上判定，避免全树扫描
-    for (const frame of this.frameElements()) {
-      if (!isFrameEl(frame)) {
-        continue;
-      }
-      const fb = frame.worldBoxBounds;
-      if (!fb) {
-        continue;
-      }
-      if (
-        eb.x >= fb.x - tol &&
-        eb.y >= fb.y - tol &&
-        eb.x + eb.width <= fb.x + fb.width + tol &&
-        eb.y + eb.height <= fb.y + fb.height + tol
-      ) {
-        return frame;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * 绘制/导入完成的元素归属判定：完全包含于某框架 → 挂上该框架的
-   * frameId（一次性判定，此后跟随/拖出都由 frameId 显式驱动，不再靠 bbox 猜测）。
-   */
-  private adoptIntoFrame(el: UI) {
-    if (isFrameEl(el) || this.frameIdOf(el)) {
-      return;
-    }
-    const frame = this.frameContaining(el);
-    if (frame) {
-      this.setFrameId(el, this.aiIdOf(frame));
-    }
-  }
-
-  /**
-   * 内容元素坐标换算（相对 → 世界）：运行时元素始终以世界坐标渲染（兄弟元素），
-   * 加载/粘贴带 frameId 的数据时按框架位置/旋转还原；框架不存在则解除归属。
-   */
-  private toWorldElement(el: UI) {
-    const fid = this.frameIdOf(el);
-    if (!fid) {
-      return;
-    }
-    const frame = this.frameById(fid);
-    if (!frame) {
-      this.setFrameId(el, undefined);
-      return;
-    }
-    const fx = frame.x ?? 0;
-    const fy = frame.y ?? 0;
-    const rot = frame.rotation ?? 0;
-    const toWorld = (p: { x: number; y: number }) => {
-      const q = rotatePoint(p, rot);
-      return { x: q.x + fx, y: q.y + fy };
-    };
-    if (el instanceof Line) {
-      const pts = (el.points ?? []).filter(
-        (p): p is { x: number; y: number } => typeof p === "object" && p !== null,
-      );
-      el.points = pts.map(toWorld);
-    } else if (el instanceof Path) {
-      const t = el as unknown as { __freehandPoints?: number[][] };
-      if (t.__freehandPoints) {
-        // freehand 用 x/y + 局部轮廓：只换算位置
-        const p = toWorld({ x: el.x ?? 0, y: el.y ?? 0 });
-        el.x = p.x;
-        el.y = p.y;
-      } else {
-        el.path = transformPath(el.path as string, toWorld);
-      }
-    } else {
-      const p = toWorld({ x: el.x ?? 0, y: el.y ?? 0 });
-      el.x = p.x;
-      el.y = p.y;
-    }
-  }
-
-  /**
-   * 场景归属解析（loadElements/粘贴后调用）：带 frameId 的内容元素换算坐标
-   * （相对 → 世界；worldCoords 模式跳过，数据已是世界坐标），无 frameId 的
-   * 旧数据元素按 bbox 包含自动补挂归属（旧文件升级兼容）。
-   */
-  private resolveFrameContents(worldCoords?: boolean) {
-    for (const el of this.app.tree.children as UI[]) {
-      if (this.frameIdOf(el)) {
-        if (!worldCoords) {
-          this.toWorldElement(el);
-        }
-      } else if (!isFrameEl(el)) {
-        this.adoptIntoFrame(el);
-      }
-    }
-  }
-
-  // ================= frame 内容容器：转换 / 约束 / 创建 =================
-
-  /** 选中单个未锁定 rect → 转为框架（虚线描边 + 容器标记），返回是否成功 */
+  /** 选中单个未锁定 rect → 转为框架 */
   toFrame(): boolean {
-    const list = this.selectedList.filter((el) => !el.locked);
-    if (list.length !== 1 || !(list[0] instanceof Rect) || isFrameEl(list[0])) {
-      return false;
-    }
-    const el = list[0];
-    const meta = el as unknown as Record<string, unknown>;
-    meta[FRAME_FLAG] = true;
-    (el as unknown as { dashPattern?: number[] }).dashPattern = [8, 5];
-    // 框架一律带填充：内部可命中走增量拖动管线，也强化容器视觉。
-    // 旧矩形无填充时补默认色
-    if (el.fill === undefined || el.fill === "none") {
-      el.fill = FRAME_DEFAULT_FILL;
-    }
-    // 抓边=移动（见 dataToElementInner 的说明）；转换后的矩形同样生效
-    (el as unknown as { editConfig?: { resizeable?: boolean; rotateable?: boolean } }).editConfig =
-      { resizeable: false, rotateable: false };
-    // 转换前已画在框内的元素补挂归属（此前只有绘制/导入时才会自动归属）
-    const fid = this.aiIdOf(el);
-    for (const other of this.app.tree.children as UI[]) {
-      if (other === el || isFrameEl(other) || this.frameIdOf(other)) {
-        continue;
-      }
-      if (this.frameContaining(other) === el) {
-        this.setFrameId(other, fid);
-      }
-    }
-    this.commitHistory();
-    this.opts.onMutated();
-    return true;
+    return this.frameCtrl.toFrame();
   }
 
-  /** 选中单个未锁定 frame → 转为普通矩形（内容子元素一并移除），返回是否成功 */
+  /** 选中单个未锁定 frame → 转为普通矩形 */
   toRect(): boolean {
-    const list = this.selectedList.filter((el) => !el.locked);
-    if (list.length !== 1 || !isFrameEl(list[0])) {
-      return false;
-    }
-    const el = list[0];
-    const parent = el.parent;
-    const index = parent ? (parent.children as UI[]).indexOf(el) : -1;
-    // 框架是 Box（Group 子类）且内容 Text 为真子级：重建等价 Rect 替换节点
-    // （普通矩形逻辑均按 Rect 类型判断，Box 无法原地降级），子元素随 destroy 级联销毁
-    const rect = new Rect({
-      x: el.x,
-      y: el.y,
-      rotation: el.rotation,
-      width: el.width,
-      height: el.height,
-      fill: el.fill,
-      stroke: el.stroke,
-      strokeWidth: el.strokeWidth,
-      opacity: el.opacity,
-    });
-    // 透传业务元数据（AI 标识/组关系/意图），框架专属 meta 不保留
-    const srcMeta = el as unknown as Record<string, unknown>;
-    const dstMeta = rect as unknown as Record<string, unknown>;
-    for (const key of ["__aiId", "__groupId", "__intent"] as const) {
-      const v = srcMeta[key];
-      if (v !== undefined) {
-        dstMeta[key] = v;
-      }
-    }
-    // 框架转矩形：其内容归属元素解除归属变自由元素（不随旧框架销毁）
-    const fid = this.aiIdOf(el);
-    for (const other of this.app.tree.children as UI[]) {
-      if (this.frameIdOf(other) === fid) {
-        this.setFrameId(other, undefined);
-      }
-    }
-    el.destroy();
-    if (parent && index >= 0) {
-      parent.add(rect, index);
-    }
-    this.editor.target = rect;
-    this.commitHistory();
-    this.opts.onMutated();
-    return true;
+    return this.frameCtrl.toRect();
   }
 
-  /** 选中单个未锁定 frame：翻转内容约束开关（开启后框内绘制/拖动夹紧），返回是否成功 */
+  /** 翻转内容约束开关 */
   toggleFrameConstrain(): boolean {
-    const list = this.selectedList.filter((el) => !el.locked);
-    if (list.length !== 1 || !isFrameEl(list[0])) {
-      return false;
-    }
-    const meta = list[0] as unknown as Record<string, unknown>;
-    meta.__frameConstrain = meta.__frameConstrain !== true;
-    // 约束状态可视化：实线描边 = 约束开启，虚线 = 普通框
-    this.applyFrameConstrainVisual(list[0]);
-    this.commitHistory();
-    this.opts.onMutated();
-    return true;
+    return this.frameCtrl.toggleConstrain();
   }
 
-  /**
-   * 选中元素框架操作资格（右键菜单用）：单选未锁定 rect/frame 时给出转换资格，
-   * frame 额外给出内容约束/折叠开关状态与聚焦状态。
-   */
-  frameActionState(): {
-    canToFrame: boolean;
-    canToRect: boolean;
-    constrainOn: boolean;
-    canCollapse: boolean;
-    collapsedOn: boolean;
-    canFocus: boolean;
-    focusOn: boolean;
-  } {
-    const list = this.selectedList.filter((el) => !el.locked);
-    let canToFrame = false;
-    let canToRect = false;
-    let constrainOn = false;
-    let canCollapse = false;
-    let collapsedOn = false;
-    let canFocus = false;
-    let focusOn = false;
-    if (list.length === 1) {
-      const el = list[0];
-      if (el instanceof Rect && !isFrameEl(el)) {
-        canToFrame = true;
-      }
-      if (isFrameEl(el)) {
-        canToRect = true;
-        const meta = el as unknown as Record<string, unknown>;
-        constrainOn = meta.__frameConstrain === true;
-        collapsedOn = meta.__frameCollapsed === true;
-        canFocus = true;
-        focusOn = this.frameFocus?.id === this.aiIdOf(el);
-        // 折叠资格：内容型框架且内容超高（不足一屏折叠无意义）
-        if (
-          typeof meta.__frameContent === "string" &&
-          meta.__frameContent &&
-          meta.__frameAutoSize !== false
-        ) {
-          const h = frameContentSize(
-            meta.__frameContent,
-            typeof meta.__frameContentType === "string"
-              ? (meta.__frameContentType as "markdown" | "code" | "text")
-              : undefined,
-          ).height;
-          canCollapse = collapsedOn || h > FRAME_COLLAPSED_HEIGHT;
-        }
-      }
-    }
-    return {
-      canToFrame,
-      canToRect,
-      constrainOn,
-      canCollapse,
-      collapsedOn,
-      canFocus,
-      focusOn,
-    };
-  }
-
-  /**
-   * 选中单个未锁定内容框架：切换内容折叠（折叠后固定高度裁剪 + 滚轮滚动查看；
-   * 展开恢复 autoSize 全部展示）。内容不足一屏时不提供折叠入口（资格见
-   * frameActionState），此处按当前状态反转。返回是否成功。
-   */
+  /** 切换内容折叠 */
   toggleFrameCollapsed(): boolean {
-    const list = this.selectedList.filter((el) => !el.locked);
-    if (list.length !== 1 || !isFrameEl(list[0])) {
-      return false;
-    }
-    const el = list[0] as Box;
-    const meta = el as unknown as Record<string, unknown>;
-    const content = typeof meta.__frameContent === "string" ? meta.__frameContent : "";
-    if (!content) {
-      return false;
-    }
-    const collapsing = meta.__frameCollapsed !== true;
-    const size = frameContentSize(
-      content,
-      typeof meta.__frameContentType === "string"
-        ? (meta.__frameContentType as "markdown" | "code" | "text")
-        : undefined,
-    );
-    meta.__frameCollapsed = collapsing;
-    if (collapsing) {
-      // 折叠：高度压到上限（内容不足一屏时保持原高，无裁剪也无滚动）。
-      // overflow 必须含 "scroll"：leafer Box 仅在 overflow 含 scroll 时把
-      // scrollX/scrollY 应用于子级 bounds 平移（hide 只裁剪不平移），
-      // 无 scroller 插件时不会出现滚动条 UI
-      el.height = Math.min(size.height, FRAME_COLLAPSED_HEIGHT);
-      el.overflow = "scroll";
-      el.scrollY = 0;
-    } else {
-      // 展开：恢复 autoSize 高度，清滚动与裁剪
-      el.height = size.height;
-      el.overflow = undefined;
-      el.scrollY = 0;
-    }
-    this.commitHistory();
-    this.opts.onMutated();
-    return true;
+    return this.frameCtrl.toggleCollapsed();
   }
 
-  /**
-   * 折叠框架内容滚动：滚轮向下（deltaY > 0）内容上移查看后文。
-   * leafer 的 scrollY 正值让子级向下平移，因此用负值区间
-   * [-max, 0] 表示内容向上滚动（0 = 顶部，-max = 底部），
-   * 渲染管线按 overflow: "scroll" 平移子级并在框内裁剪。
-   */
-  private scrollFrameContent(el: Box, deltaY: number) {
-    const meta = el as unknown as Record<string, unknown>;
-    const content = typeof meta.__frameContent === "string" ? meta.__frameContent : "";
-    const max = frameScrollMax(
-      content,
-      typeof meta.__frameContentType === "string"
-        ? (meta.__frameContentType as "markdown" | "code" | "text")
-        : undefined,
-      el.height ?? 0,
-    );
-    if (max <= 0) {
-      return;
-    }
-    const next = Math.min(Math.max((el.scrollY ?? 0) - deltaY, -max), 0);
-    el.scrollY = next;
-  }
-
-  /** 命中可滚动的折叠框架：世界坐标落在其 bbox 内且内容有滚动余量（无则 null） */
-  private scrollableFrameAt(p: { x: number; y: number }): Box | null {
-    for (const el of this.frameElements()) {
-      if (!isFrameEl(el)) {
-        continue;
-      }
-      const meta = el as unknown as Record<string, unknown>;
-      if (meta.__frameCollapsed !== true) {
-        continue;
-      }
-      const b = el.worldBoxBounds;
-      if (b && p.x >= b.x && p.x <= b.x + b.width && p.y >= b.y && p.y <= b.y + b.height) {
-        return el as Box;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * 聚焦框架：视口缩放/平移到框架充满视口（留边距），保存聚焦前视口供退出恢复；
-   * 折叠/展开状态均适用。已在聚焦且传入同一框架时退出恢复。
-   */
+  /** 聚焦/退出聚焦框架 */
   toggleFrameFocus(): boolean {
-    const list = this.selectedList.filter((el) => !el.locked);
-    if (list.length !== 1 || !isFrameEl(list[0])) {
-      return false;
-    }
-    const el = list[0];
-    const id = this.aiIdOf(el);
-    const layer = this.app.tree.zoomLayer;
-    if (!layer) {
-      return false;
-    }
-    if (this.frameFocus?.id === id) {
-      // 退出聚焦：恢复聚焦前视口
-      const v = this.frameFocus.view;
-      layer.x = v.x;
-      layer.y = v.y;
-      layer.scaleX = v.sx;
-      layer.scaleY = v.sy;
-      this.frameFocus = null;
-      this.updateGrid();
-      return true;
-    }
-    const b = el.worldBoxBounds;
-    if (!b) {
-      return false;
-    }
-    const view = this.app.canvas.view as HTMLElement;
-    const vw = this.app.width ?? view.clientWidth;
-    const vh = this.app.height ?? view.clientHeight;
-    // 目标缩放：框架占视口 85%（留边距），限制在画布缩放范围内
-    const target = Math.min(
-      MAX_SCALE,
-      Math.max(MIN_SCALE, Math.min(vw / b.width, vh / b.height) * 0.85),
-    );
-    const cx = b.x + b.width / 2;
-    const cy = b.y + b.height / 2;
-    this.frameFocus = {
-      id,
-      view: {
-        x: layer.x ?? 0,
-        y: layer.y ?? 0,
-        sx: layer.scaleX ?? 1,
-        sy: layer.scaleY ?? 1,
-      },
-    };
-    // 世界坐标 → 视口：layer 平移量 = 视口中心 - 框架中心 * target
-    layer.scaleX = target;
-    layer.scaleY = target;
-    layer.x = vw / 2 - cx * target;
-    layer.y = vh / 2 - cy * target;
-    this.updateGrid();
-    return true;
+    return this.frameCtrl.toggleFocus();
   }
 
-  /**
-   * 创建内容型框架（导入 MD/代码/文本用）：autoSize 按内容撑尺寸，
-   * 新框架立即选中，返回是否成功。
-   */
+  /** 框架操作资格（右键菜单用） */
+  frameActionState() {
+    return this.frameCtrl.actionState();
+  }
+
+  /** 创建内容型框架（导入 MD/代码/文本用） */
   createContentFrame(
     x: number,
     y: number,
@@ -3850,215 +3191,7 @@ export class Board {
       content: string;
     },
   ): boolean {
-    if (!info.content) {
-      return false;
-    }
-    const style = this.opts.getStyle();
-    const el = this.dataToElement({
-      type: "frame",
-      x,
-      y,
-      width: 0,
-      height: 0,
-      stroke: style.stroke,
-      strokeWidth: style.strokeWidth,
-      // 框架淡填充固定 10% 透明度（与生成器一致，区别于普通图形 15%）
-      fill: hexToRgba(style.fillColor || style.stroke, 0.1),
-      name: info.name,
-      contentType: info.contentType,
-      content: info.content,
-      autoSize: true,
-    });
-    if (!el) {
-      return false;
-    }
-    this.addToTree(el);
-    this.editor.target = el;
-    this.commitHistory();
-    this.opts.onMutated();
-    return true;
-  }
-
-  // ---------- 约束夹紧内部 ----------
-
-  /** 点钳制到约束框架内：出框坐标压回框架边界（画笔逐点夹紧用） */
-  private clampPointToFrame(px: number, py: number): { x: number; y: number } {
-    const frame = this.drawingFrame;
-    if (!frame) {
-      return { x: px, y: py };
-    }
-    // page 基准 bbox：绘制坐标为 tree.getInnerPoint 结果（page，不含 zoomLayer
-    // 变换），而 worldBoxBounds 是视口基准，缩放/平移后两者错位导致夹紧失效
-    const b = frame.getBounds("box", "page");
-    if (!b) {
-      return { x: px, y: py };
-    }
-    return {
-      x: Math.min(Math.max(px, b.x), b.x + b.width),
-      y: Math.min(Math.max(py, b.y), b.y + b.height),
-    };
-  }
-
-  /** 命中约束框架：点 (x, y) 落在的 constrain 框架（无则 null） */
-  private constrainFrameAt(x: number, y: number): UI | null {
-    for (const el of this.frameElements()) {
-      if (!isFrameEl(el) || (el as unknown as Record<string, unknown>).__frameConstrain !== true) {
-        continue;
-      }
-      // page 基准判定：x/y 来自 tree.getInnerPoint（page 坐标，不含 zoomLayer
-      // 变换），与 worldBoxBounds（视口基准）比较在缩放/平移后必然错位
-      const b = el.getBounds("box", "page");
-      if (!b) {
-        continue;
-      }
-      if (x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height) {
-        return el;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * 元素所属约束框架 bbox：按包围盒重叠率归属——交集面积占元素面积 ≥60% 即受该框
-   * 约束；多框命中取重叠率最高者（并列取面积更小的内层框，嵌套语义可预期）。
-   * 旧实现用中心点判定：贴边元素中心在外则完全不受控、拖动中一越线即"逃逸"，手感飘忽。
-   * 世界 bbox 直接判定（不用 elementToData，避免序列化坐标换算干扰）；
-   * 夹紧会把 bbox 拉回框内，拖出需按住 Alt 豁免。
-   */
-  private constrainFrameOf(
-    el: UI | IUI,
-  ): { minX: number; minY: number; maxX: number; maxY: number } | null {
-    const eb = el.worldBoxBounds;
-    if (!eb || eb.width <= 0 || eb.height <= 0) {
-      return null;
-    }
-    const elArea = eb.width * eb.height;
-    let best: {
-      minX: number;
-      minY: number;
-      maxX: number;
-      maxY: number;
-    } | null = null;
-    let bestRatio = CONSTRAINT_ADOPT_RATIO;
-    let bestArea = Infinity;
-    // 拖动中每帧调用（beforeMove 夹紧）：只在框架子集上判定
-    for (const other of this.frameElements()) {
-      if (other === el || !isFrameEl(other)) {
-        continue;
-      }
-      if ((other as unknown as Record<string, unknown>).__frameConstrain !== true) {
-        continue;
-      }
-      const fb = other.worldBoxBounds;
-      if (!fb) {
-        continue;
-      }
-      const ix = Math.min(eb.x + eb.width, fb.x + fb.width) - Math.max(eb.x, fb.x);
-      const iy = Math.min(eb.y + eb.height, fb.y + fb.height) - Math.max(eb.y, fb.y);
-      if (ix <= 0 || iy <= 0) {
-        continue;
-      }
-      const ratio = (ix * iy) / elArea;
-      if (ratio < bestRatio) {
-        continue;
-      }
-      const area = fb.width * fb.height;
-      if (ratio > bestRatio || area < bestArea) {
-        bestRatio = ratio;
-        bestArea = area;
-        best = {
-          minX: fb.x,
-          minY: fb.y,
-          maxX: fb.x + fb.width,
-          maxY: fb.y + fb.height,
-        };
-      }
-    }
-    return best;
-  }
-
-  /**
-   * 约束夹紧（事后校正）：把列表中受约束成员的世界 bbox 整体平移回所属框架内
-   * （不改尺寸/旋转）。用于点编辑收尾、粘贴落点等移动管线之外的兜底。
-   */
-  private clampConstrainedMembers(list?: UI[]) {
-    const movers = list ?? (this.editor as unknown as { list?: UI[] }).list ?? [];
-    for (const el of movers) {
-      if (!el || isFrameEl(el) || el.locked) {
-        continue;
-      }
-      const fb = this.constrainFrameOf(el);
-      if (!fb) {
-        continue;
-      }
-      const b = el.worldBoxBounds;
-      if (!b) {
-        continue;
-      }
-      const shift = clampShift(
-        {
-          minX: b.x,
-          minY: b.y,
-          maxX: b.x + b.width,
-          maxY: b.y + b.height,
-        },
-        fb,
-      );
-      if (shift.dx || shift.dy) {
-        el.moveWorld(shift.dx, shift.dy);
-      }
-    }
-  }
-
-  /** 新元素接入框体系：完全落入框架即归属；落在约束框架内即夹紧入框 */
-  private adoptAndClamp(el: UI) {
-    this.adoptIntoFrame(el);
-    this.clampConstrainedMembers([el]);
-  }
-
-  /** 约束状态可视化：开启约束的框架描边转实线（虚线 = 普通框），一眼区分 */
-  private applyFrameConstrainVisual(el: UI) {
-    const on = (el as unknown as Record<string, unknown>).__frameConstrain === true;
-    (el as unknown as { dashPattern?: number[] }).dashPattern = on ? undefined : [8, 5];
-  }
-
-  /**
-   * 生成器结果整体平移夹紧到约束框架内（联合 bbox 完全包含；
-   * 元素大于框架时仅最小越界修正，保证绘制起点不丢）。
-   */
-  private clampListToFrame(list: ElementData[], frame: UI): ElementData[] {
-    // page 基准：elementBounds 读数据坐标（page），框架 bbox 必须同基准
-    // （worldBoxBounds 为视口基准，缩放/平移后与数据坐标错位）
-    const fb = frame.getBounds("box", "page");
-    if (!fb) {
-      return list;
-    }
-    const frameBox = { minX: fb.x, minY: fb.y, maxX: fb.x + fb.width, maxY: fb.y + fb.height };
-    let box: {
-      minX: number;
-      minY: number;
-      maxX: number;
-      maxY: number;
-    } | null = null;
-    for (const d of list) {
-      const b = elementBounds(d);
-      box = box
-        ? {
-            minX: Math.min(box.minX, b.minX),
-            minY: Math.min(box.minY, b.minY),
-            maxX: Math.max(box.maxX, b.maxX),
-            maxY: Math.max(box.maxY, b.maxY),
-          }
-        : b;
-    }
-    if (!box) {
-      return list;
-    }
-    const shift = clampShift(box, frameBox);
-    if (!shift.dx && !shift.dy) {
-      return list;
-    }
-    return list.map((d) => offsetElementData(d, shift.dx, shift.dy));
+    return this.frameCtrl.createContent(x, y, info);
   }
 
   /**
@@ -4159,10 +3292,10 @@ export class Board {
     const frameIds = new Set(list.filter((el) => isFrameEl(el)).map((el) => this.aiIdOf(el)));
     const detached: { el: UI; fid: string }[] = [];
     for (const el of list) {
-      const fid = this.frameIdOf(el);
+      const fid = this.frameCtrl.idOf(el);
       if (fid && !frameIds.has(fid)) {
         detached.push({ el, fid });
-        this.setFrameId(el, undefined);
+        this.frameCtrl.setId(el, undefined);
       }
     }
     this.clipboard = list
@@ -4170,7 +3303,7 @@ export class Board {
       .filter((d): d is ElementData => d !== null);
     // 恢复临时解除的归属（仅影响序列化输出，不改变运行态归属）
     for (const { el, fid } of detached) {
-      this.setFrameId(el, fid);
+      this.frameCtrl.setId(el, fid);
     }
     // 记录选中元素实际渲染包围盒（本地坐标 = 画布世界坐标，与 lastPointer 的 tree.getInnerPoint 同基准；
     // 不能用默认 world 基准——tree 承载缩放/平移时 world 是视口坐标，粘贴定位会错乱）
@@ -4291,8 +3424,8 @@ export class Board {
     }
     // 归属解析：带 frameId 的内容换算相对→世界（框架不在时解除归属）；
     // 落在约束框架内的粘贴成员夹紧入框
-    this.resolveFrameContents();
-    this.clampConstrainedMembers(pasted);
+    this.frameCtrl.resolveContents();
+    this.frameCtrl.clampMembers(pasted);
     if (pasted.length) {
       this.editor.target = pasted.length === 1 ? pasted[0] : pasted;
       this.commitHistory();
@@ -4827,8 +3960,8 @@ export class Board {
       if (isFrameEl(el)) {
         const fid = this.aiIdOf(el);
         for (const other of this.app.tree.children as UI[]) {
-          if (this.frameIdOf(other) === fid) {
-            this.setFrameId(other, undefined);
+          if (this.frameCtrl.idOf(other) === fid) {
+            this.frameCtrl.setId(other, undefined);
           }
         }
         el.destroy();
@@ -4853,7 +3986,7 @@ export class Board {
     }
     this.addToTree(el);
     // AI 创建同样接入框体系：完全落入框架即归属，落在约束框架内即夹紧入框
-    this.adoptAndClamp(el);
+    this.frameCtrl.adoptAndClamp(el);
     return this.aiIdOf(el);
   }
 
@@ -5092,7 +4225,7 @@ export class Board {
       y: el.y ?? 0,
       rotation: el.rotation || undefined,
       // 内容归属框架 id（序列化时由 contractFrameContents 统一把坐标转相对）
-      frameId: this.frameIdOf(el),
+      frameId: this.frameCtrl.idOf(el),
       stroke: colorOf(el.stroke),
       strokeWidth: numOf(el.strokeWidth),
       locked: el.locked || undefined,
@@ -5247,7 +4380,7 @@ export class Board {
     // 都会尝试挂载已销毁的 simulateTarget 而立即被编辑器 cancel 清空（整理/撤销/重载后框选失效）
     this.editor.cancel();
     // 重建场景时旧元素全部销毁，框架缩放快照引用随之失效，必须清空
-    this.frameScaleSnap = null;
+    this.frameCtrl.resetScaleSnap();
     this.app.tree.clear();
     for (const d of data) {
       const el = this.dataToElement(d);
@@ -5258,7 +4391,7 @@ export class Board {
     // 归属解析：带 frameId 的内容元素把相对坐标换算为世界坐标（框架可能排在
     // 内容之后，必须两遍重建）；worldCoords 模式跳过换算（数据已是世界坐标，
     // 如整理/AI 重建）；无 frameId 的旧数据按 bbox 包含自动补挂归属
-    this.resolveFrameContents(opts?.worldCoords);
+    this.frameCtrl.resolveContents(opts?.worldCoords);
     this.editor.cancel();
     this.updateGrid();
     // 场景整体重建（撤销/重做/载入）不经 commitHistory，感知版本单独自增
@@ -5613,7 +4746,7 @@ export class Board {
         continue;
       }
       // 拖动框架时其归属内容随框平移，手势起点的候选坐标会失真
-      if (movingFrameId && this.frameIdOf(el) === movingFrameId) {
+      if (movingFrameId && this.frameCtrl.idOf(el) === movingFrameId) {
         continue;
       }
       const b = el.worldBoxBounds;

@@ -217,6 +217,9 @@ async function main() {
   // 恢复上次使用的橡皮半径
   board.setEraserRadius(loadEraserRadius());
 
+  // TEMP-DEBUG: 回归探针（提交前移除）
+  (window as unknown as Record<string, unknown>).__miniboardDebug = { board };
+
   // 左侧选中栏显隐判定：非 select 工具/文本编辑中整体隐藏（工具切换时同步刷新）
   let lastSelectionInfo: SelectionInfo | null = null;
   let textEditing = false;
