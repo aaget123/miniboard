@@ -1,15 +1,15 @@
 import type { Board } from "../board/canvas";
 import { allocProfileId, isConfigReady, loadProfiles, saveProfiles } from "../ai/config";
 import { testConnection } from "../ai/client";
-import { loadSystemPrompt, resetSystemPrompt, saveSystemPrompt } from "../ai/prompts";
-import type { AiConfig, AiMode, AiProfile, AiProfileStore } from "../ai/types";
+import type { AiConfig, AiProfile, AiProfileStore } from "../ai/types";
 import type { ToolRegistry } from "../board/registry";
 import type { ToolDef, ToolGroup } from "../types";
 import { ToolManageDialog } from "./toolmanage";
 import { iconHTML } from "./icons";
 import { showConfirm } from "./confirm";
-import { isDesktop } from "../storage";
-import { SHORTCUT_ACTIONS, comboFromEvent, formatCombo, formatKeys } from "./shortcuts";
+import { DataDirPaneController } from "./data-pane";
+import { PromptPaneController } from "./prompt-pane";
+import { ShortcutsPaneController } from "./shortcuts-pane";
 import type { ShortcutManager } from "./shortcuts";
 import {
   computeToolbarNodes,
@@ -229,11 +229,10 @@ export class SettingsDialog {
   /** 页签按钮 / 内容面板（appearance | model | prompt） */
   private tabBtns = new Map<string, HTMLButtonElement>();
   private panes = new Map<string, HTMLElement>();
-  // 系统提示词编辑
-  private promptMode: AiMode = "chat";
-  private promptTabs = new Map<AiMode, HTMLButtonElement>();
-  private promptArea!: HTMLTextAreaElement;
-  private promptStatusEl!: HTMLElement;
+  // 页签控制器：内容自治的页签域（DOM 构建/刷新/交互收进各自模块）
+  private promptPaneCtrl!: PromptPaneController;
+  private dataPaneCtrl!: DataDirPaneController;
+  private scPane!: ShortcutsPaneController;
   // 工具栏布局：当前勾选平铺顶栏的工具 id 数组（顺序即显示顺序）
   private toolbarVisible: string[] = [];
   /** 布局偏好（null = 默认布局）：预览按此渲染，与真实顶栏 1:1 */
@@ -266,19 +265,6 @@ export class SettingsDialog {
     active: boolean;
   } | null = null;
   private dragSourceEl: HTMLElement | null = null;
-  // 数据页签：目录路径展示 + 状态提示 + 更改回调（main.ts 注入）
-  private dataDirEl!: HTMLElement;
-  private dataStatusEl!: HTMLElement;
-  private dataHandlers: {
-    getDir: () => string | null;
-    change: (newDir: string) => Promise<void>;
-  } | null = null;
-  // 快捷键页签：配置中心（main.ts 注入）+ 页签内容容器 + 录制状态
-  private shortcuts: ShortcutManager | null = null;
-  private shortcutRoot!: HTMLElement;
-  /** 正在录制新键的配置 id（null = 未在录制） */
-  private recordingScId: string | null = null;
-  private recordingHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(
     private board: Board,
@@ -301,7 +287,7 @@ export class SettingsDialog {
     this.gridForm.show.checked = g.show;
     this.gridForm.snap.checked = g.snap;
     // 提示词编辑区与当前存储同步
-    this.loadPromptEditor();
+    this.promptPaneCtrl.refresh();
     // 工具栏布局与当前偏好同步（工具可能被 AI 增删，每次打开重建列表）
     this.toolbarPref = loadToolbarPref();
     this.groupAddOpen = null; // 关闭上次残留的“+”添加面板
@@ -312,9 +298,9 @@ export class SettingsDialog {
     // AI 工具列表与当前注册表同步（内嵌页签）
     this.toolManage.refresh();
     // 数据页签与当前目录同步（目录可能在外部被更改）
-    this.refreshDataDir();
+    this.dataPaneCtrl.refresh();
     // 快捷键页签与当前配置同步（配置可能被外部/其他页签修改）
-    this.renderShortcutsPane();
+    this.scPane.refresh();
     this.mask.hidden = false;
   }
 
@@ -648,79 +634,18 @@ export class SettingsDialog {
     dataPane.hidden = true;
     this.panes.set("data", dataPane);
     modal.appendChild(dataPane);
+    this.dataPaneCtrl = new DataDirPaneController(dataPane);
 
-    const dataSection = document.createElement("section");
-    dataSection.className = "settings-section";
-    const dataLabel = document.createElement("h4");
-    dataLabel.className = "settings-label";
-    dataLabel.textContent = "数据存储";
-    dataSection.appendChild(dataLabel);
-    const dataHint = document.createElement("p");
-    dataHint.className = "settings-hint";
-    dataHint.textContent = "项目画布与 AI 自定义工具均存储于此目录；更改后旧数据自动迁移到新目录。";
-    dataSection.appendChild(dataHint);
-    const dataRow = document.createElement("div");
-    dataRow.className = "data-dir-row";
-    this.dataDirEl = document.createElement("code");
-    this.dataDirEl.className = "data-dir-path";
-    dataRow.appendChild(this.dataDirEl);
-    const changeBtn = document.createElement("button");
-    changeBtn.type = "button";
-    changeBtn.className = "data-dir-btn";
-    changeBtn.textContent = "更改目录…";
-    changeBtn.addEventListener("click", () => void this.chooseDataDir());
-    dataRow.appendChild(changeBtn);
-    dataSection.appendChild(dataRow);
-    this.dataStatusEl = document.createElement("p");
-    this.dataStatusEl.className = "settings-hint data-dir-status";
-    dataSection.appendChild(this.dataStatusEl);
-    dataPane.appendChild(dataSection);
-
-    // ---- 快捷键页签：操作 + 内置工具键位自定义（内容由 renderShortcutsPane 动态重建） ----
+    // ---- 快捷键页签：操作 + 内置工具键位自定义（内容由 ShortcutsPaneController 重建） ----
     const shortcutsPane = document.createElement("div");
     shortcutsPane.className = "settings-pane";
     shortcutsPane.hidden = true;
     this.panes.set("shortcuts", shortcutsPane);
     modal.appendChild(shortcutsPane);
-    this.shortcutRoot = document.createElement("div");
-    shortcutsPane.appendChild(this.shortcutRoot);
+    this.scPane = new ShortcutsPaneController(shortcutsPane, this.registry);
 
-    const promptModeRow = document.createElement("div");
-    promptModeRow.className = "prompt-mode-row";
-    for (const m of ["chat", "edit"] as AiMode[]) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "prompt-mode-tab";
-      btn.textContent = m === "chat" ? "交流模式" : "编辑模式";
-      btn.addEventListener("click", () => this.setPromptMode(m));
-      this.promptTabs.set(m, btn);
-      promptModeRow.appendChild(btn);
-    }
-    promptPane.appendChild(promptModeRow);
-
-    this.promptArea = document.createElement("textarea");
-    this.promptArea.className = "prompt-area";
-    this.promptArea.spellcheck = false;
-    promptPane.appendChild(this.promptArea);
-
-    const promptActions = document.createElement("div");
-    promptActions.className = "ai-modal-actions prompt-actions";
-    const resetBtn = document.createElement("button");
-    resetBtn.type = "button";
-    resetBtn.className = "tool-btn prompt-reset";
-    resetBtn.textContent = "恢复默认";
-    resetBtn.addEventListener("click", () => this.resetPrompt());
-    const promptSaveBtn = document.createElement("button");
-    promptSaveBtn.type = "button";
-    promptSaveBtn.className = "tool-btn ai-modal-save";
-    promptSaveBtn.textContent = "保存提示词";
-    promptSaveBtn.addEventListener("click", () => this.savePrompt());
-    promptActions.append(resetBtn, promptSaveBtn);
-    promptPane.appendChild(promptActions);
-
-    this.promptStatusEl = document.createElement("div");
-    this.promptStatusEl.className = "ai-modal-status";
-    promptPane.appendChild(this.promptStatusEl);
+    // 提示词编辑区/操作行/状态行由页签控制器自建
+    this.promptPaneCtrl = new PromptPaneController(promptPane);
 
     this.form = {
       name: nameInput,
@@ -734,7 +659,7 @@ export class SettingsDialog {
     this.mask.hidden = true;
     this.syncTheme();
     this.switchTab("appearance");
-    this.setPromptMode("chat");
+    this.promptPaneCtrl.refresh();
   }
 
   // ---------- 主题 ----------
@@ -1885,269 +1810,13 @@ export class SettingsDialog {
     getDir: () => string | null;
     change: (newDir: string) => Promise<void>;
   }) {
-    this.dataHandlers = handlers;
-    this.refreshDataDir();
-  }
-
-  /** 刷新数据目录展示（打开设置弹窗与目录变更成功后调用） */
-  private refreshDataDir() {
-    if (!this.dataDirEl) {
-      return;
-    }
-    const dir = this.dataHandlers?.getDir() ?? null;
-    if (dir) {
-      this.dataDirEl.textContent = dir;
-      this.dataDirEl.title = dir;
-    } else {
-      this.dataDirEl.textContent = "浏览器环境：数据保存在 localStorage（不可更改目录）";
-    }
-  }
-
-  /** 更改数据目录：系统目录选择器 → Rust set_data_dir（创建/迁移/授权） → 成功提示 */
-  private async chooseDataDir() {
-    if (!isDesktop() || !this.dataHandlers) {
-      return;
-    }
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const picked = await open({ directory: true, title: "选择数据存储目录" });
-    if (typeof picked !== "string" || !picked) {
-      return;
-    }
-    const cur = this.dataHandlers.getDir();
-    // 选择同一目录时无需迁移
-    if (cur && cur.replace(/[\\/]+$/, "") === picked.replace(/[\\/]+$/, "")) {
-      return;
-    }
-    this.dataStatusEl.textContent = "正在迁移数据…";
-    try {
-      await this.dataHandlers.change(picked);
-      this.refreshDataDir();
-      this.dataStatusEl.textContent = "迁移完成，数据已保存到新目录";
-    } catch (err) {
-      this.dataStatusEl.textContent = `迁移失败：${err instanceof Error ? err.message : String(err)}`;
-    }
+    this.dataPaneCtrl.setHandlers(handlers);
   }
 
   // ---------- 快捷键 ----------
 
   /** 快捷键配置中心注入（main.ts 创建，操作/内置工具键位自定义；AI 工具键仍由注册表维护） */
   setShortcutSource(manager: ShortcutManager) {
-    this.shortcuts = manager;
-    this.renderShortcutsPane();
-  }
-
-  /** 重建「快捷键」页签：操作区 + 工具区（AI 工具行只读，指向 AI 工具页签） */
-  private renderShortcutsPane() {
-    if (!this.shortcutRoot) {
-      return;
-    }
-    const sm = this.shortcuts;
-    this.shortcutRoot.innerHTML = "";
-    const section = document.createElement("section");
-    section.className = "settings-section";
-    const label = document.createElement("h4");
-    label.className = "settings-label";
-    label.textContent = "快捷键";
-    const hint = document.createElement("p");
-    hint.className = "settings-hint";
-    hint.textContent =
-      "点击「修改」后按下新组合键立即生效；Esc 取消录制。AI 自定义工具快捷键请在「AI 工具」页签编辑。";
-    const head = document.createElement("div");
-    head.className = "sc-head";
-    const resetAll = document.createElement("button");
-    resetAll.type = "button";
-    resetAll.className = "data-dir-btn";
-    resetAll.textContent = "恢复全部默认";
-    resetAll.addEventListener("click", () => {
-      // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
-      void showConfirm({
-        title: "恢复默认快捷键",
-        message: "确定恢复全部默认快捷键？",
-        confirmLabel: "恢复",
-      }).then((ok) => {
-        if (ok) {
-          sm?.resetAll();
-          this.renderShortcutsPane();
-        }
-      });
-    });
-    head.appendChild(resetAll);
-    section.append(label, hint, head);
-    section.appendChild(this.shortcutGroupTitle("操作"));
-    if (!sm) {
-      section.appendChild(this.shortcutRow("", "快捷键配置不可用", [], false, false));
-    } else {
-      for (const a of SHORTCUT_ACTIONS) {
-        section.appendChild(
-          this.shortcutRow(a.id, a.label, sm.getKeys(a.id), true, this.recordingScId === a.id),
-        );
-      }
-      section.appendChild(this.shortcutGroupTitle("工具"));
-      for (const t of this.registry.list()) {
-        const custom = t.source === "custom";
-        section.appendChild(
-          this.shortcutRow(
-            `tool:${t.id}`,
-            `${t.name}${custom ? "（AI）" : ""}`,
-            sm.toolKeys(t),
-            !custom,
-            this.recordingScId === `tool:${t.id}`,
-          ),
-        );
-      }
-    }
-    this.shortcutRoot.appendChild(section);
-  }
-
-  /** 快捷键分组小标题 */
-  private shortcutGroupTitle(text: string): HTMLElement {
-    const el = document.createElement("div");
-    el.className = "sc-group-title";
-    el.textContent = text;
-    return el;
-  }
-
-  /** 快捷键行：名称 + 当前键位（kbd）+ 修改/设置按钮；editable=false 时按钮禁用 */
-  private shortcutRow(
-    id: string,
-    name: string,
-    keys: string[],
-    editable: boolean,
-    editing: boolean,
-  ): HTMLElement {
-    const row = document.createElement("div");
-    row.className = "sc-row";
-    const nameEl = document.createElement("span");
-    nameEl.className = "sc-name";
-    nameEl.textContent = name;
-    const keysEl = document.createElement("kbd");
-    keysEl.className = editing ? "sc-keys sc-recording" : "sc-keys";
-    keysEl.textContent = editing ? "按下新快捷键…" : keys.length ? formatKeys(keys) : "未设置";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "data-dir-btn sc-btn";
-    if (!editable) {
-      btn.disabled = true;
-      btn.textContent = "AI 页签编辑";
-    } else if (editing) {
-      btn.textContent = "取消";
-      btn.addEventListener("click", () => this.cancelRecord());
-    } else {
-      btn.textContent = keys.length ? "修改" : "设置";
-      btn.addEventListener("click", () => this.beginRecordShortcut(id));
-    }
-    row.append(nameEl, keysEl, btn);
-    return row;
-  }
-
-  /** 开始录制：捕获阶段监听 keydown（先于全局快捷键处理，阻止误触发） */
-  private beginRecordShortcut(id: string) {
-    if (this.recordingScId) {
-      this.cancelRecord();
-    }
-    this.recordingScId = id;
-    this.recordingHandler = (e) => this.onRecordKey(e);
-    window.addEventListener("keydown", this.recordingHandler, { capture: true });
-    this.renderShortcutsPane();
-  }
-
-  /** 取消录制（Esc 或点击取消按钮） */
-  private cancelRecord() {
-    if (this.recordingHandler) {
-      window.removeEventListener("keydown", this.recordingHandler, true);
-      this.recordingHandler = null;
-    }
-    this.recordingScId = null;
-    this.renderShortcutsPane();
-  }
-
-  /** 录制键位：捕获组合键 → 冲突检测 → 确认后写入配置并重建 keymap */
-  private onRecordKey(e: KeyboardEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const id = this.recordingScId;
-    const sm = this.shortcuts;
-    if (!id || !sm) {
-      this.cancelRecord();
-      return;
-    }
-    if (e.key === "Escape") {
-      this.cancelRecord();
-      return;
-    }
-    const combo = comboFromEvent(e);
-    if (!combo) {
-      return; // 纯修饰键：继续等待完整组合
-    }
-    const clash = sm.findConflict(combo, id, this.registry);
-    const apply = () => {
-      if (clash) {
-        // 被挤占的是配置项（操作/内置工具）时恢复其默认键；AI 工具键不在配置层，仅失效提示
-        const toolId = clash.id.startsWith("tool:") ? clash.id.slice(5) : null;
-        const isCustomTool = toolId !== null && this.registry.getTool(toolId)?.source === "custom";
-        if (!isCustomTool) {
-          sm.restoreDefault(clash.id);
-        }
-      }
-      sm.setKeys(id, [combo]);
-      this.cancelRecord();
-    };
-    if (clash) {
-      // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
-      void showConfirm({
-        title: "快捷键冲突",
-        message: `快捷键 ${formatCombo(combo)} 已被${clash.label}占用，确定覆盖？`,
-        confirmLabel: "覆盖",
-        danger: true,
-      }).then((ok) => {
-        if (ok) {
-          apply();
-        }
-      });
-    } else {
-      apply();
-    }
-  }
-
-  // ---------- 系统提示词 ----------
-
-  private setPromptMode(mode: AiMode) {
-    this.promptMode = mode;
-    for (const [m, btn] of this.promptTabs) {
-      btn.classList.toggle("active", m === mode);
-    }
-    this.loadPromptEditor();
-  }
-
-  /** 载入当前模式提示词（打开弹窗/切换模式时调用，未保存的编辑会被覆盖） */
-  private loadPromptEditor() {
-    this.promptArea.value = loadSystemPrompt(this.promptMode);
-    this.setPromptStatus("", "");
-  }
-
-  private savePrompt() {
-    saveSystemPrompt(this.promptMode, this.promptArea.value);
-    this.setPromptStatus("已保存，对新对话生效", "ok");
-  }
-
-  private resetPrompt() {
-    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
-    void showConfirm({
-      title: "恢复默认提示词",
-      message: "恢复默认提示词？自定义内容将被清除。",
-      confirmLabel: "恢复",
-      danger: true,
-    }).then((ok) => {
-      if (ok) {
-        resetSystemPrompt(this.promptMode);
-        this.loadPromptEditor();
-        this.setPromptStatus("已恢复默认提示词", "ok");
-      }
-    });
-  }
-
-  private setPromptStatus(text: string, cls: "" | "ok" | "error") {
-    this.promptStatusEl.textContent = text;
-    this.promptStatusEl.className = cls ? `ai-modal-status ${cls}` : "ai-modal-status";
+    this.scPane.setSource(manager);
   }
 }

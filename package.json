@@ -15,7 +15,8 @@
     "format": "biome format --write src",
     "format:check": "biome format src",
     "test": "vitest run",
-    "test:e2e": "node tests/e2e/board-regress.cjs"
+    "test:e2e": "node tests/e2e/board-regress.cjs",
+    "test:e2e:settings": "node tests/e2e/settings-smoke.cjs"
   },
   "dependencies": {
     "@leafer-in/arrow": "^2.2.9",
