@@ -14,8 +14,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -25,11 +25,40 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  # E2E 回归：Playwright + 系统 Edge 驱动真实交互（__miniboardDebug 探针仅在
+  # dev 构建注入，须起 dev server；Edge 由 runner 自带，脚本指定 executablePath，
+  # 无需 playwright install 浏览器）
+  e2e:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # 仅装驱动包（不落 lockfile）；浏览器复用 runner 自带 Edge
+      - run: npm i --no-save playwright@1.55.0
+      - name: Start dev server
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -RedirectStandardOutput "dev.log" -RedirectStandardError "dev-err.log"
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Milliseconds 800
+            try { $r = Invoke-WebRequest -Uri http://localhost:5173 -UseBasicParsing -TimeoutSec 2; $ok = ($r.StatusCode -eq 200) } catch { $ok = $false }
+          } while (-not $ok -and (Get-Date) -lt $deadline)
+          if (-not $ok) { throw "dev server did not start" }
+      - name: Run board regression
+        run: node tests/e2e/board-regress.cjs
+      - name: Run settings smoke
+        run: node tests/e2e/settings-smoke.cjs
+
   # 桌面端 Rust 壳编译校验：PR 阶段即可暴露破坏 Tauri 构建的问题（此前只在打 tag 时发现）
   rust-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Linux dependencies
         run: |
           sudo apt-get update

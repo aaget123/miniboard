@@ -112,6 +112,8 @@ canvas.ts 现约 3730 行，保留：事件管线（onDown/onMove/onUp/编辑器
 - 纯函数层 vitest 全覆盖（坐标/分段擦除/排列/解析/契约往返/空间索引模糊对照……）
 - **E2E 回归**：`npm run test:e2e`（tests/e2e/board-regress.cjs，Playwright +
   Edge 驱动真实交互）覆盖 多选整组拖动 / 框架转换与内容跟随 / 点编辑端点拖动 /
-  橡皮擦除 / 撤销恢复 / serialize 往返幂等——需本地 dev server (5173) 在跑
-- CI（test.yml）：前端 lint + vitest + vite build；rust-check job 跑
+  框架连同内容复制粘贴（frameId 契约）/ 擦除 / 撤销 / 序列化往返；另有
+  `npm run test:e2e:settings` 设置弹窗冒烟 14 项。本地需 dev server (5173) 前置；
+  CI test.yml `e2e` job 同步执行（windows runner 自带 Edge）
+- CI（test.yml）：前端 lint + vitest + vite build + e2e 回归；rust-check job 跑
   `cargo check` 守住桌面端编译

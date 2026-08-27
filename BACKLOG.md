@@ -59,9 +59,10 @@
   显式打标，空点命中微秒级）。剩余增量：橡皮分段擦除的「纯几何线段距离扫描」
   仍按全量 Line 遍历（纯数字运算快、实测 ~1ms@1万），如需再优化可在同一索引上
   按 Line 子集预筛
-- E2E 回归已固化（npm run test:e2e，本地 dev server 前置）；如需进 CI 需在
-  runner 里起 dev server + 安装 Playwright（成本可控，待定）
-- 待查·剪贴板「框架连同内容一起复制」的坐标双移嫌疑：copy() 序列化的是世界坐标，
-  粘贴管线却按「相对坐标」契约走 resolveFrameContents → toWorldElement 再加框架
-  原点，内容落点疑似偏移（Alt+拖拽复制已通过剥离 frameId 规避该路径）。复现后
-  统一 copy/paste 的 frameId 坐标契约
+- ~~E2E 回归进 CI~~ ✓ 已落地（test.yml `e2e` job：windows-latest + runner 自带
+  Edge，`npm i --no-save playwright` 只装驱动包，起 dev server 后跑
+  board-regress / settings-smoke 两套剧本）
+- ~~剪贴板「框架连同内容一起复制」的坐标双移~~ ✓ 已修（E2E R7 守护）：
+  copy() 经 contractFrameContents 输出「frameId + 相对坐标」契约数据，
+  paste() 按「旧框架 id → 粘贴新 id」映射重挂归属后再 resolveContents；
+  修复前粘贴内容被按相对坐标误解 + 归属错挂到原框架
