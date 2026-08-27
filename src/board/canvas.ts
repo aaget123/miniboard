@@ -57,6 +57,7 @@ import {
 import type { ArrangeAction, ReorderMode } from "./arrange";
 import { elementBounds, unionBounds } from "./bounds";
 import { CropController } from "./crop-controller";
+import { PointEditController } from "./point-edit-controller";
 import { ConnectorController, type Side } from "./connector-controller";
 import { History } from "./history";
 import type { ToolRegistry } from "./registry";
@@ -107,10 +108,6 @@ const ZOOM_STEP = 1.25;
 // 框选/套索草稿的描边颜色（画在 sky 层，不随缩放变化）
 const MARQUEE_STROKE = "#4f8cff";
 
-// 线性元素点编辑手柄尺寸（sky 层，不随缩放变化）
-const POINT_HANDLE_SIZE = 10;
-// 端点吸附绑定的屏幕距离（px，缩放后世界距离换算保证手感恒定）
-const SNAP_BIND_PX = 10;
 // 智能对齐吸附的屏幕距离阈值（px）；已锁定吸附线的迟滞退出阈值（> 进入阈值）
 const ALIGN_SNAP_PX = 6;
 const ALIGN_HYST_PX = 18;
@@ -340,13 +337,8 @@ export class Board {
   private lastAppPoint: { x: number; y: number } | null = null;
   /** 当前画布背景色（主题切换/导出共用，默认深色） */
   private background = BACKGROUND;
-  // 线性元素点编辑：双击 line/arrow 进入，sky 层手柄拖点/双击线段加点
-  private pointEditEl: Line | null = null;
-  private pointHandles: Rect[] = [];
-  private draggingPoint: number | null = null;
-  // 拖动端点时原本绑定的端（拖走后解除绑定）
-  private dragUnbindStart = false;
-  private dragUnbindEnd = false;
+  // 线性元素点编辑：独立交互控制器（双击 line/arrow 进入，sky 层手柄拖点/加点）
+  private pointEdit!: PointEditController;
   // 图片裁剪：独立交互控制器（sky 层裁剪框 + 8 手柄，松手即应用）
   private cropCtrl!: CropController;
   private connectorCtrl!: ConnectorController;
@@ -627,6 +619,16 @@ export class Board {
       },
     });
     this.editor = (this.app as AppWithEditor).editor;
+    // 线性元素点编辑控制器（依赖经注入，Board 门面保留原公开方法名）
+    this.pointEdit = new PointEditController({
+      app: this.app,
+      editorCancel: () => this.editor.cancel(),
+      cancelCrop: () => this.cancelCrop(),
+      aiIdOf: (el) => this.aiIdOf(el),
+      clampConstrained: (el) => this.clampConstrainedMembers([el]),
+      rebuildRoute: (el) => this.rebuildRoutePoints(el),
+      scheduleHistory: () => this.scheduleHistory(),
+    });
     this.cropCtrl = new CropController({
       app: this.app,
       editorCancel: () => this.editor.cancel(),
@@ -645,7 +647,7 @@ export class Board {
         this.tool === "select" &&
         !this.editor.innerEditor &&
         !this.cropCtrl.active &&
-        !this.pointEditEl,
+        !this.pointEdit.editing,
       selectedList: () => this.selectedList,
       isConnectable: (el) => {
         const t = typeOf(el);
@@ -1191,8 +1193,8 @@ export class Board {
     const factor = e.deltaY > 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
     this.zoomTo(this.scale * factor, local.x, local.y);
     // 缩放后重建 sky 层手柄（点编辑/裁剪框跟随世界坐标）
-    if (this.pointEditEl) {
-      this.buildPointHandles();
+    if (this.pointEdit.editing) {
+      this.pointEdit.buildHandles();
     }
     if (this.cropCtrl.active) {
       this.cropCtrl.rebuild();
@@ -1375,27 +1377,20 @@ export class Board {
         this.connectorCtrl.cancel();
       }
       // 点编辑中：命中手柄开始拖点；点击空白退出；点击其他元素切换编辑目标
-      if (this.pointEditEl) {
-        const idx = this.hitPointHandle(e.x ?? 0, e.y ?? 0);
+      if (this.pointEdit.editing) {
+        const idx = this.pointEdit.hitHandle(e.x ?? 0, e.y ?? 0);
         if (idx >= 0) {
-          this.draggingPoint = idx;
-          const t = this.pointEditEl as unknown as {
-            __bindStart?: string;
-            __bindEnd?: string;
-          };
-          // 拖动原本绑定的端点：松手后解除该端绑定（拖走即解绑）
-          const pts = pointsOf(this.pointEditEl);
-          this.dragUnbindStart = idx === 0 && !!t.__bindStart;
-          this.dragUnbindEnd = idx === pts.length - 1 && !!t.__bindEnd;
+          // 拖动原本绑定的端点：松手后解除该端绑定（控制器内记录，拖走即解绑）
+          this.pointEdit.beginDrag(idx);
           return;
         }
         const hit = this.hitTest({ x: e.x ?? 0, y: e.y ?? 0 });
         if (!hit) {
           // 点击空白：退出点编辑，继续走下方正常 select 流程（取消选择）
           this.exitPointEdit();
-        } else if (hit !== this.pointEditEl) {
+        } else if (hit !== this.pointEdit.activeEl) {
           if (hit instanceof Line) {
-            this.enterPointEdit(hit);
+            this.pointEdit.enter(hit);
           } else {
             this.exitPointEdit();
             this.editor.target = hit ?? undefined;
@@ -1654,8 +1649,8 @@ export class Board {
       this.updateErasePreview(e.x ?? 0, e.y ?? 0);
     }
     // 点编辑拖点：指针跟随（Shift 锁 45° 角；端点靠近形状时吸附绑定）
-    if (this.draggingPoint !== null && this.pointEditEl) {
-      this.movePointTo(this.draggingPoint, { x: e.x ?? 0, y: e.y ?? 0 }, e.shiftKey);
+    if (this.pointEdit.draggingIndex !== null && this.pointEdit.editing) {
+      this.pointEdit.moveDragging(e.x ?? 0, e.y ?? 0, e.shiftKey);
       this.scheduleHistory();
       return;
     }
@@ -1751,22 +1746,7 @@ export class Board {
       return;
     }
     // 点编辑拖点结束：拖走原本绑定的端点即解除绑定，并提交历史
-    if (this.draggingPoint !== null) {
-      this.draggingPoint = null;
-      if ((this.dragUnbindStart || this.dragUnbindEnd) && this.pointEditEl) {
-        const t = this.pointEditEl as unknown as {
-          __bindStart?: string;
-          __bindEnd?: string;
-        };
-        if (this.dragUnbindStart) {
-          t.__bindStart = undefined;
-        }
-        if (this.dragUnbindEnd) {
-          t.__bindEnd = undefined;
-        }
-      }
-      this.dragUnbindStart = false;
-      this.dragUnbindEnd = false;
+    if (this.pointEdit.finishDrag()) {
       this.commitHistory();
       return;
     }
@@ -1877,10 +1857,10 @@ export class Board {
     if (target instanceof Text) {
       this.openTextEdit(target);
     } else if (target instanceof Line) {
-      if (this.pointEditEl === target) {
-        this.addPointAt(e.x ?? 0, e.y ?? 0);
+      if (this.pointEdit.activeEl === target && this.pointEdit.editing) {
+        this.pointEdit.addPointAt(e.x ?? 0, e.y ?? 0);
       } else {
-        this.enterPointEdit(target);
+        this.pointEdit.enter(target);
       }
     } else if (typeOf(target as UI) === null) {
       // 双击空白：就地创建文本并进入编辑（Excalidraw 同款快捷输入）
@@ -1917,195 +1897,14 @@ export class Board {
     this.opts.onTextEditChange?.(false);
   }
 
-  // ================= 线性元素点编辑（双击进入） =================
+  // ================= 线性元素点编辑（委托 PointEditController） =================
 
-  /** 进入点编辑：隐藏编辑框，显示 sky 层点手柄（拖点/双击线段加点/Shift 锁角） */
-  private enterPointEdit(el: Line) {
-    if (el.locked) {
-      return;
-    }
-    this.exitPointEdit();
-    this.cancelCrop();
-    this.editor.cancel();
-    this.pointEditEl = el;
-    this.buildPointHandles();
-  }
-
-  /** 退出点编辑：清除手柄与拖动状态（ESC/点击空白/切换工具时调用）；收尾时约束兜底 */
+  /** 退出点编辑（ESC/点击空白/切换工具/载入场景等时机；收尾约束兜底在控制器内） */
   exitPointEdit() {
-    if (this.pointEditEl) {
-      // 点编辑可能把端点拖出约束框架：以整元素 bbox 兜底拉回
-      this.clampConstrainedMembers([this.pointEditEl]);
-    }
-    this.draggingPoint = null;
-    this.dragUnbindStart = false;
-    this.dragUnbindEnd = false;
-    this.pointEditEl = null;
-    this.clearPointHandles();
-  }
-
-  private clearPointHandles() {
-    for (const h of this.pointHandles) {
-      h.remove();
-    }
-    this.pointHandles = [];
-  }
-
-  /** 按当前 points 重建点手柄（sky 层，元素局部坐标 → 世界坐标摆放） */
-  private buildPointHandles() {
-    this.clearPointHandles();
-    const el = this.pointEditEl;
-    if (!el) {
-      return;
-    }
-    for (const p of pointsOf(el)) {
-      const world = el.getWorldPoint(p);
-      const h = new Rect({
-        x: world.x - POINT_HANDLE_SIZE / 2,
-        y: world.y - POINT_HANDLE_SIZE / 2,
-        width: POINT_HANDLE_SIZE,
-        height: POINT_HANDLE_SIZE,
-        cornerRadius: POINT_HANDLE_SIZE / 2,
-        fill: "#4f8cff",
-        stroke: "#ffffff",
-        strokeWidth: 1,
-      });
-      this.pointHandles.push(h);
-      this.app.sky.add(h);
-    }
-  }
-
-  /** 命中的手柄索引（app 坐标），未命中返回 -1 */
-  private hitPointHandle(ax: number, ay: number): number {
-    for (let i = 0; i < this.pointHandles.length; i++) {
-      const b = this.pointHandles[i].worldBoxBounds;
-      if (
-        b &&
-        ax >= b.x - 4 &&
-        ax <= b.x + b.width + 4 &&
-        ay >= b.y - 4 &&
-        ay <= b.y + b.height + 4
-      ) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  /** 拖动中的点跟随指针（世界坐标 → 元素局部，Shift 锁 45° 角；端点吸附绑定） */
-  private movePointTo(idx: number, world: { x: number; y: number }, shiftKey: boolean | undefined) {
-    const el = this.pointEditEl;
-    if (!el) {
-      return;
-    }
-    const pts = [...pointsOf(el)];
-    if (idx < 0 || idx >= pts.length) {
-      return;
-    }
-    let p = el.getLocalPoint(world);
-    if (shiftKey) {
-      // 45° 锁角：以相邻点为基准（首点取后一点，其余取前一点）
-      const ref = pts[idx > 0 ? idx - 1 : Math.min(1, pts.length - 1)];
-      const angle =
-        Math.round(Math.atan2(p.y - ref.y, p.x - ref.x) / (Math.PI / 4)) * (Math.PI / 4);
-      const dist = Math.hypot(p.x - ref.x, p.y - ref.y);
-      p = { x: ref.x + dist * Math.cos(angle), y: ref.y + dist * Math.sin(angle) };
-    }
-    // 端点靠近形状包围盒边框时吸附并绑定（P3-2）
-    const snapped = this.snapEndpoint(pts, idx, p);
-    if (snapped) {
-      p = snapped;
-    }
-    pts[idx] = p;
-    el.points = pts;
-    // 正交折线：端点拖动实时重建 L 形中间路径（中点被拖动时同样按新几何重排）
-    if ((el as unknown as { __isRoute?: boolean }).__isRoute === true) {
-      this.rebuildRoutePoints(el);
-    }
-    this.buildPointHandles();
-  }
-
-  /** 双击线段插入新点（app 坐标，命中线段容差 10 局部单位） */
-  private addPointAt(ax: number, ay: number) {
-    const el = this.pointEditEl;
-    if (!el) {
-      return;
-    }
-    const local = el.getLocalPoint({ x: ax, y: ay });
-    const pts = pointsOf(el);
-    if (pts.length < 2) {
-      return;
-    }
-    let seg = -1;
-    let best = Infinity;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const d = distToSegment(local, pts[i], pts[i + 1]);
-      if (d < best) {
-        best = d;
-        seg = i;
-      }
-    }
-    if (seg < 0 || best > 10) {
-      return;
-    }
-    const np = [...pts];
-    np.splice(seg + 1, 0, { x: local.x, y: local.y });
-    el.points = np;
-    this.buildPointHandles();
-    this.scheduleHistory();
+    this.pointEdit.exit();
   }
 
   // ================= 箭头端点绑定 =================
-
-  /**
-   * 端点吸附绑定：拖动端点靠近形状包围盒边框时吸附到最近点并记录绑定 id
-   * （被绑元素移动时端点自动跟随）。返回吸附后的局部坐标；未吸附返回 null。
-   */
-  private snapEndpoint(
-    pts: { x: number; y: number }[],
-    idx: number,
-    local: { x: number; y: number },
-  ): { x: number; y: number } | null {
-    const el = this.pointEditEl;
-    if (!el) {
-      return null;
-    }
-    // 屏幕距离换算世界距离（缩放后吸附手感恒定）
-    const snap = SNAP_BIND_PX / this.scale;
-    const world = el.getWorldPoint(local);
-    let best: UI | null = null;
-    let bestD = snap;
-    for (const other of this.app.tree.children as UI[]) {
-      if (other === el || this.isEditorInternal(other) || other.locked) {
-        continue;
-      }
-      const b = other.worldBoxBounds;
-      if (!b) {
-        continue;
-      }
-      const cx = Math.max(b.x, Math.min(world.x, b.x + b.width));
-      const cy = Math.max(b.y, Math.min(world.y, b.y + b.height));
-      const d = Math.hypot(world.x - cx, world.y - cy);
-      if (d <= bestD) {
-        bestD = d;
-        best = other;
-      }
-    }
-    if (!best) {
-      return null;
-    }
-    const anchor = nearestBorderPoint(best, world);
-    if (!anchor) {
-      return null;
-    }
-    const t = el as unknown as Record<string, unknown>;
-    if (idx === 0) {
-      t.__bindStart = this.aiIdOf(best);
-    } else if (idx === pts.length - 1) {
-      t.__bindEnd = this.aiIdOf(best);
-    }
-    return el.getLocalPoint(anchor);
-  }
 
   /** 内容归属同步（单个元素）：拖出所属框架（中心出框）解除归属；
    * 未归属元素完全落入某框架时补挂归属。拖动中调用时 bounds 可能滞后
