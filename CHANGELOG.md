@@ -9,6 +9,11 @@
 ### 新增
 
 - **空间索引（命中类查询加速）**：新增 `board/spatial-grid.ts` 均匀网格索引 + 模糊测试（与暴力扫描全量对照）——hitTest 点击命中、橡皮待删预览、框选/套索结算从「每次指针事件全量遍历」降为 O(候选数)，万级元素下空点命中进入微秒级；框架相关判定（归属/约束/落框高亮/可滚动折叠框）统一走同批维护的框架子集列表，拖动中每帧不再全树扫描。脏标记由 tree 层 property.change / child.add / child.remove 全局冒泡兜底（自研滚轮缩放改 zoomLayer 属性同样触发），配合 loadElements 显式打标；候选按重建时缓存的 z 序表排序，全选万级时 O(k log k) 而非 indexOf 链路退化出的 O(k²)
+- **E2E 回归进 CI**：test.yml 新增 `e2e` job（windows runner + 自带 Edge，起 dev server 跑 board-regress 9 项 / settings-smoke 14 项真实交互剧本）
+
+### 修复
+
+- **框架连同内容一起复制粘贴落点错乱**：copy() 输出的内容坐标是世界坐标、frameId 却保留，粘贴端 resolveContents 按相对坐标契约再加框架原点导致内容双重偏移，且旧 frameId 指向原框架造成归属错挂；现 copy() 统一经 contractFrameContents 转出「frameId + 相对坐标」契约数据，paste() 按「旧框架 id → 粘贴新 id」重挂归属后再展开，粘贴内容与框架相对位置严格保持（E2E R7 回归守护）
 
 ## [0.3.0] - 2026-08-26
 

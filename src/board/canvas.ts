@@ -2765,9 +2765,13 @@ export class Board {
         this.frameCtrl.setId(el, undefined);
       }
     }
-    this.clipboard = list
-      .map((el) => this.elementToData(el))
-      .filter((d): d is ElementData => d !== null);
+    // 坐标契约：elementToData 输出世界坐标，随框架一起复制的内容统一转为
+    // 「frameId + 相对坐标」——与粘贴端 resolveContents 的展开契约对应
+    // （否则粘贴时把世界坐标当相对坐标再加框架原点，落点双重偏移）；
+    // 已解除归属的内容无 frameId，原样保留世界坐标
+    this.clipboard = contractFrameContents(
+      list.map((el) => this.elementToData(el)).filter((d): d is ElementData => d !== null),
+    );
     // 恢复临时解除的归属（仅影响序列化输出，不改变运行态归属）
     for (const { el, fid } of detached) {
       this.frameCtrl.setId(el, fid);
@@ -2822,6 +2826,7 @@ export class Board {
       dy = this.lastPointer.y - (this.clipboardBox.minY + this.clipboardBox.maxY) / 2;
     }
     const pasted: UI[] = [];
+    const pairs: { src: ElementData; el: UI }[] = [];
     for (const d of this.clipboard) {
       // 整体平移按元素坐标语义区分（line/arrow/path 平移 points/path、其余平移 x/y），
       // 避免绝对坐标契约元素双重偏移；id 不随粘贴复制（粘贴出的元素分配全新 id）。
@@ -2840,6 +2845,22 @@ export class Board {
       if (el) {
         this.addToTree(el);
         pasted.push(el);
+        pairs.push({ src: d, el });
+      }
+    }
+    // 归属重挂：内容的 frameId 指向复制时的旧框架 id，粘贴出的框架分配新 id——
+    // 按「旧 id → 新 id」映射重写归属，内容才能挂到粘贴出的新框架上跟随平移；
+    // 框架未一起粘贴的内容解除归属（恢复自由元素）
+    const newFrameIds = new Map<string, string>();
+    for (const { src, el } of pairs) {
+      if (src.id && isFrameEl(el)) {
+        newFrameIds.set(src.id, this.aiIdOf(el));
+      }
+    }
+    for (const { el } of pairs) {
+      const oldFid = this.frameCtrl.idOf(el);
+      if (oldFid) {
+        this.frameCtrl.setId(el, newFrameIds.get(oldFid));
       }
     }
     // 归属解析：带 frameId 的内容换算相对→世界（框架不在时解除归属）；

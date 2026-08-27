@@ -206,6 +206,49 @@ const URL = "http://localhost:5173";
     rt.same && rt.count === 1,
   );
 
+  // ---------- R7 框架连同内容复制粘贴（frameId 坐标契约：相对位置保持 + 归属重挂） ----------
+  await page.evaluate(() => { window.__miniboardDebug?.board?.clearAll(); });
+  await drawRect([-30, -20, 30, 20]); // 内容
+  await drawRect([-80, -50, 80, 50]); // 容器（后画=顶层）
+  await page.mouse.click(W(0, 0).x, W(0, 0).y);
+  await page.waitForTimeout(180);
+  await page.evaluate(() => window.__miniboardDebug.board.toFrame());
+  await page.waitForTimeout(200);
+  const r7 = await page.evaluate(() => {
+    const b = window.__miniboardDebug.board;
+    if (b.elementCount !== 2) return { fail: `pre-state count=${b.elementCount}` };
+    b.selectAll();
+    if (!b.copy()) return { fail: "copy failed" };
+    const before = b.serialize();
+    const frame1 = before.find((d) => d.type === "frame");
+    const member1 = before.find((d) => d.frameId === frame1?.id);
+    if (!frame1 || !member1) return { fail: "member not attached before paste" };
+    b.paste();
+    const after = b.serialize();
+    const frames = after.filter((d) => d.type === "frame");
+    const frame2 = frames.find((d) => d.id !== frame1.id);
+    const member2 = after.find((d) => d.frameId === frame2?.id && d.id !== member1.id);
+    const rel0 = { x: member1.x - frame1.x, y: member1.y - frame1.y };
+    const rel2 = member2 && frame2 ? { x: member2.x - frame2.x, y: member2.y - frame2.y } : null;
+    return {
+      count: b.elementCount,
+      frames: frames.length,
+      member1Kept: after.some((d) => d.id === member1.id && d.frameId === frame1.id),
+      rel0,
+      rel2,
+    };
+  });
+  check(
+    `R7 frame+content paste: rel (${Math.round(r7.rel2?.x ?? NaN)},${Math.round(r7.rel2?.y ?? NaN)}) vs (${Math.round(r7.rel0?.x ?? NaN)},${Math.round(r7.rel0?.y ?? NaN)})`,
+    !r7.fail &&
+      r7.count === 4 &&
+      r7.frames === 2 &&
+      r7.member1Kept &&
+      r7.rel2 &&
+      Math.abs(r7.rel2.x - r7.rel0.x) < 1.5 &&
+      Math.abs(r7.rel2.y - r7.rel0.y) < 1.5,
+  );
+
   console.log("\nerrors:", errors.length ? errors : "无");
   const fails = results.filter((r) => !r.ok).length;
   console.log(`\n${results.length - fails}/${results.length} passed`);
