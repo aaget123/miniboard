@@ -217,6 +217,12 @@ async function main() {
   // 恢复上次使用的橡皮半径
   board.setEraserRadius(loadEraserRadius());
 
+  // E2E 探针（仅 dev 构建注入；生产构建 DEV=false 直接摇树）：
+  // tests/e2e/board-regress.cjs 经此访问 board 实例做状态断言
+  if (import.meta.env.DEV) {
+    (window as unknown as Record<string, unknown>).__miniboardDebug = { board };
+  }
+
   // 左侧选中栏显隐判定：非 select 工具/文本编辑中整体隐藏（工具切换时同步刷新）
   let lastSelectionInfo: SelectionInfo | null = null;
   let textEditing = false;

@@ -32,6 +32,7 @@ import type { ArrangeAction, ReorderMode } from "./arrange";
 import { unionBounds } from "./bounds";
 import { CropController } from "./crop-controller";
 import { PointEditController } from "./point-edit-controller";
+import { eraserCursorURL, EraserController } from "./eraser-controller";
 import { FrameController } from "./frame-controller";
 import { ConnectorController, type Side } from "./connector-controller";
 import {
@@ -68,7 +69,7 @@ function kidsIndexOf(tree: unknown, el: UI): number {
   return kids.indexOf(el);
 }
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
-import { penSizeOf, splitArrowHeads, splitErasedPoints, strokeOutlinePath } from "./stroke";
+import { penSizeOf, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
 import { elementsToSVG } from "./svg";
 import type { GridSettings } from "../ui/settings";
@@ -128,36 +129,6 @@ export type BoardOptions = {
   /** 自定义工具运行时异常回执（每工具每会话一次）：宿主 toast 并引导修复 */
   onToolRuntimeError?: (toolId: string, message: string) => void;
 };
-
-/** 橡皮默认半径（px，屏幕像素）：分段擦除命中与光标圆圈共用 */
-const ERASER_DEFAULT = 10;
-// 橡皮半径可调范围（屏幕像素）
-const ERASER_MIN = 2;
-const ERASER_MAX = 80;
-
-/** 橡皮分段擦除快照：一次手势内同一原始笔迹/线段的段集合（root 承载第一段，parts 为拆出的其余段） */
-type EraseSnap = {
-  root: Path | Line;
-  kind: "freehand" | "line";
-  /** 原始采样点 [x, y, pressure?]（freehand）或 [x, y]（line），手势内幂等重算基准 */
-  points: number[][];
-  /** freehand 的 perfect-freehand size（line 分段不使用） */
-  size: number;
-  /** 原始端点绑定（line 分段：首段保起点绑定、末段保终点绑定） */
-  bindStart?: string;
-  bindEnd?: string;
-  parts: (Path | Line)[];
-};
-
-/** 橡皮圆圈光标（SVG data URI）：直径 = 2×半径，双圈描边保证深浅主题下均可见 */
-function eraserCursorURL(radius: number): string {
-  const d = radius * 2;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${d}" height="${d}" viewBox="0 0 ${d} ${d}">` +
-    `<circle cx="${radius}" cy="${radius}" r="${radius - 2}" fill="rgba(127,127,127,0.15)" stroke="#fff" stroke-width="2"/>` +
-    `<circle cx="${radius}" cy="${radius}" r="${radius - 2}" fill="none" stroke="#333" stroke-width="1"/></svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${radius} ${radius}, crosshair`;
-}
 
 /**
  * 选中信息（类型感知）：左侧悬浮栏按选中内容差异化显示按钮。
@@ -229,26 +200,14 @@ export class Board {
   // 框选/套索：selecting 进行中，selectPoints 存套索路径点（app 坐标）
   private selecting = false;
   private selectPoints: { x: number; y: number }[] = [];
-  // 橡皮擦：按下/拖动擦除经过的元素（锁定元素不可擦除）
-  private erasing = false;
-  private eraserDeleted = false;
-  private lastErase = { x: 0, y: 0 };
-  // 橡皮半径（px，屏幕像素）：左侧栏滑条 / [ ] 键 / 橡皮模式滚轮实时调节
-  private eraserRadius = ERASER_DEFAULT;
-  // 待删预览高亮（sky 层红色虚线框）：实时指示橡皮当前命中的目标
-  private erasePreview: Rect | null = null;
-  private erasePreviewPending: { x: number; y: number } | null = null;
-  private erasePreviewRaf = 0;
+  // 橡皮擦：独立交互控制器（分段擦除/待删预览/半径与光标）
+  private eraser!: EraserController;
   // 缩放/旋转手势中标记：手势结束（DragEvent.END）时对受约束成员做收尾夹紧
   private frameClampDirty = false;
   // 约束夹紧首次触发提示（Alt 豁免）只报一次
   private constraintHintShown = false;
   // 已报过运行时错误的自定义工具（每工具每次会话一次）
   private toolRuntimeErrShown = new Set<string>();
-  /** 橡皮手势轨迹（app 坐标）：分段擦除按轨迹剔除笔迹区间 */
-  private eraseTrail: { x: number; y: number }[] = [];
-  /** 分段擦除快照：本手势已拆分的笔迹元素 → 原始点列（元素局部坐标） */
-  private eraseSnap = new Map<UI, EraseSnap>();
   /** Alt+拖拽复制（落点克隆）：手势内按住 Alt 拖动元素时快照，松手后在拖动前
    * 原位重建快照元素——移动中的元素即副本。约束开启的框架内禁用（Alt 在那里
    * 保留「出框豁免」语义，BACKLOG P0 决策）。 */
@@ -579,6 +538,18 @@ export class Board {
       addToTree: (el) => this.addToTree(el),
       dataToElement: (d) => this.dataToElement(d),
       drawingFrame: () => this.drawingFrame,
+    });
+    // 橡皮擦控制器（分段擦除/待删预览；命中经 Board 的空间索引 hitTest）
+    this.eraser = new EraserController({
+      app: this.app,
+      treeChildren: () => this.app.tree.children as UI[],
+      addToTree: (el) => this.addToTree(el),
+      editorCancel: () => this.editor.cancel(),
+      hitTest: (world, radius, exclude) => this.hitTest(world, radius, exclude),
+      zoomScale: () => this.zoomScale(),
+      isEditorInternal: (el) => this.isEditorInternal(el),
+      inheritOwnership: (part, root) => this.frameCtrl.setId(part, this.frameCtrl.idOf(root)),
+      isToolEraser: () => this.tool === "eraser",
     });
     this.cropCtrl = new CropController({
       app: this.app,
@@ -973,7 +944,7 @@ export class Board {
     this.connectorCtrl.refresh();
     // 切换工具时终止未完成的拖拽/框选/擦除，并同步光标
     this.panning = false;
-    this.erasing = false;
+    this.eraser.deactivate();
     if (this.selecting) {
       this.selecting = false;
       this.draft?.remove();
@@ -983,10 +954,10 @@ export class Board {
     view.classList.toggle("hand-tool", tool === "hand");
     view.classList.toggle("eraser-tool", tool === "eraser");
     // 橡皮圆圈光标：按当前半径渲染，所见即所擦（其他工具恢复默认）
-    view.style.cursor = tool === "eraser" ? eraserCursorURL(this.eraserRadius) : "";
-    // 切离橡皮时清除待删预览
+    view.style.cursor = tool === "eraser" ? eraserCursorURL(this.eraser.radiusPx) : "";
+    // 切离橡皮时清除待删预览（deactivate 已复位手势态，这里兜底清残留框）
     if (tool !== "eraser") {
-      this.clearErasePreview();
+      this.eraser.clearPreview();
     }
     view.classList.remove("panning");
     view.classList.remove("move-cursor");
@@ -1295,12 +1266,7 @@ export class Board {
     // 橡皮擦：按下即擦除，拖动时持续擦除经过的元素
     if (this.tool === "eraser") {
       this.editor.cancel();
-      this.erasing = true;
-      this.eraserDeleted = false;
-      this.eraseTrail = [{ x: e.x ?? 0, y: e.y ?? 0 }];
-      this.eraseSnap = new Map();
-      this.lastErase = { x: e.x ?? 0, y: e.y ?? 0 };
-      this.eraseAt(e.x ?? 0, e.y ?? 0);
+      this.eraser.beginStroke(e.x ?? 0, e.y ?? 0);
       return;
     }
     // app 事件坐标为 app 局部坐标，转换为 tree 局部坐标（含缩放/平移）
@@ -1564,15 +1530,8 @@ export class Board {
       return;
     }
     // 橡皮擦拖动：实时更新待删预览；隔段擦除避免事件密集时重复命中
-    if (this.erasing) {
-      const ax = e.x ?? 0;
-      const ay = e.y ?? 0;
-      this.updateErasePreview(ax, ay);
-      if (Math.hypot(ax - this.lastErase.x, ay - this.lastErase.y) >= 4) {
-        this.lastErase = { x: ax, y: ay };
-        this.eraseTrail.push({ x: ax, y: ay });
-        this.eraseAt(ax, ay);
-      }
+    if (this.eraser.erasingNow) {
+      this.eraser.moveStroke(e.x ?? 0, e.y ?? 0);
       return;
     }
     // 连接器拖出中：临时连线跟随指针
@@ -1582,7 +1541,7 @@ export class Board {
     }
     // 橡皮悬停（未按下）：同样显示待删预览，给用户反悔预期
     if (this.tool === "eraser") {
-      this.updateErasePreview(e.x ?? 0, e.y ?? 0);
+      this.eraser.hover(e.x ?? 0, e.y ?? 0);
     }
     // 点编辑拖点：指针跟随（Shift 锁 45° 角；端点靠近形状时吸附绑定）
     if (this.pointEdit.draggingIndex !== null && this.pointEdit.editing) {
@@ -1671,14 +1630,10 @@ export class Board {
       return;
     }
     // 橡皮擦结束：有删除则入历史（一次按下到松开合成一步）
-    if (this.erasing) {
-      this.erasing = false;
-      if (this.eraserDeleted) {
+    if (this.eraser.erasingNow) {
+      if (this.eraser.endStroke()) {
         this.commitHistory();
       }
-      this.eraseTrail = [];
-      this.eraseSnap = new Map();
-      this.clearErasePreview();
       return;
     }
     // 点编辑拖点结束：拖走原本绑定的端点即解除绑定，并提交历史
@@ -2047,475 +2002,32 @@ export class Board {
     return (el as unknown as { skipJSON?: boolean }).skipJSON === true;
   }
 
-  // ================= 橡皮擦 =================
-
-  /**
-   * 橡皮命中解析（预览与实际擦除共用同一判定，保证所见即所删）：
-   * - 笔迹/线性元素走分段：先按"触及本体"小容差判定，未中再按完整橡皮半径判定
-   *   （扫过细线/笔迹附近也能分段）；
-   * - 其余元素整条删除：仅当圆心触及元素本体（容差取橡皮半径与 12px 的较小者，
-   *   且按缩放补偿为世界单位）——大半径蹭边不再误删整块图形。
-   */
-  private resolveEraseTarget(ax: number, ay: number): { el: UI; segment: boolean } | null {
-    const zoom = this.zoomScale();
-    const solidTol = Math.min(this.eraserRadius, 12) / zoom;
-    const solid = this.hitTest({ x: ax, y: ay }, solidTol);
-    if (solid && !solid.locked) {
-      if (isFreehandEl(solid)) {
-        return { el: solid, segment: true };
-      }
-      if (solid instanceof Line && pointsOf(solid).length >= 2) {
-        return { el: solid, segment: true };
-      }
-      return { el: solid, segment: false };
-    }
-    const seg = this.hitTest({ x: ax, y: ay }, this.eraserRadius / zoom);
-    if (!seg || seg.locked) {
-      // 几何兜底：leafer 对细线中段的元素级命中不稳定（端点处才可靠），
-      // 改为直接计算指针到各线段的距离（≤ 橡皮半径即命中），保证沿中段扫过也能分段
-      const children = this.app.tree.children as UI[];
-      for (let i = children.length - 1; i >= 0; i--) {
-        const el = children[i];
-        if (this.isEditorInternal(el) || el.locked || !(el instanceof Line)) {
-          continue;
-        }
-        const pts = pointsOf(el);
-        if (pts.length < 2) {
-          continue;
-        }
-        const lp = el.getInnerPoint({ x: ax, y: ay });
-        const r = this.localEraserRadius(el);
-        for (let j = 0; j < pts.length - 1; j++) {
-          if (distToSegment(lp, pts[j], pts[j + 1]) <= r) {
-            return { el, segment: true };
-          }
-        }
-      }
-      return null;
-    }
-    if (isFreehandEl(seg)) {
-      return { el: seg, segment: true };
-    }
-    if (seg instanceof Line && pointsOf(seg).length >= 2) {
-      return { el: seg, segment: true };
-    }
-    return null;
-  }
-
-  /**
-   * 擦除指定 app 坐标处的元素：笔迹与线段按橡皮轨迹分段擦除（只擦被覆盖的区间，
-   * 剩余部分拆成独立元素）；其余元素在圆心触及本体时整条删除。锁定元素受保护。
-   */
-  private eraseAt(ax: number, ay: number) {
-    const target = this.resolveEraseTarget(ax, ay);
-    if (!target) {
-      return;
-    }
-    if (target.segment) {
-      if (isFreehandEl(target.el)) {
-        this.eraseFreehandAt(target.el as Path);
-      } else {
-        this.eraseLineAt(target.el as Line);
-      }
-      return;
-    }
-    target.el.remove();
-    this.editor.cancel();
-    this.eraserDeleted = true;
-  }
-
-  /**
-   * 笔迹分段擦除：橡皮轨迹换算到笔迹局部坐标，从快照的原始点列中剔除
-   * 被轨迹覆盖（距离 <= 橡皮半径）的点，剩余连续段各自重生成轮廓——
-   * 第一段留在原元素（保 id），其余段拆成新元素；全擦完则整条删除。
-   * 同一手势内反复经过同一笔迹时按快照幂等重算（已拆段共享快照，不会重复拆）。
-   */
-  private eraseFreehandAt(el: Path) {
-    let snap = this.eraseSnap.get(el);
-    if (!snap) {
-      const t = el as unknown as { __freehandPoints?: number[][] };
-      const pts = t.__freehandPoints;
-      if (!pts || pts.length < 2) {
-        // 元数据缺失或单点笔迹：无法分段，整条删除
-        el.remove();
-        this.editor.cancel();
-        this.eraserDeleted = true;
-        return;
-      }
-      snap = {
-        root: el,
-        kind: "freehand",
-        points: pts.map((p) => [...p]),
-        size:
-          (el as unknown as { __penSize?: number }).__penSize ??
-          penSizeOf(typeof el.strokeWidth === "number" ? el.strokeWidth : 2),
-        parts: [],
-      };
-      this.eraseSnap.set(el, snap);
-    }
-    const root = snap.root as Path;
-    // 橡皮半径：屏幕像素 → 笔迹局部单位（防御画布缩放与元素缩放）
-    const radius = this.localEraserRadius(root);
-    // 轨迹：app 坐标 → 笔迹局部坐标（getInnerPoint 按完整世界矩阵一步逆变换，
-    // 不能先转画布坐标再转局部，否则 tree 有平移/缩放时基准错位）
-    const trail = this.eraseTrail.map((p) => root.getInnerPoint(p));
-    const segs = splitErasedPoints(snap.points, trail, radius);
-    if (segs.length === 0) {
-      // 整条擦除：移除根元素与已拆出的所有段
-      root.remove();
-      for (const part of snap.parts) {
-        this.eraseSnap.delete(part);
-        part.remove();
-      }
-      this.eraseSnap.delete(el);
-      this.editor.cancel();
-      this.eraserDeleted = true;
-      return;
-    }
-    this.applyFreehandSeg(root, segs[0], snap.size);
-    // 段数变多：复用已有 part 或新建；段数变少：移除多余 part
-    for (let i = 1; i < segs.length; i++) {
-      if (i - 1 < snap.parts.length) {
-        this.applyFreehandSeg(snap.parts[i - 1], segs[i], snap.size);
-      } else {
-        const part = this.makeFreehandPart(root, segs[i], snap.size);
-        snap.parts.push(part);
-        this.eraseSnap.set(part, snap);
-      }
-    }
-    while (snap.parts.length > segs.length - 1) {
-      const extra = snap.parts.pop();
-      if (extra) {
-        this.eraseSnap.delete(extra);
-        extra.remove();
-      }
-    }
-    this.eraserDeleted = true;
-  }
-
-  /** 把一段保留点列应用到笔迹元素：重算轮廓并同步采样点元数据 */
-  private applyFreehandSeg(el: Path, seg: number[][], size: number) {
-    const path = strokeOutlinePath(seg, { size });
-    if (path) {
-      el.path = path;
-    }
-    (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints = seg.map((p) => [...p]);
-  }
-
-  /**
-   * 分段擦除拆出的新笔迹元素：继承原元素锚点/旋转/样式与框架、分组归属，
-   * 追加到画布末尾（同一快照内的段共享后续擦除状态）。
-   */
-  private makeFreehandPart(root: Path, seg: number[][], size: number): Path {
-    const part = new Path({
-      x: root.x,
-      y: root.y,
-      path: strokeOutlinePath(seg, { size }),
-      fill: root.fill,
-      stroke: root.stroke,
-      strokeWidth: root.strokeWidth,
-      opacity: root.opacity,
-      rotation: root.rotation,
-    });
-    const m = part as unknown as Record<string, unknown>;
-    m.__freehandPoints = seg.map((p) => [...p]);
-    m.__penSize = size;
-    this.frameCtrl.setId(part, this.frameCtrl.idOf(root));
-    const gid = (root as unknown as { __groupId?: string }).__groupId;
-    if (gid) {
-      (part as unknown as { __groupId?: string }).__groupId = gid;
-    }
-    this.app.tree.add(part);
-    return part;
-  }
-
-  // ================= 橡皮：半径调节 / 线段分段 / 待删预览 =================
+  // ================= 橡皮擦（委托 EraserController） =================
 
   /** 当前画布缩放（世界 → 屏幕系数下限防御） */
   private zoomScale(): number {
     return Math.max(this.app.tree.zoomLayer?.scaleX ?? 1, 0.01);
   }
 
-  /** 橡皮半径换算到指定元素的局部单位（防御画布缩放与元素缩放） */
-  private localEraserRadius(el: UI): number {
-    return this.eraserRadius / this.zoomScale() / Math.max(el.scaleX ?? 1, 0.01);
-  }
-
-  /** 分段类元素的局部采样点列（freehand 笔迹 / 线性元素）；非分段类返回 null */
-  private segmentPointsOf(el: UI): number[][] | null {
-    if (isFreehandEl(el)) {
-      return (el as unknown as { __freehandPoints?: number[][] }).__freehandPoints ?? null;
-    }
-    if (el instanceof Line) {
-      return pointsOf(el).map((p) => [p.x, p.y]);
-    }
-    return null;
-  }
-
   /** 当前橡皮半径（px，屏幕像素） */
   get eraserRadiusPx(): number {
-    return this.eraserRadius;
+    return this.eraser.radiusPx;
   }
 
   /** 是否正在橡皮擦手势中（长按临时橡皮的松手还原需避让） */
   get isErasing(): boolean {
-    return this.erasing;
+    return this.eraser.erasingNow;
   }
 
   /** 设置橡皮半径（px，屏幕像素）：同步光标圆圈，所见即所擦 */
   setEraserRadius(px: number) {
-    const r = Math.min(ERASER_MAX, Math.max(ERASER_MIN, Math.round(px)));
-    this.eraserRadius = r;
-    this.applyEraserCursor();
+    this.eraser.setRadius(px);
   }
 
   /** 增减橡皮半径（[ ] 键 / 橡皮模式滚轮） */
   adjustEraserRadius(deltaPx: number) {
-    this.setEraserRadius(this.eraserRadius + deltaPx);
-    this.opts.onEraserRadiusChange?.(this.eraserRadius);
-  }
-
-  private applyEraserCursor() {
-    if (this.tool === "eraser") {
-      (this.app.canvas.view as HTMLElement).style.cursor = eraserCursorURL(this.eraserRadius);
-    }
-  }
-
-  /**
-   * 线性元素（line/arrow/polyline）分段擦除：与笔迹同一算法——首段留在原元素
-   * （保 id 与起点绑定/箭头），其余段拆成新线元素；端点样式按首末段分配，
-   * 中间段两端无端点；框架/分组归属随段继承。全擦完则整条删除。
-   */
-  private eraseLineAt(el: Line) {
-    let snap = this.eraseSnap.get(el);
-    if (!snap) {
-      const pts = pointsOf(el);
-      if (pts.length < 2) {
-        el.remove();
-        this.editor.cancel();
-        this.eraserDeleted = true;
-        return;
-      }
-      const t = el as unknown as { __bindStart?: string; __bindEnd?: string };
-      snap = {
-        root: el,
-        kind: "line",
-        points: pts.map((p) => [p.x, p.y]),
-        size: 0,
-        bindStart: t.__bindStart,
-        bindEnd: t.__bindEnd,
-        parts: [],
-      };
-      this.eraseSnap.set(el, snap);
-    }
-    const root = snap.root as Line;
-    // 橡皮半径：屏幕像素 → 元素局部单位（同 freehand 的缩放补偿）
-    const radius = this.localEraserRadius(root);
-    const trail = this.eraseTrail.map((p) => root.getInnerPoint(p));
-    const segs = splitErasedPoints(snap.points, trail, radius);
-    if (segs.length === 0) {
-      root.remove();
-      for (const part of snap.parts) {
-        this.eraseSnap.delete(part);
-        part.remove();
-      }
-      this.eraseSnap.delete(el);
-      this.editor.cancel();
-      this.eraserDeleted = true;
-      return;
-    }
-    // 端点样式分配：首段保起点箭头、末段保终点箭头、中间段无端点
-    const heads = splitArrowHeads(
-      segs.length,
-      arrowHeadOf(root.startArrow),
-      arrowHeadOf(root.endArrow),
-    );
-    this.applyLineSeg(root as Line, segs[0], heads[0], {
-      bindStart: snap.bindStart,
-      bindEnd: segs.length === 1 ? snap.bindEnd : undefined,
-    });
-    for (let i = 1; i < segs.length; i++) {
-      const head = heads[i];
-      const isLast = i === segs.length - 1;
-      if (i - 1 < snap.parts.length) {
-        this.applyLineSeg(snap.parts[i - 1] as Line, segs[i], head, {
-          bindEnd: isLast ? snap.bindEnd : undefined,
-        });
-      } else {
-        const part = this.makeLinePart(root as Line, segs[i], head, {
-          bindStart: i === 0 ? snap.bindStart : undefined,
-          bindEnd: isLast ? snap.bindEnd : undefined,
-        });
-        snap.parts.push(part);
-        this.eraseSnap.set(part, snap);
-      }
-    }
-    while (snap.parts.length > segs.length - 1) {
-      const extra = snap.parts.pop();
-      if (extra) {
-        this.eraseSnap.delete(extra);
-        extra.remove();
-      }
-    }
-    this.eraserDeleted = true;
-  }
-
-  /** 把一段保留点列应用回线元素：重写 points 并同步端点样式与绑定 */
-  private applyLineSeg(
-    el: Line,
-    seg: number[][],
-    head: { start: ArrowHead | undefined; end: ArrowHead | undefined },
-    binds: { bindStart?: string; bindEnd?: string },
-  ) {
-    el.points = seg.map(([x, y]) => ({ x, y }));
-    el.startArrow = head.start ?? "none";
-    el.endArrow = head.end ?? "none";
-    const m = el as unknown as Record<string, unknown>;
-    if (binds.bindStart) {
-      m.__bindStart = binds.bindStart;
-    } else {
-      delete m.__bindStart;
-    }
-    if (binds.bindEnd) {
-      m.__bindEnd = binds.bindEnd;
-    } else {
-      delete m.__bindEnd;
-    }
-  }
-
-  /** 分段擦除拆出的新线元素：继承原元素样式/变换与框架、分组归属 */
-  private makeLinePart(
-    root: Line,
-    seg: number[][],
-    head: { start: ArrowHead | undefined; end: ArrowHead | undefined },
-    binds: { bindStart?: string; bindEnd?: string },
-  ): Line {
-    const part = new Line({
-      x: root.x,
-      y: root.y,
-      points: seg.map(([x, y]) => ({ x, y })),
-      stroke: root.stroke,
-      strokeWidth: root.strokeWidth,
-      dashPattern: root.dashPattern,
-      opacity: root.opacity,
-      rotation: root.rotation,
-    });
-    if (head.start) {
-      part.startArrow = head.start;
-    }
-    if (head.end) {
-      part.endArrow = head.end;
-    }
-    const m = part as unknown as Record<string, unknown>;
-    if (binds.bindStart) {
-      m.__bindStart = binds.bindStart;
-    }
-    if (binds.bindEnd) {
-      m.__bindEnd = binds.bindEnd;
-    }
-    this.frameCtrl.setId(part, this.frameCtrl.idOf(root));
-    const gid = (root as unknown as { __groupId?: string }).__groupId;
-    if (gid) {
-      (part as unknown as { __groupId?: string }).__groupId = gid;
-    }
-    this.app.tree.add(part);
-    return part;
-  }
-
-  /**
-   * 待删预览入口（rAF 合帧：拖拽高频移动时每帧至多重算一次命中）。
-   * 实际渲染见 renderErasePreviewAt：
-   * - 整删类元素：红色虚线框包住整个目标；
-   * - 笔迹/线性等分段类元素：只高亮橡皮邻域内将被裁掉的区段
-   *   （整条包围盒对长曲线毫无信息量，误导"全部要被删"）。
-   */
-  private updateErasePreview(ax: number, ay: number) {
-    this.erasePreviewPending = { x: ax, y: ay };
-    if (this.erasePreviewRaf) {
-      return;
-    }
-    this.erasePreviewRaf = requestAnimationFrame(() => {
-      this.erasePreviewRaf = 0;
-      const p = this.erasePreviewPending;
-      if (p) {
-        this.renderErasePreviewAt(p.x, p.y);
-      }
-    });
-  }
-
-  private renderErasePreviewAt(ax: number, ay: number) {
-    if (this.tool !== "eraser") {
-      return;
-    }
-    const target = this.resolveEraseTarget(ax, ay);
-    if (!target) {
-      this.clearErasePreview();
-      return;
-    }
-    let b = target.el.worldBoxBounds;
-    if (target.segment) {
-      const el = target.el;
-      const pts = this.segmentPointsOf(el);
-      const lp = el.getInnerPoint({ x: ax, y: ay });
-      const r = this.localEraserRadius(el) * 1.4;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      let near = 0;
-      for (const p of pts ?? []) {
-        const [x, y] = p;
-        if (Math.hypot(x - lp.x, y - lp.y) <= r) {
-          near++;
-          minX = Math.min(minX, x);
-          minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x);
-          maxY = Math.max(maxY, y);
-        }
-      }
-      if (!near) {
-        this.clearErasePreview();
-        return;
-      }
-      // 邻域 bbox 局部 → 世界两角 → 轴对齐世界矩形（含旋转框架内容也正确）
-      const w1 = el.getWorldPoint({ x: minX, y: minY });
-      const w2 = el.getWorldPoint({ x: maxX, y: maxY });
-      b = {
-        x: Math.min(w1.x, w2.x),
-        y: Math.min(w1.y, w2.y),
-        width: Math.abs(w2.x - w1.x),
-        height: Math.abs(w2.y - w1.y),
-      };
-    }
-    if (!b) {
-      this.clearErasePreview();
-      return;
-    }
-    if (!this.erasePreview) {
-      this.erasePreview = new Rect({
-        stroke: "#ff4d4f",
-        strokeWidth: 1.5,
-        dashPattern: [5, 4],
-        fill: "rgba(255, 77, 79, 0.05)",
-      });
-      this.app.sky.add(this.erasePreview);
-    }
-    this.erasePreview.x = b.x - 3;
-    this.erasePreview.y = b.y - 3;
-    this.erasePreview.width = b.width + 6;
-    this.erasePreview.height = b.height + 6;
-  }
-
-  private clearErasePreview() {
-    if (this.erasePreviewRaf) {
-      cancelAnimationFrame(this.erasePreviewRaf);
-      this.erasePreviewRaf = 0;
-    }
-    this.erasePreviewPending = null;
-    if (this.erasePreview) {
-      this.erasePreview.remove();
-      this.erasePreview = null;
-    }
+    const r = this.eraser.adjust(deltaPx);
+    this.opts.onEraserRadiusChange?.(r);
   }
 
   // ================= 方向键微移 / 缩放适配 =================

@@ -87,13 +87,15 @@ Board 曾是 5000+ 行的上帝类，按"门面 API 不变"原则逐刀拆分：
 - ✅ PointEditController（线性元素点编辑：sky 层手柄/拖点/加点/端点吸附绑定）
 - ✅ FrameController（框架域：归属注册表 __frameId、内容移动/旋转/幂等快照
   缩放跟随、⇄矩形互转、折叠/滚动/聚焦、内容约束夹紧）
+- ✅ EraserController（橡皮擦：分段擦除 freehand/线性、整删类触及判定、
+  待删预览 rAF 合帧、半径与光标）
 - ✅ scene-format（序列化转换层：ElementData ⇄ leafer 元素双向纯映射 +
   草稿增量应用；elementToData 经 ElementToDataContext 注入三个无状态回调）
 - ✅ SpatialGrid（空间网格索引：命中类查询 O(候选数)；脏标记靠 tree 层
   property.change / child.add / remove 全局冒泡 + loadElements 显式打标）
-- ⏳ 后续候选：橡皮擦控制器（分段擦除/待删预览）、AI 排列/整理编排
+- ⏳ 后续候选：AI 排列/整理编排、settings.ts 按页签拆模块
 
-canvas.ts 现约 4400 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
+canvas.ts 现约 3980 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
 绘制统一管线、样式应用、选择/剪贴板/历史编排。
 
 新交互特性的模板参考 `crop-controller.ts`：deps 对象注入 Board 能力，

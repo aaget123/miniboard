@@ -46,10 +46,10 @@
 
 ## 已知技术债
 
-- ~~canvas.ts 拆分~~ ✓ 三刀完成：PointEditController / FrameController /
-  scene-format（序列化转换层）已拆出，canvas.ts 6200→4450 行（事件管线/
-  绘制管线/样式/选择剪贴板/历史编排保留）；候选尾巴：橡皮擦控制器、
-  AI 排列/整理编排（见 ARCHITECTURE.md「控制器拆分现状」）
+- ~~canvas.ts 拆分~~ ✓ 四刀完成：PointEditController / FrameController /
+  EraserController / scene-format（序列化转换层）已拆出，canvas.ts
+  6214→3980 行（事件管线/绘制管线/样式/选择剪贴板/历史编排保留）；候选尾巴：
+  AI 排列/整理编排、settings.ts 按页签拆模块（见 ARCHITECTURE.md）
 - settings.ts 约 2000 行单类，建议按页签拆模块
 - ~~橡皮悬停预览在大画布（万级元素）下的 hitTest 成本~~ ✓ 空间网格索引已落地
   （spatial-grid.ts；脏标记由 property.change / child 事件全局冒泡 + loadElements
