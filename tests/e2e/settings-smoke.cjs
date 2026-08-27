@@ -78,6 +78,30 @@ const URL = "http://localhost:5173";
     check("S7 切换编辑模式 active 跟随", activeLabel === "编辑模式");
   }
 
+  // 工具栏页签：分区渲染 + 预览条 + 取消平铺联动 + 恢复默认（确认弹窗）
+  await dlg(".settings-tab", { hasText: "工具栏" }).click();
+  await page.waitForTimeout(150);
+  const sections = await dlg(".tb-section").count();
+  const rows = await dlg(".tb-row").count();
+  const previewItems = await dlg(".tb-preview-bar .tb-preview-item").count();
+  check("S9 工具栏页签渲染", sections >= 1 && rows > 0 && previewItems > 0);
+  {
+    // 取消平铺第一个已平铺工具行：预览条按钮同步减少（onToolbarChange → 真实顶栏重渲染）
+    const box = dlg('.tb-row[data-pinned="1"] input[type="checkbox"]:not([disabled])').first();
+    await box.click();
+    await page.waitForTimeout(150);
+    const after = await dlg(".tb-preview-bar .tb-preview-item").count();
+    check("S10 取消平铺预览联动", after < previewItems);
+    // 恢复默认布局：确认弹窗（应用内 showConfirm）→ 确认 → 预览回到基线
+    await dlg("button", { hasText: "恢复默认布局" }).click();
+    await page.waitForTimeout(150);
+    const okBtn = page.locator(".confirm-modal button.ai-modal-save");
+    await okBtn.click();
+    await page.waitForTimeout(150);
+    const restored = await dlg(".tb-preview-bar .tb-preview-item").count();
+    check("S11 恢复默认布局", restored === previewItems);
+  }
+
   // 关闭后重开：open() 全量刷新路径（各控制器 refresh 不抛错、快捷键行重建）
   await dlg(".settings-close").first().click();
   await page.waitForTimeout(120);
