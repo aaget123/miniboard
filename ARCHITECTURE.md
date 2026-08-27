@@ -96,11 +96,10 @@ Board 曾是 5000+ 行的上帝类，按"门面 API 不变"原则逐刀拆分：
 - ✅ AiOpsController（AI 编排：稳定 id 注册 el-N/grp-N、按 id 批量操作
   排列/整理/手绘化/粗糙度/删除/属性更新——「序列化 → 组/框架展开 → 纯函数
   变换 → worldCoords 重建 → 前后快照」管线；层序重排管线 toFront/toBack 共用）
-- ✅ settings 页签模块化：shortcuts-pane / prompt-pane / data-pane /
-  toolbar-pane 四个页签控制器（DOM 自建 + 刷新收口，设置弹窗只留门面；
-  工具栏页签含指针拖拽布局引擎与顶栏实时预览），settings.ts 2153→730 行；
-  settings 冒烟 E2E 守护（tests/e2e/settings-smoke.cjs，11 项）
-- ⏳ 后续候选：settings AI 服务页签（配置/表单/连接测试）
+- ✅ settings 页签模块化 ✓ 收官：shortcuts-pane / prompt-pane / data-pane /
+  toolbar-pane / model-pane 五个页签控制器（DOM 自建 + 刷新收口，设置弹窗
+  只留门面），settings.ts 2153→435 行；settings 冒烟 E2E 守护
+  （tests/e2e/settings-smoke.cjs，14 项，含配置增删/取消平铺联动/恢复默认）
 
 canvas.ts 现约 3730 行，保留：事件管线（onDown/onMove/onUp/编辑器事件接线）、
 绘制统一管线、样式应用、选择/剪贴板/历史编排。

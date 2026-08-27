@@ -50,11 +50,10 @@
   EraserController / scene-format（序列化转换层）/ AiOpsController（AI 编排）
   已拆出，canvas.ts 6214→3727 行（事件管线/绘制管线/样式/选择剪贴板/历史编排
   保留）；剩余候选：settings.ts 按页签拆模块（见 ARCHITECTURE.md）
-- ~~settings.ts 按页签拆模块~~ ✓ 完成：快捷键/系统提示词/数据/工具栏四页签
-  拆为独立控制器（shortcuts-pane / prompt-pane / data-pane / toolbar-pane，
-  DOM 自建 + 刷新收口；工具栏页签含指针拖拽布局引擎与实时预览），
-  settings.ts 2153→730 行；设置弹窗冒烟 E2E（npm run test:e2e:settings，11 项）。
-  剩余小尾巴：AI 服务页签（配置/表单/连接测试，~180 行）
+- ~~settings.ts 按页签拆模块~~ ✓ 收官：快捷键/系统提示词/数据/工具栏/AI 服务
+  五页签全部拆为独立控制器（DOM 自建 + 刷新收口），settings.ts 2153→435 行
+  （剩余门面：弹窗外壳/页签切换/外观页签/主题函数）；冒烟 E2E
+  （npm run test:e2e:settings，14 项）覆盖各页签交互与配置增删
 - ~~橡皮悬停预览在大画布（万级元素）下的 hitTest 成本~~ ✓ 空间网格索引已落地
   （spatial-grid.ts；脏标记由 property.change / child 事件全局冒泡 + loadElements
   显式打标，空点命中微秒级）。剩余增量：橡皮分段擦除的「纯几何线段距离扫描」
