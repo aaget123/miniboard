@@ -1,12 +1,9 @@
 import type { Board } from "../board/canvas";
-import { allocProfileId, isConfigReady, loadProfiles, saveProfiles } from "../ai/config";
-import { testConnection } from "../ai/client";
-import type { AiConfig, AiProfile, AiProfileStore } from "../ai/types";
 import type { ToolRegistry } from "../board/registry";
 import { ToolManageDialog } from "./toolmanage";
 import { iconHTML } from "./icons";
-import { showConfirm } from "./confirm";
 import { DataDirPaneController } from "./data-pane";
+import { ModelPaneController } from "./model-pane";
 import { PromptPaneController } from "./prompt-pane";
 import { ShortcutsPaneController } from "./shortcuts-pane";
 import { ToolbarPaneController } from "./toolbar-pane";
@@ -172,24 +169,8 @@ export function watchSystemTheme(board: Board) {
  */
 export class SettingsDialog {
   private mask!: HTMLElement;
-  private store: AiProfileStore = { activeId: "", profiles: [] };
-  /** 表单当前编辑的配置 id；空字符串表示"新建配置" */
-  private editingId = "";
-  private listEl!: HTMLElement;
   private themeBtns = new Map<ThemePref, HTMLButtonElement>();
   private toolManage!: ToolManageDialog;
-  private form!: {
-    name: HTMLInputElement;
-    base: HTMLInputElement;
-    key: HTMLInputElement;
-    model: HTMLInputElement;
-    vision: HTMLInputElement;
-  };
-  private formTitleEl!: HTMLElement;
-  private testBtn!: HTMLButtonElement;
-  private statusEl!: HTMLElement;
-  private modelListEl!: HTMLElement;
-  private deleteBtn!: HTMLButtonElement;
   private gridForm!: {
     size: HTMLInputElement;
     show: HTMLInputElement;
@@ -203,6 +184,7 @@ export class SettingsDialog {
   private dataPaneCtrl!: DataDirPaneController;
   private scPane!: ShortcutsPaneController;
   private toolbarPaneCtrl!: ToolbarPaneController;
+  private modelPaneCtrl!: ModelPaneController;
 
   constructor(
     private board: Board,
@@ -215,10 +197,8 @@ export class SettingsDialog {
 
   /** 打开设置弹窗；tab 可指定初始页签（appearance/model/prompt，缺省保持当前） */
   open(tab?: string) {
-    this.store = loadProfiles();
-    this.editingId = this.store.activeId;
-    this.renderList();
-    this.loadForm(this.editingId);
+    // AI 模型配置与当前存储同步（外部改动不丢失）
+    this.modelPaneCtrl.refresh();
     // 画布网格表单与当前设置同步（每次打开弹窗刷新，外部改动不丢失）
     const g = loadGrid();
     this.gridForm.size.value = String(g.size);
@@ -396,122 +376,13 @@ export class SettingsDialog {
     drawSection.appendChild(backRow);
     appearancePane.appendChild(drawSection);
 
-    // ---- AI 模型页签 ----
+    // ---- AI 模型页签：多配置注册/激活/编辑/连接测试（内容收进控制器） ----
     const modelPane = document.createElement("div");
     modelPane.className = "settings-pane";
     modelPane.hidden = true;
     this.panes.set("model", modelPane);
     modal.appendChild(modelPane);
-
-    // ---- AI 模型配置 ----
-    const aiSection = document.createElement("section");
-    aiSection.className = "settings-section";
-    const aiLabel = document.createElement("h4");
-    aiLabel.className = "settings-label";
-    aiLabel.textContent = "AI 模型配置";
-    aiSection.appendChild(aiLabel);
-
-    this.listEl = document.createElement("div");
-    this.listEl.className = "profile-list";
-    aiSection.appendChild(this.listEl);
-
-    const addBtn = document.createElement("button");
-    addBtn.type = "button";
-    addBtn.className = "tool-btn profile-add";
-    addBtn.textContent = "＋ 新建配置";
-    addBtn.addEventListener("click", () => this.startNew());
-    aiSection.appendChild(addBtn);
-
-    this.formTitleEl = document.createElement("h4");
-    this.formTitleEl.className = "settings-label settings-form-title";
-    aiSection.appendChild(this.formTitleEl);
-
-    const formEl = document.createElement("div");
-    formEl.className = "settings-form";
-
-    const fields: {
-      key: "base" | "key" | "model";
-      label: string;
-      placeholder: string;
-      password?: boolean;
-    }[] = [
-      {
-        key: "base",
-        label: "接口地址 baseURL",
-        placeholder: "https://api.deepseek.com/v1",
-      },
-      {
-        key: "key",
-        label: "API Key",
-        placeholder: "sk-…",
-        password: true,
-      },
-      {
-        key: "model",
-        label: "模型名称",
-        placeholder: "deepseek-chat",
-      },
-    ];
-    const inputs = new Map<string, HTMLInputElement>();
-    const nameInput = document.createElement("input");
-    const makeField = (
-      labelText: string,
-      input: HTMLInputElement,
-      placeholder: string,
-      password = false,
-    ) => {
-      const label = document.createElement("label");
-      label.className = "ai-modal-label";
-      label.textContent = labelText;
-      input.type = password ? "password" : "text";
-      input.placeholder = placeholder;
-      formEl.appendChild(label);
-      formEl.appendChild(input);
-    };
-    makeField("配置名称", nameInput, "如：DeepSeek 官方");
-    for (const f of fields) {
-      const input = document.createElement("input");
-      makeField(f.label, input, f.placeholder, f.password);
-      inputs.set(f.key, input);
-    }
-
-    // 多模态开关：视觉模型开启后，交流模式发送消息时附带画布截图
-    const visionRow = document.createElement("label");
-    visionRow.className = "ai-modal-row";
-    const visionBox = document.createElement("input");
-    visionBox.type = "checkbox";
-    visionRow.append(document.createTextNode("多模态（模型支持视觉时开启）"), visionBox);
-    formEl.appendChild(visionRow);
-
-    // 测试连接：验证 Key 并拉取模型列表（/models 不可用时自动降级最小请求）
-    this.testBtn = document.createElement("button");
-    this.testBtn.type = "button";
-    this.testBtn.className = "tool-btn ai-test-btn";
-    this.testBtn.textContent = "测试连接";
-    this.statusEl = document.createElement("div");
-    this.statusEl.className = "ai-modal-status";
-    this.modelListEl = document.createElement("div");
-    this.modelListEl.className = "ai-model-list";
-    this.modelListEl.hidden = true;
-    this.testBtn.addEventListener("click", () => this.runTest());
-    formEl.append(this.testBtn, this.statusEl, this.modelListEl);
-
-    const actions = document.createElement("div");
-    actions.className = "ai-modal-actions";
-    this.deleteBtn = document.createElement("button");
-    this.deleteBtn.type = "button";
-    this.deleteBtn.className = "tool-btn settings-del";
-    this.deleteBtn.textContent = "删除此配置";
-    this.deleteBtn.addEventListener("click", () => this.deleteEditing());
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "tool-btn ai-modal-save";
-    saveBtn.textContent = "保存配置";
-    saveBtn.addEventListener("click", () => this.saveForm());
-    actions.append(this.deleteBtn, saveBtn);
-    formEl.appendChild(actions);
-    aiSection.appendChild(formEl);
-    modelPane.appendChild(aiSection);
+    this.modelPaneCtrl = new ModelPaneController(modelPane);
 
     // ---- 工具栏页签：自定义顶栏布局（勾选平铺 + 排序；内容/拖拽引擎收进控制器） ----
     const toolbarPane = document.createElement("div");
@@ -568,14 +439,6 @@ export class SettingsDialog {
     // 提示词编辑区/操作行/状态行由页签控制器自建
     this.promptPaneCtrl = new PromptPaneController(promptPane);
 
-    this.form = {
-      name: nameInput,
-      base: inputs.get("base")!,
-      key: inputs.get("key")!,
-      model: inputs.get("model")!,
-      vision: visionBox,
-    };
-
     document.body.appendChild(this.mask);
     this.mask.hidden = true;
     this.syncTheme();
@@ -596,185 +459,6 @@ export class SettingsDialog {
     for (const [p, btn] of this.themeBtns) {
       btn.classList.toggle("active", p === pref);
     }
-  }
-
-  // ---------- 配置列表 ----------
-
-  private renderList() {
-    this.listEl.innerHTML = "";
-    if (!this.store.profiles.length) {
-      const empty = document.createElement("div");
-      empty.className = "profile-empty";
-      empty.textContent = "暂无配置，点击下方「新建配置」注册模型";
-      this.listEl.appendChild(empty);
-      return;
-    }
-    for (const p of this.store.profiles) {
-      const row = document.createElement("div");
-      row.className = `profile-item${p.id === this.store.activeId ? " active" : ""}`;
-      row.title = "点击选用此配置并载入编辑";
-      row.addEventListener("click", () => this.selectProfile(p.id));
-      const radio = document.createElement("span");
-      radio.className = "profile-radio";
-      radio.textContent = p.id === this.store.activeId ? "●" : "○";
-      const info = document.createElement("div");
-      info.className = "profile-info";
-      const name = document.createElement("div");
-      name.className = "profile-name";
-      name.textContent = p.name;
-      const meta = document.createElement("div");
-      meta.className = "profile-meta";
-      meta.textContent = `${p.model || "未填模型"} · ${p.baseURL || "未填地址"}`;
-      info.append(name, meta);
-      row.append(radio, info);
-      this.listEl.appendChild(row);
-    }
-  }
-
-  private selectProfile(id: string) {
-    this.store.activeId = id;
-    saveProfiles(this.store);
-    this.renderList();
-    this.loadForm(id);
-  }
-
-  private startNew() {
-    this.loadForm("");
-    this.form.name.focus();
-  }
-
-  private deleteEditing() {
-    if (!this.editingId) {
-      return;
-    }
-    const p = this.store.profiles.find((x) => x.id === this.editingId);
-    if (!p) {
-      return;
-    }
-    // 应用内弹窗替代 window.confirm：WKWebView 等环境同步对话框静默失败
-    void showConfirm({
-      title: "删除配置",
-      message: `删除配置「${p.name}」？`,
-      confirmLabel: "删除",
-      danger: true,
-    }).then((ok) => {
-      if (!ok) {
-        return;
-      }
-      this.store.profiles = this.store.profiles.filter((x) => x.id !== this.editingId);
-      if (this.store.activeId === this.editingId) {
-        this.store.activeId = this.store.profiles[0]?.id ?? "";
-      }
-      saveProfiles(this.store);
-      this.renderList();
-      this.loadForm(this.store.activeId);
-    });
-  }
-
-  // ---------- 编辑表单 ----------
-
-  private loadForm(id: string) {
-    this.editingId = id;
-    const p = this.store.profiles.find((x) => x.id === id);
-    if (p) {
-      this.form.name.value = p.name;
-      this.form.base.value = p.baseURL;
-      this.form.key.value = p.apiKey;
-      this.form.model.value = p.model;
-      this.form.vision.checked = p.multimodal === true;
-      this.formTitleEl.textContent = `编辑配置：${p.name}`;
-      this.deleteBtn.disabled = false;
-    } else {
-      this.form.name.value = "";
-      this.form.base.value = "";
-      this.form.key.value = "";
-      this.form.model.value = "";
-      this.form.vision.checked = false;
-      this.formTitleEl.textContent = "新建配置";
-      this.deleteBtn.disabled = true;
-    }
-    this.setStatus("", "");
-    this.modelListEl.hidden = true;
-  }
-
-  /** 读取表单当前值（含 id/name，供保存与测试共用） */
-  private readForm(): AiProfile {
-    return {
-      id: this.editingId,
-      name: this.form.name.value.trim() || "未命名配置",
-      baseURL: this.form.base.value.trim(),
-      apiKey: this.form.key.value.trim(),
-      model: this.form.model.value.trim(),
-      multimodal: this.form.vision.checked,
-    };
-  }
-
-  private saveForm() {
-    const draft = this.readForm();
-    if (!isConfigReady(draft)) {
-      this.setStatus("请完整填写 baseURL、API Key 与模型名称", "error");
-      return;
-    }
-    const existing = this.store.profiles.find((x) => x.id === draft.id);
-    if (existing) {
-      Object.assign(existing, draft);
-    } else {
-      const profile: AiProfile = { ...draft, id: allocProfileId(this.store.profiles) };
-      this.store.profiles.push(profile);
-    }
-    this.store.activeId = existing?.id ?? this.store.profiles[this.store.profiles.length - 1].id;
-    saveProfiles(this.store);
-    this.renderList();
-    this.setStatus("已保存", "ok");
-  }
-
-  private async runTest() {
-    const cfg: AiConfig = this.readForm();
-    if (!isConfigReady(cfg)) {
-      this.setStatus("请先完整填写 baseURL、API Key 与模型名称", "error");
-      return;
-    }
-    this.testBtn.disabled = true;
-    this.setStatus("测试中…", "");
-    this.modelListEl.hidden = true;
-    try {
-      const res = await testConnection(cfg);
-      this.setStatus(res.message, res.ok ? "ok" : "error");
-      if (res.ok && res.models.length) {
-        const modelInput = this.form.model;
-        if (res.models.length === 1 && !modelInput.value.trim()) {
-          modelInput.value = res.models[0];
-        }
-        this.modelListEl.innerHTML = "";
-        const shown = res.models.slice(0, 30);
-        for (const id of shown) {
-          const chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "ai-model-chip";
-          chip.textContent = id;
-          chip.addEventListener("click", () => {
-            modelInput.value = id;
-          });
-          this.modelListEl.appendChild(chip);
-        }
-        if (res.models.length > shown.length) {
-          const more = document.createElement("span");
-          more.className = "ai-model-more";
-          more.textContent = `…共 ${res.models.length} 个`;
-          this.modelListEl.appendChild(more);
-        }
-        this.modelListEl.hidden = false;
-      }
-    } catch (err) {
-      this.setStatus(`连接失败：${err instanceof Error ? err.message : String(err)}`, "error");
-    } finally {
-      this.testBtn.disabled = false;
-    }
-  }
-
-  private setStatus(text: string, cls: "" | "ok" | "error") {
-    this.statusEl.textContent = text;
-    this.statusEl.className = cls ? `ai-modal-status ${cls}` : "ai-modal-status";
   }
 
   // ---------- 页签切换 ----------

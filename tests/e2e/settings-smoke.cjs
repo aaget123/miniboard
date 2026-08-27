@@ -102,6 +102,33 @@ const URL = "http://localhost:5173";
     check("S11 恢复默认布局", restored === previewItems);
   }
 
+  // AI 模型页签：空态提示 + 新建/保存/删除配置全流程
+  await dlg(".settings-tab", { hasText: "AI 模型" }).click();
+  await page.waitForTimeout(150);
+  const emptyState = await dlg(".profile-empty").count();
+  check("S12 AI 模型页签空态", emptyState === 1);
+  {
+    await dlg(".profile-add").click();
+    const inputs = dlg('.settings-form input[type="text"]');
+    await inputs.nth(0).fill("冒烟测试配置");
+    await inputs.nth(1).fill("https://api.example.com/v1");
+    await dlg('.settings-form input[type="password"]').fill("sk-test");
+    await inputs.nth(2).fill("smoke-model");
+    await dlg(".settings-form .ai-modal-save").click();
+    await page.waitForTimeout(150);
+    const items = await dlg(".profile-item").count();
+    const active = await dlg(".profile-item.active").count();
+    check("S13 新建配置保存并激活", items === 1 && active === 1);
+    // 删除此配置：先点选配置项（载入编辑态才可删），两段确认弹窗（danger 按钮）→ 回到空态
+    await dlg(".profile-item").first().click();
+    await page.waitForTimeout(120);
+    await dlg(".settings-del").click();
+    await page.locator(".confirm-modal button.confirm-btn-danger").click();
+    await page.waitForTimeout(150);
+    const emptyAfter = await dlg(".profile-empty").count();
+    check("S14 删除配置回空态", emptyAfter === 1);
+  }
+
   // 关闭后重开：open() 全量刷新路径（各控制器 refresh 不抛错、快捷键行重建）
   await dlg(".settings-close").first().click();
   await page.waitForTimeout(120);
