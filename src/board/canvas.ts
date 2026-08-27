@@ -83,6 +83,13 @@ import {
   polygonHitsBox,
   rectsIntersect,
 } from "./geometry";
+import { SpatialGrid, type SpatialItem } from "./spatial-grid";
+
+/** 空间索引 z 序表缺失时的兜底：线性回查元素在 tree 子序中的位置 */
+function kidsIndexOf(tree: unknown, el: UI): number {
+  const kids = (tree as { children?: UI[] }).children ?? [];
+  return kids.indexOf(el);
+}
 import { isSketchable, redrawRough, sketchifyData } from "./rough";
 import { penSizeOf, splitArrowHeads, splitErasedPoints, strokeOutlinePath } from "./stroke";
 import { canvasToLocal, round1 } from "./coords";
@@ -375,6 +382,107 @@ export class Board {
   } | null = null;
   private pickPromise: Promise<string | null> | null = null;
 
+  // ================= 空间索引（命中类查询加速） =================
+  // 坐标基准：与既有命中语义一致——元素登记 worldBoxBounds（视口基准），
+  // 查询侧传 app/世界坐标 + 半径。脏标记由 tree 层 property.change /
+  // child.add / child.remove 全局冒泡兜底（自研滚轮缩放改 zoomLayer 属性
+  // 同样触发），配合少量显式标记（loadElements 等批量重建）。
+  /** 视口基准的元素空间索引（不含 editor 内部模拟层） */
+  private sceneIndex = new SpatialGrid<UI>();
+  /** 框架子集缓存（与场景索引同批重建；遍历帧相关逻辑用，避免全树扫描） */
+  private frameCacheList: UI[] | null = null;
+  /** z 序位置表：元素 → tree.children 下标（与索引同批重建；排序免 indexOf O(k²)） */
+  private sceneZOrder = new Map<UI, number>();
+  /** 索引已建过（built 后才可信任空结果） */
+  private sceneIndexBuilt = false;
+  /** 脏标记：true 时下一次查询前全量重建 */
+  private sceneIndexDirty = true;
+
+  /**
+   * 场景变更打标：属性冒泡监听覆盖所有子孙的 x/y/scale/width/path/points/
+   * text 等（含编辑器拖拽、框内内容跟随、滚轮缩放的 zoomLayer 变换）；
+   * 少量批量路径（载入/撤销）显式补充调用本方法。
+   */
+  private markSceneSpatialDirty() {
+    this.sceneIndexDirty = true;
+  }
+
+  /** 全量重建空间索引 + 框架列表 + z 序表（懒执行：仅在查询时且脏时发生） */
+  private ensureSceneIndex() {
+    if (this.sceneIndexBuilt && !this.sceneIndexDirty) {
+      return;
+    }
+    const kids = this.app.tree.children as UI[];
+    const items: SpatialItem<UI>[] = [];
+    const frames: UI[] = [];
+    this.sceneZOrder.clear();
+    for (let i = 0; i < kids.length; i++) {
+      const el = kids[i];
+      this.sceneZOrder.set(el, i);
+      if (this.isEditorInternal(el)) {
+        continue;
+      }
+      if (isFrameEl(el)) {
+        frames.push(el);
+      }
+      const b = el.worldBoxBounds;
+      if (!b || !Number.isFinite(b.x)) {
+        continue;
+      }
+      // 插入盒按描边外扩补偿（leafer boxBounds 不含居中描边外溢、
+      // 箭头端点符号在端点外侧延伸约数倍描边宽）：外扩后候选集恒为
+      // 精确判定的超集，最终仍由 el.hit()/几何判定收口，语义不变。
+      const sw = typeof el.strokeWidth === "number" ? Math.abs(el.strokeWidth) : 0;
+      const sc = Math.max(Math.abs(el.scaleX ?? 1), Math.abs(el.scaleY ?? 1), 0.01);
+      const pad = sw * 3 * sc + 16;
+      items.push({
+        item: el,
+        bounds: {
+          minX: b.x - pad,
+          minY: b.y - pad,
+          maxX: b.x + b.width + pad,
+          maxY: b.y + b.height + pad,
+        },
+      });
+    }
+    this.sceneIndex.rebuild(items);
+    this.frameCacheList = frames;
+    this.sceneIndexBuilt = true;
+    this.sceneIndexDirty = false;
+  }
+
+  /**
+   * 按 tree 子序排序（支持正序/倒排）。用重建时缓存的 z 序表，全选
+   * 万级元素时也是 O(k log k)；z 序表缺失的元素回退 indexOf 兜底。
+   */
+  private sortByZOrder(els: UI[], ascending: boolean): UI[] {
+    const z = this.sceneZOrder;
+    return els.sort((a, b) => {
+      const ia = z.get(a) ?? kidsIndexOf(this.app.tree, a);
+      const ib = z.get(b) ?? kidsIndexOf(this.app.tree, b);
+      return ascending ? ia - ib : ib - ia;
+    });
+  }
+
+  /** 框架子集（ensureSceneIndex 同批刷新；全部 isFrameEl 元素） */
+  private frameElements(): UI[] {
+    this.ensureSceneIndex();
+    return this.frameCacheList ?? [];
+  }
+
+  /**
+   * 点命中候选：空间索引预筛 → 按 tree 子序倒排（自顶向下），与原
+   * 「倒序全扫第一个 hit」优先级完全一致。
+   */
+  private hitCandidates(ax: number, ay: number, radius: number): UI[] {
+    this.ensureSceneIndex();
+    const cands = this.sceneIndex.queryPoint(ax, ay, radius);
+    if (cands.length <= 1) {
+      return cands;
+    }
+    return this.sortByZOrder(cands, false);
+  }
+
   constructor(container: HTMLElement, opts: BoardOptions) {
     this.opts = opts;
     // leafer-ui 2.x：editor 作为 App 配置项传入，App 会自动创建 tree/sky 层并挂载编辑器
@@ -555,6 +663,15 @@ export class Board {
         this.createBoundArrow(sourceId, targetId, endWorld, prefer),
     });
     this.bindEvents();
+    // 空间索引脏标记：tree 层全局冒泡监听——任何子孙属性变更（含编辑器
+    // 拖拽位移、框内内容跟随、自研滚轮缩放的 zoomLayer 变换）与增删都置脏，
+    // 下一次命中查询前懒重建。运行时已验证 leafer 的这三类事件可从 tree 收到。
+    const sceneTree = this.app.tree as unknown as {
+      on_: (type: string, fn: () => void, ctx?: unknown) => void;
+    };
+    sceneTree.on_("property.change", () => this.markSceneSpatialDirty());
+    sceneTree.on_("child.add", () => this.markSceneSpatialDirty());
+    sceneTree.on_("child.remove", () => this.markSceneSpatialDirty());
     // 自研滚轮缩放：以鼠标位置为不动点
     (this.app.canvas.view as HTMLElement).addEventListener("wheel", this.onWheel, {
       passive: false,
@@ -2172,11 +2289,13 @@ export class Board {
     // 逐元素像素级命中：线段/箭头/画笔按实际描边命中；
     // 空心图形内部透明区域不命中，可穿透选中下层元素。
     // hitRadius 扩大命中容差（细线也容易点中；橡皮按光标半径命中）
-    const children = this.app.tree.children as UI[];
-    for (let i = children.length - 1; i >= 0; i--) {
-      const el = children[i];
-      if (el === exclude || this.isEditorInternal(el)) {
-        continue; // editor 内部元素（多选模拟层）不可交互
+    // 性能：空间索引预筛出 bbox 邻近的少数候选（含描边外扩余量），
+    // 再按原优先级（自顶向下）逐个 el.hit 收口——语义与全量扫描一致。
+    const cands = this.hitCandidates(world.x, world.y, radius);
+    for (let i = 0; i < cands.length; i++) {
+      const el = cands[i];
+      if (el === exclude) {
+        continue; // 调用方指定的排除元素
       }
       if (el.hit(world, radius)) {
         return el;
@@ -3504,7 +3623,7 @@ export class Board {
 
   /** 按稳定 id 找框架元素 */
   private frameById(id: string): UI | null {
-    for (const el of this.app.tree.children as UI[]) {
+    for (const el of this.frameElements()) {
       if (isFrameEl(el) && this.aiIdOf(el) === id) {
         return el;
       }
@@ -3524,7 +3643,8 @@ export class Board {
     }
     const sw = typeof el.strokeWidth === "number" ? el.strokeWidth : 0;
     const tol = sw / 2 + 1;
-    for (const frame of this.app.tree.children as UI[]) {
+    // 拖动中每帧调用（归属同步）：只在框架子集上判定，避免全树扫描
+    for (const frame of this.frameElements()) {
       if (!isFrameEl(frame)) {
         continue;
       }
@@ -3844,7 +3964,7 @@ export class Board {
 
   /** 命中可滚动的折叠框架：世界坐标落在其 bbox 内且内容有滚动余量（无则 null） */
   private scrollableFrameAt(p: { x: number; y: number }): Box | null {
-    for (const el of this.app.tree.children as UI[]) {
+    for (const el of this.frameElements()) {
       if (!isFrameEl(el)) {
         continue;
       }
@@ -3982,7 +4102,7 @@ export class Board {
 
   /** 命中约束框架：点 (x, y) 落在的 constrain 框架（无则 null） */
   private constrainFrameAt(x: number, y: number): UI | null {
-    for (const el of this.app.tree.children as UI[]) {
+    for (const el of this.frameElements()) {
       if (!isFrameEl(el) || (el as unknown as Record<string, unknown>).__frameConstrain !== true) {
         continue;
       }
@@ -4022,7 +4142,8 @@ export class Board {
     } | null = null;
     let bestRatio = CONSTRAINT_ADOPT_RATIO;
     let bestArea = Infinity;
-    for (const other of this.app.tree.children as UI[]) {
+    // 拖动中每帧调用（beforeMove 夹紧）：只在框架子集上判定
+    for (const other of this.frameElements()) {
       if (other === el || !isFrameEl(other)) {
         continue;
       }
@@ -4768,10 +4889,16 @@ export class Board {
     if (box.width < 3 || box.height < 3) {
       return hits; // 点击而非拖拽：视为取消选择
     }
-    for (const el of this.app.tree.children as UI[]) {
-      if (this.isEditorInternal(el)) {
-        continue;
-      }
+    this.ensureSceneIndex();
+    // 索引候选按 tree 子序正排后精判——保持原「自底向上推入」的顺序语义
+    // （editor.list 首元素 = 选区底层，面板单值展示依赖）
+    const cands = this.sceneIndex.queryBox({
+      minX: box.x,
+      minY: box.y,
+      maxX: box.x + box.width,
+      maxY: box.y + box.height,
+    });
+    for (const el of this.sortByZOrder(cands, true)) {
       const b = el.worldBoxBounds;
       if (b && rectsIntersect(box, b)) {
         hits.push(el);
@@ -4786,10 +4913,19 @@ export class Board {
     if (poly.length < 3) {
       return hits;
     }
-    for (const el of this.app.tree.children as UI[]) {
-      if (this.isEditorInternal(el)) {
-        continue;
-      }
+    this.ensureSceneIndex();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of poly) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const cands = this.sceneIndex.queryBox({ minX, minY, maxX, maxY });
+    for (const el of this.sortByZOrder(cands, true)) {
       const b = el.worldBoxBounds;
       if (b && polygonHitsBox(poly, b)) {
         hits.push(el);
@@ -5328,6 +5464,8 @@ export class Board {
     this.updateGrid();
     // 场景整体重建（撤销/重做/载入）不经 commitHistory，感知版本单独自增
     this.perceptionVersionN++;
+    // 批量重建显式置脏：不依赖 tree.clear/add 的逐个事件兜底
+    this.markSceneSpatialDirty();
   }
 
   private dataToElement(d: ElementData): UI | null {
@@ -5778,7 +5916,8 @@ export class Board {
     const moverSet = new Set(units);
     let target: UI | null = null;
     let targetArea = Infinity;
-    for (const frame of this.app.tree.children as UI[]) {
+    // 拖动中每帧调用：只在框架子集上判定，避免全树扫描
+    for (const frame of this.frameElements()) {
       if (!isFrameEl(frame) || moverSet.has(frame)) {
         continue;
       }
