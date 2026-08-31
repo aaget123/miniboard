@@ -504,15 +504,21 @@ export class ProjectStore {
    * PNG dataURL → 系统剪贴板（Ctrl+C 元素复制互通）：写入 PNG 的同时附带
    * miniboard 来源标记（text/plain），供粘贴端区分「自家元素复制」与
    * 「外部图片」——自家复制走内部元素粘贴，外部图片直插画布。
-   * 不支持或授权拒绝返回 false（内部元素粘贴不受影响）。
+   * 优先双类型（图片+标记）；个别环境拒绝多类型 ClipboardItem 时回退纯图片，
+   * 此时粘贴端由"内部有元素"这条可靠路径兜底。失败静默（内部元素粘贴不受影响）。
    */
   async copyDataURLToClipboard(dataURL: string): Promise<boolean> {
     try {
       const blob = await (await fetch(dataURL)).blob();
       const marker = new Blob([CLIPBOARD_MARKER], { type: "text/plain" });
-      await navigator.clipboard.write([
-        new ClipboardItem({ "image/png": blob, "text/plain": marker }),
-      ]);
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ "image/png": blob, "text/plain": marker }),
+        ]);
+      } catch {
+        // 多类型被拒：只写图片（与「导出 PNG 到剪贴板」同一条成熟路径）
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      }
       return true;
     } catch {
       return false;

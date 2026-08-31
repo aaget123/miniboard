@@ -313,12 +313,14 @@ async function main() {
   // 绘制偏好：画完笔迹自动吸附为标准图形（圆/方/三角/直线，默认开启）
   board.setShapeDetect(loadDrawPrefs().shapeDetect);
 
-  // ---- 系统剪贴板互通（Ctrl+V 统一走 paste 事件，keydown 快捷键不再接管避免双重处理）----
+  // ---- 系统剪贴板互通 ----
+  // Ctrl+V 由 document paste 事件统一处理（keydown 不拦截该键，保证事件派发）：
   // - 自家元素复制（系统剪贴板图片附带 miniboard 标记文本）→ 粘贴内部元素
   // - 外部图片（微信/PPT/截图复制）→ 直插画布
-  // - 其余（无图或读取被拒）→ 照常粘贴内部元素（兼容仅站内复制的流程）
+  // - 其余（无图或读取被拒）→ 内部有元素则照常粘贴（兼容仅站内复制流程）
   document.addEventListener("paste", (e: ClipboardEvent) => {
     const dt = e.clipboardData;
+    // 自家元素复制（系统剪贴板图片附带 miniboard 标记文本）→ 粘贴内部元素
     if (dt?.getData("text/plain") === CLIPBOARD_MARKER) {
       board.paste();
       e.preventDefault();
@@ -334,7 +336,11 @@ async function main() {
       void board.insertImage(file).then((ok) => toast(ok ? "已插入剪贴板图片" : "图片插入失败"));
       return;
     }
-    board.paste();
+    // 无图（或图片读取被拒）：内部有元素则照常粘贴
+    if (board.canPaste) {
+      e.preventDefault();
+      board.paste();
+    }
   });
 
   // ---- Ctrl 概览浮层（小地图）：按住裸 Ctrl 短暂延迟后显示，松开/组合键收起 ----
@@ -1089,8 +1095,9 @@ async function main() {
     if (!id) {
       return;
     }
-    // 逐层退出沿用原语义不拦截默认行为，其余动作统一阻止（避免触发浏览器默认快捷键）
-    if (id !== "escape") {
+    // 逐层退出沿用原语义不拦截默认行为，其余动作统一阻止（避免触发浏览器默认快捷键）；
+    // 粘贴例外：不拦截才能派发 paste 事件（元素/外部图片统一在事件里分流）
+    if (id !== "escape" && id !== "paste") {
       e.preventDefault();
     }
     if (id === "tool:eraser") {

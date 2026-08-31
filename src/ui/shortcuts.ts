@@ -18,8 +18,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "redo", label: "重做", defaultKeys: ["ctrl+shift+z", "ctrl+y"] },
   { id: "copy", label: "复制", defaultKeys: ["ctrl+c"] },
   { id: "cut", label: "剪切", defaultKeys: ["ctrl+x"] },
-  // 粘贴不走本清单：Ctrl+V 由 document paste 事件统一接管（元素/外部图片分流），
-  // keydown 拦截会与 paste 事件双重处理
+  { id: "paste", label: "粘贴", defaultKeys: ["ctrl+v"] },
   { id: "selectAll", label: "全选", defaultKeys: ["ctrl+a"] },
   { id: "delete", label: "删除选中", defaultKeys: ["delete", "backspace"] },
   { id: "duplicate", label: "重复选中", defaultKeys: ["ctrl+d"] },
